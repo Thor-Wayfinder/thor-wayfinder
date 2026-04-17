@@ -45,4 +45,4 @@ The source code is published for **transparency and security auditing purposes**
 
 ## Support
 
-If you find this useful, consider leaving a tip on [Ko-fi](https://ko-fi.com/thorwayfinder) ☕
+If you find this useful, consider leaving a tip on [Ko-fi](https://ko-fi.com/thorwayfinder) ☕ or [gumroad](https://gumroad.com/products/vksksb) 
