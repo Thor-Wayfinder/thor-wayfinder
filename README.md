@@ -1,5 +1,5 @@
 # Thor Wayfinder
-
+**AI WAS USED IN MAKING THIS PROJECT**
 **Move apps between screens on your AYN Thor — with one button.**
 
 Thor Wayfinder is a lightweight utility for the AYN Thor dual-screen handheld. Swap or send apps between the top and bottom displays using simple back-button gestures. No root required.
