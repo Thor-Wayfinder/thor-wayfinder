@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Thor Wayfinder</string>
+    <string name="accessibility_service_description">Thor Wayfinder monitors the current foreground app so it can relaunch it on the other screen of your AYN Thor device.</string>
+</resources>
