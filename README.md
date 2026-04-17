@@ -1,5 +1,5 @@
 # Thor Wayfinder
-**AI WAS USED IN MAKING THIS PROJECT**
+**AI WAS USED TO HELP DEVELOP THIS APP**
 
 **Move apps between screens on your AYN Thor — with one button.**
 
