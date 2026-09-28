@@ -8,6 +8,8 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 **[⬇ Download Wayfinder (free)](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/latest)**
 
+**[📖 How to use it: the Wayfinder wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki)** — every feature explained in simple words.
+
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/thorwayfinder)
 
 ## Screenshots
@@ -31,6 +33,8 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 </details>
 
 ## Everything it does
+
+Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki).
 
 ### Two screens
 - Move / swap apps between screens (Back · hold) — live: the app keeps running and keeps its state
