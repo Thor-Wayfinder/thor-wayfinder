@@ -6,6 +6,12 @@ press away — all without leaving your game.
 
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
+> [!WARNING]
+> **Using ClusterTune?** Many users reported instability and crashes when ClusterTune (CPU frequency limits) is used
+> together with Wayfinder. Both change how the Thor's CPU runs, and they can fight each other. Please don't use them
+> together for now: turn ClusterTune's limits off (or uninstall it) and use Wayfinder's own Performance settings. If your
+> Thor was unstable with both, restart it after removing ClusterTune.
+
 **[⬇ Download Wayfinder (free)](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/latest)**
 
 **[📖 How to use it: the Wayfinder wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki)** — every feature explained in simple words.
