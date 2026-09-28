@@ -54,6 +54,11 @@ object PadLayerCtl {
         // Owner only (0700): the helper runs it as root and checks nobody else can write it.
         f.setReadable(false, false); f.setWritable(false, false); f.setExecutable(false, false)
         f.setReadable(true, true); f.setWritable(true, true); f.setExecutable(true, true)
+        // 1.3.2 (GitHub #39): make sure it really is 0700 (the helper refuses anything else)
+        runCatching {
+            val mode = android.system.Os.stat(f.absolutePath).st_mode and "7777".toInt(8)
+            if (mode != "700".toInt(8)) { Log.w(TAG, "wfpad mode ${Integer.toOctalString(mode)} → 0700"); android.system.Os.chmod(f.absolutePath, "700".toInt(8)) }
+        }
         f.absolutePath
     }.onFailure { Log.w(TAG, "binary: $it") }.getOrNull()
 

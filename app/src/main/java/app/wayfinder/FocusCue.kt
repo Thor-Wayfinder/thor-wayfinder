@@ -106,7 +106,7 @@ class FocusCue(private val service: AccessibilityService) {
             setLineSpacing(0f, 1.15f)
         }
         // one line = a pill; a table = a rounded card (a pill's round ends cut into several lines)
-        val radius = if (content is Content.Line) 999f else 22 * dp
+        val radius = if (content is Content.Line || (content is Content.Table && content.compact && content.title.isEmpty())) 999f else 22 * dp
         val pill: View = when (content) {
             is Content.Line -> label(content.text, 16f)
             is Content.Table -> LinearLayout(ctx).apply {
@@ -118,6 +118,7 @@ class FocusCue(private val service: AccessibilityService) {
                 }
                 if (content.cells.isNotEmpty()) addView(TableLayout(ctx).apply {
                     setPadding(0, if (content.compact) 0 else (8 * dp).toInt(), 0, 0)
+                    if (content.compact) isShrinkAllColumns = true   // one line on a narrow screen: cells wrap, nothing cut
                     for (row in content.cells.chunked(if (content.compact) content.cells.size else 3)) addView(TableRow(ctx).apply {
                         for ((btn, what) in row) {
                             val t = android.text.SpannableStringBuilder().apply {
@@ -132,7 +133,8 @@ class FocusCue(private val service: AccessibilityService) {
             }
         }
         pill.apply {
-            setPadding((20 * dp).toInt(), (10 * dp).toInt(), (20 * dp).toInt(), (12 * dp).toInt())
+            val slimPad = content is Content.Table && content.compact
+            setPadding((20 * dp).toInt(), ((if (slimPad) 4 else 10) * dp).toInt(), (20 * dp).toInt(), ((if (slimPad) 6 else 12) * dp).toInt())
             // Glass = a frosted tint + a specular rim (public APIs only).
             val frost = GradientDrawable().apply {
                 cornerRadius = radius
@@ -161,7 +163,9 @@ class FocusCue(private val service: AccessibilityService) {
                 else -> Gravity.TOP or Gravity.CENTER_HORIZONTAL
             }
             // bottom corners sit above Recents' own row of buttons (Screenshot, Clear all)
-            x = if (at == 0) 0 else (22 * dp).toInt(); y = ((if (at >= 3) 96 else 22) * dp).toInt()
+            // 1.3.2: a one-line hint hugs the top edge (22 dp down it sat on Recents' cards)
+            val slim = (content as? Content.Table)?.compact == true
+            x = if (at == 0) 0 else (22 * dp).toInt(); y = ((if (at >= 3) 96 else if (slim) 6 else 22) * dp).toInt()
         }
         try {
             wm.addView(pill, lp)

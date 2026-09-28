@@ -170,3 +170,12 @@ fun defaultLayoutIds(locales: List<Locale>): List<String> {
 /** Symbols pages (shared). "\$CUR" = the layout's currency. */
 val SYMBOLS_1 = rows("1 2 3 4 5 6 7 8 9 0", "@ # \$CUR _ & - + ( ) /", "* \" ' : ; ! ?")
 val SYMBOLS_2 = rows("~ ` | < > • √ π ÷ ×", "€ £ ¥ ¢ ^ ° = { } \\", "% © ® ™ ✓ [ ]")
+
+/** 1.3.2 (GitHub #48): emoji groups — each 3 rows of 10 (name, rows). */
+val EMOJI_GROUPS: List<Pair<String, List<List<String>>>> = listOf(
+    "😀" to rows("😀 😃 😄 😁 😆 😅 😂 🤣 😊 😇", "🙂 😉 😍 🥰 😘 😋 😜 🤔 😎 🥳", "😐 🙄 😏 😢 😭 😤 😡 😱 😴 🤯"),
+    "👍" to rows("👍 👎 👌 ✌️ 🤞 🤘 👏 🙌 🙏 💪", "👋 🤝 👀 🫶 🙈 🤷 🤦 🙋 🎉 🔥", "💯 ✨ ⭐ 💥 💤 💬 ✅ ❌ ❗ ❓"),
+    "❤️" to rows("❤️ 🧡 💛 💚 💙 💜 🖤 🤍 💔 💕", "😺 🐶 🐱 🐭 🦊 🐻 🐼 🐸 🐧 🦄", "🌞 🌙 ⭐ 🌈 ☁️ ⚡ ❄️ 🌊 🌸 🍀"),
+    "🎮" to rows("🎮 🕹️ 👾 🏆 🥇 🎯 🎲 🧩 🎵 🎧", "📱 💻 🖥️ ⌨️ 🔋 🔌 📷 🎬 📺 💾", "⏰ 🚀 🚗 ✈️ 🏠 🎁 💡 🔑 🛠️ 💰"),
+    "🍕" to rows("🍕 🍔 🍟 🌭 🌮 🍣 🍜 🍩 🍪 🎂", "🍎 🍌 🍓 🍉 🍒 🥑 🥕 🌽 🧀 🥚", "☕ 🍵 🥤 🍺 🍷 🥂 🍾 🧃 🥛 🍫"),
+)

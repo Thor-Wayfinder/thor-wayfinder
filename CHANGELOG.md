@@ -1,5 +1,32 @@
 # Changelog
 
+## 1.3.2 — September 2026
+
+- **New: emoji in Wayfinder's keyboard** — a 🙂 key in the bottom row: five groups of emoji (the group key steps
+  through them), ABC goes back.
+- **Fixed:** the trackpad's Touch mode pointer stopped about 60 % across the game's screen.
+- **Fixed:** the deck's Clipboard types the text when it can (so it works in games that ignore paste) and puts your own
+  clipboard back after pasting; the clipboard list only keeps text (up to 20,000 characters), forgets clips after an
+  hour, when Android clears its clipboard, or when you switch to another keyboard.
+- **Changed:** holding the AYN button to read its combos now also says what keeps holding does (its hold action), and
+  the list closes when that action runs.
+- **Changed:** the Recent apps controller hint is one line of words along the top of the screen (it covered the
+  middle card). "Symbols" keeps the shortest version.
+- **Fixed:** the quick panel sometimes lost its see-through background on the bottom screen (it showed its own
+  purple backdrop): Android handed it the top screen's size, so it drew itself as the top screen's side sheet.
+- **Fixed:** "Input layer couldn't start (binary-not-trusted)" when Wayfinder runs in a second Android user or
+  profile: its helper looked for its file in the first user's folder. If the layer still can't start, the message now
+  says exactly why (file missing, owner, permissions).
+- **Fixed:** Firefox (and Firefox-based browsers) crashed when you selected a word or opened a menu after being moved
+  to the other screen. They now move by reopening there (your tabs come back). Per app: App profiles → "When it moves
+  to the other screen: Automatic / Keep running / Reopen".
+- **New: Home on the top screen / on the bottom screen / on both screens** — actions for a combo (Home tap, double,
+  triple or hold…) or the AYN button, like a dual-screen launcher manager.
+- **New: "Opens on"** for "Open an app" combos — the controller's screen, the top screen or the bottom screen.
+- **New: a clipboard** — your last 5 copied texts: a clipboard key in Wayfinder's keyboard, and a Clipboard button in
+  Keyboard & mouse (Home + Y) that pastes into the game's screen (accents and emoji included). Kept in memory only,
+  never saved or sent; passwords are skipped. Needs Wayfinder Keyboard as your keyboard.
+
 ## 1.3.1 — September 2026
 
 - **The AYN button's tap and hold are on the Combos page** (they were only under Quick panel), at the top, and a hold

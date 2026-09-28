@@ -761,9 +761,9 @@ private fun ControllerPage(myDisplayId: Int, onBack: () -> Unit, go: (String) ->
         SettingCard("Recent apps — the controller hint", when (AppSettings.recentsHint) {
             1 -> "Compact: one slim line of symbols (↗ open · ✕ close · ⌂ home · ↩ back)"
             2 -> "Off — the buttons still work: A opens, Y closes, Select closes all, Start goes home, B goes back"
-            else -> "What the buttons do in Recent apps, for a few seconds when it opens"
+            else -> "One line: what the buttons do in Recent apps, for a few seconds when it opens"
         }) {
-            GlassSegmentedControl(listOf("Full", "Compact", "Off"), AppSettings.recentsHint, Modifier.fillMaxWidth()) {
+            GlassSegmentedControl(listOf("Words", "Symbols", "Off"), AppSettings.recentsHint, Modifier.fillMaxWidth()) {
                 AppSettings.chooseRecentsHint(it, AppSettings.recentsHintAt) }
             if (AppSettings.recentsHint != 2) {
                 androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))

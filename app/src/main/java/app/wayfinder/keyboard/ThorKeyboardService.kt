@@ -76,9 +76,11 @@ class ThorKeyboardService : InputMethodService() {
         KeyboardSettings.init(this)
         kb.setLayouts(KeyboardSettings.layoutIds, KeyboardSettings.currentId)
         kb.onLayoutChanged = { KeyboardSettings.setCurrent(it) }
+        ClipHistory.start(this)       // 1.3.2 (GitHub #45): the active keyboard may read the clipboard
     }
 
     override fun onDestroy() {
+        ClipHistory.stop()
         hideOverlay()
         owner.destroy()
         if (instance === this) instance = null

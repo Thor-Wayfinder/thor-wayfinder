@@ -125,7 +125,9 @@ object QuickPanelWindow {
         startPeak = runCatching { Settings.System.getFloat(cr, "peak_refresh_rate") }.getOrDefault(60f)
         // Wide screen (the top one): a 540 dp sheet on the right, the game dimmed beside it.
         // Narrow screen (the bottom one): full screen, the app under it frosted (live blur).
-        val m = ctx.resources.displayMetrics
+        // 1.3.2: the display's REAL size — this context's cached metrics sometimes answered the TOP screen's
+        // 1920 px for the bottom one: the panel then took its side-sheet form there (no blur, its own backdrop)
+        val m = android.util.DisplayMetrics().also { @Suppress("DEPRECATION") d.getRealMetrics(it) }
         val sheet = m.widthPixels / m.density > 700
         val takes = AppSettings.panelTakesController
         val blur = !sheet && android.os.Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled

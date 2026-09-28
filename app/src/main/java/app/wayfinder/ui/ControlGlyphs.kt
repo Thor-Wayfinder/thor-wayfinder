@@ -230,6 +230,9 @@ fun actionIcon(a: ThorAction): ImageVector = when (a) {
     ThorAction.FPS_COUNTER -> Icons.Rounded.Speed
     ThorAction.GAME_CONTROLS -> Icons.Rounded.Tune
     ThorAction.OPEN -> Icons.Rounded.Apps
+    ThorAction.HOME_TOP -> Icons.Rounded.VerticalAlignTop
+    ThorAction.HOME_BOTTOM -> Icons.Rounded.VerticalAlignBottom
+    ThorAction.HOME_BOTH -> Icons.Rounded.Home
 }
 
 /** Three fingertips — the blank gesture's badge. */

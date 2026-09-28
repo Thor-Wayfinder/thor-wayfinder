@@ -46,8 +46,10 @@ object TouchPointer {
         hide()
         val d = svc.getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return
         val ctx = svc.createDisplayContext(d)
-        val m = runCatching { ctx.getSystemService(WindowManager::class.java).currentWindowMetrics.bounds }.getOrNull()
-        if (m != null) { w = m.width().toFloat(); h = m.height().toFloat() }
+        // 1.3.2 (GitHub #49): the display's REAL size — this context's window metrics answered the deck's
+        // (bottom) screen for the top one, so the pointer stopped ~60 % across the game
+        val real = android.graphics.Point().also { @Suppress("DEPRECATION") d.getRealSize(it) }
+        if (real.x > 0 && real.y > 0) { w = real.x.toFloat(); h = real.y.toFloat() }
         if (display != displayId) { x = w / 2; y = h / 2 }
         service = svc; display = displayId
         val size = (40 * ctx.resources.displayMetrics.density).toInt()

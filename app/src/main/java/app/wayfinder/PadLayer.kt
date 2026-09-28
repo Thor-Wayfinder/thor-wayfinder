@@ -140,13 +140,29 @@ object PadLayer {
 
     private fun quitWfpad() = toWfpad("q")
 
-    /** `/data/user/0/<app>/files/wfpad`, if it belongs to the app and only the app can write it. */
+    /** Why the last [trustedBinary] refused the file (shown in Help & status). */
+    @Volatile private var untrustedWhy = ""
+
+    /** `/data/user/<user>/<app>/files/wfpad`, if it belongs to the app and only the app can write it.
+     *  1.3.2 (GitHub #39): the app's Android user comes from its uid (it was always user 0 — a Wayfinder in a
+     *  second user or profile never found its file), and a refusal says exactly why. */
     private fun trustedBinary(): String? {
-        val path = "/data/user/0/${BuildConfig.APPLICATION_ID}/files/wfpad"
-        val st = runCatching { android.system.Os.stat(path) }.getOrNull() ?: return null
-        val ok = appUid >= 0 && st.st_uid == appUid && (st.st_mode and "022".toInt(8)) == 0
-        if (!ok) Log.w(TAG, "wfpad refused: uid ${st.st_uid} (app $appUid), mode ${Integer.toOctalString(st.st_mode)}")
-        return if (ok) path else null
+        if (appUid < 0) { untrustedWhy = "no app uid"; return null }
+        val user = appUid / 100_000
+        val path = "/data/user/$user/${BuildConfig.APPLICATION_ID}/files/wfpad"
+        val st = try { android.system.Os.stat(path) } catch (e: android.system.ErrnoException) {
+            untrustedWhy = if (e.errno == android.system.OsConstants.ENOENT) "file missing (user $user)"
+                else "unreadable: ${android.system.OsConstants.errnoName(e.errno) ?: e.errno} (user $user)"
+            Log.w(TAG, "wfpad refused: $path — $untrustedWhy"); return null
+        }
+        val why = when {
+            st.st_uid != appUid -> "owner ${st.st_uid}, app $appUid"
+            (st.st_mode and "022".toInt(8)) != 0 -> "mode ${Integer.toOctalString(st.st_mode and "7777".toInt(8))}"
+            else -> ""
+        }
+        untrustedWhy = why
+        if (why.isNotEmpty()) Log.w(TAG, "wfpad refused: $path — $why")
+        return if (why.isEmpty()) path else null
     }
 
     private fun status(s: String) {
@@ -351,7 +367,7 @@ object PadLayer {
         var tookNumber = false
         while (wanted) {
             val (path, name) = resolveOriginal() ?: run { Thread.sleep(1000); null } ?: continue
-            val exe = trustedBinary() ?: run { status("error binary-not-trusted"); wanted = false; null } ?: break
+            val exe = trustedBinary() ?: run { status("error binary-not-trusted: $untrustedWhy"); wanted = false; null } ?: break
             // The number the copy should end up with: the lowest one no OTHER pad holds (AYN's
             // pad may sit at #2 after an earlier run; the copy takes #1 all the same).
             val wantNumber = snapshot().takeIf { it.isNotEmpty() }?.let { targetNumber(it, path) } ?: 0

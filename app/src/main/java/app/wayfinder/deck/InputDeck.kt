@@ -28,6 +28,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Mouse
@@ -267,6 +268,10 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
             }
             else -> PadGrid(st, pad, UiModifier.fillMaxWidth().weight(1f))
         }
+        // 1.3.2 (GitHub #45): the last copied texts — tap one to type it into the game's screen
+        var clipOpen by remember { mutableStateOf(false) }
+        val deckCtx = androidx.compose.ui.platform.LocalContext.current
+        if (clipOpen && !st.guideOnly) ClipRow { VirtualInput.paste(deckCtx, it) }
         // Footer: where the keys go, and a way to hand the controller to that screen.
         if (!st.guideOnly) Row(Modifier_fillWidthHeight(40), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Sending to: ${st.appLabel ?: "the other screen"}", color = g.textTertiary, fontSize = 13.sp,
@@ -276,6 +281,7 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
             if (st.padId == PAD_PC) Tab(if (DeckSettings.simpleKeys) "All keys" else "Simpler keys", Icons.Rounded.Keyboard, selected = false) {   // what a tap does
                 DeckSettings.chooseSimpleKeys(!DeckSettings.simpleKeys)
             }
+            Tab(null, Icons.Rounded.ContentPaste, selected = clipOpen) { clipOpen = !clipOpen }
             Tab("Give the controller to the game", Icons.Rounded.CenterFocusStrong, selected = false, onClick = onFocusGame)
         }
     }
@@ -283,6 +289,34 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
 
 @Suppress("FunctionName")
 private fun Modifier_fillWidthHeight(h: Int) = UiModifier.fillMaxWidth().height(h.dp)
+
+/** 1.3.2 (GitHub #45): the deck's clipboard row — kept by Wayfinder Keyboard (the only one allowed to read it). */
+@Composable
+private fun ClipRow(onPick: (String) -> Unit) {
+    val g = LocalGlass.current
+    val clips = app.wayfinder.keyboard.ClipHistory
+    LaunchedEffectRead()
+    Row(Modifier_fillWidthHeight(48).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        when {
+            !clips.listening -> Text("The clipboard list needs Wayfinder Keyboard as your keyboard (Wayfinder → Keyboard).",
+                color = g.textTertiary, fontSize = 14.sp)
+            clips.items.isEmpty() -> Text("Nothing copied yet — copy some text and it shows here.", color = g.textTertiary, fontSize = 14.sp)
+            else -> clips.items.toList().forEach { t ->
+                Box(UiModifier.fillMaxHeight().clip(RoundedCornerShape(12.dp))
+                    .background(if (g.dark) Color(0x33FFFFFF) else Color(0x99FFFFFF))
+                    .pointerInput(t) { detectTapGestures { onPick(t) } }.padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center) {
+                    Text(clips.preview(t), color = g.textPrimary, fontSize = 15.sp, maxLines = 1)
+                }
+            }
+        }
+    }
+}
+
+/** A copy made while the deck is open shows up when the row opens. */
+@Composable
+private fun LaunchedEffectRead() = androidx.compose.runtime.LaunchedEffect(Unit) { app.wayfinder.keyboard.ClipHistory.read() }
 
 @Composable
 private fun Tab(label: String?, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {

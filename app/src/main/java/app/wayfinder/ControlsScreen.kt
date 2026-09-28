@@ -193,7 +193,7 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                     item(key = "open-h") {
                         Column(Modifier.padding(top = 10.dp, start = 4.dp)) {
                             Text("OPEN WITH A COMBO", color = g.textTertiary, style = MaterialTheme.typography.labelMedium)
-                            Text("An app opens on the screen with the controller; a pair opens both apps, each on its screen.",
+                            Text("An app opens on the screen you choose (the controller's, the top or the bottom); a pair opens both apps, each on its screen.",
                                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
                         }
                     }
@@ -324,7 +324,9 @@ private fun useGlobal(pkg: String, action: ThorAction) {
 private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, openArg: String? = null, openOld: Trigger? = null) {
     val g = LocalGlass.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
-    val title = if (openArg != null) OpenTargets.label(ctx, openArg) else action.title
+    // 1.3.2 (GitHub #42): an app opens on the controller's screen, the top or the bottom
+    var openTarget by remember(openArg) { mutableStateOf(openArg) }
+    val title = if (openTarget != null) OpenTargets.label(ctx, openTarget) else action.title
     var capturing by remember { mutableStateOf(true) }
     val order = remember { mutableStateListOf<ThorButton>() }    // buttons in press order this attempt
     val down = remember { mutableStateListOf<ThorButton>() }
@@ -410,13 +412,21 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
                         else -> null
                     }
                     note?.let { Text(it, color = g.textTertiary, style = MaterialTheme.typography.bodySmall) }
+                    openTarget?.takeIf { OpenTargets.isApp(it) }?.let { tgt ->
+                        val wheres = listOf(null, "top", "bottom")
+                        Text("Opens on", color = g.textSecondary, style = MaterialTheme.typography.labelLarge)
+                        GlassSegmentedControl(
+                            options = listOf("The controller's screen", "Top screen", "Bottom screen"),
+                            selectedIndex = wheres.indexOf(OpenTargets.appWhere(tgt)).coerceAtLeast(0), modifier = Modifier.fillMaxWidth(),
+                        ) { i -> openTarget = OpenTargets.app(OpenTargets.appPkg(tgt), wheres[i]) }
+                    }
                     ControlsStore.effective(pkg).firstOrNull { it.trigger == t }
                         ?.takeIf { if (openArg != null) it.trigger != openOld else it.action != action }?.let {
                             WarnBox("Currently used by “${OpenTargets.title(ctx, it)}” — saving moves it here.")
                         }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         FocusableGlass(onClick = {
-                            if (openArg != null) ControlsStore.bindOpen(openArg, t, openOld) else saveBinding(pkg, action, t); onDone()
+                            if (openTarget != null) ControlsStore.bindOpen(openTarget!!, t, openOld) else saveBinding(pkg, action, t); onDone()
                         }, radius = 14.dp, focusRequester = saveFocus) {
                             Text("Save", color = g.accent, style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))

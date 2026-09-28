@@ -45,6 +45,10 @@ enum class ThorAction(val title: String, val description: String) {
     TOP_QUIETER("Top screen quieter", "Only the top screen's apps get quieter"),
     BOTTOM_LOUDER("Bottom screen louder", "Only the bottom screen's apps get louder"),
     BOTTOM_QUIETER("Bottom screen quieter", "Only the bottom screen's apps get quieter"),
+    /** 1.3.2 (GitHub #42, what Mjolnir does): a screen's home, whichever screen has the controller. */
+    HOME_TOP("Home on the top screen", "The top screen goes to its home screen"),
+    HOME_BOTTOM("Home on the bottom screen", "The bottom screen goes to its home screen"),
+    HOME_BOTH("Home on both screens", "Both screens go to their home screens"),
     FPS_COUNTER("Frame rate (FPS)", "Show or hide the frame-rate counter (where: Screens & power)"),
     GAME_CONTROLS("Game controls", "The game's buttons, gyro and macros, while you play; the same combo or B goes back to the game"),
     /** Round 8: opens an app, an app pair or a Wayfinder page — the target is on the binding
@@ -67,7 +71,8 @@ object ActionRegistry {
         ThorAction.GAME_CONTROLS, ThorAction.OPEN, ThorAction.CLOSE_APP, ThorAction.SLEEP, ThorAction.AYN_MOUSE, ThorAction.GUIDE, ThorAction.GYRO_TOGGLE,
         ThorAction.TOP_BRIGHTER, ThorAction.TOP_DIMMER, ThorAction.BOTTOM_BRIGHTER, ThorAction.BOTTOM_DIMMER,
         ThorAction.LOUDER, ThorAction.QUIETER, ThorAction.TOP_LOUDER, ThorAction.TOP_QUIETER,
-        ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER -> true
+        ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER,
+        ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH -> true
         else -> false
     }
 }

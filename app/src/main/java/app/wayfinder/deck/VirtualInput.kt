@@ -32,6 +32,26 @@ object VirtualInput {
         }
     }
 
+    /** 1.3.2: [text] pasted whole — on the clipboard, then Ctrl+V (any character: é, emoji…). Key-by-key
+     *  [type] when the clipboard can't be set. */
+    fun paste(ctx: Context, text: String) {
+        // typed key by key when it can be (works in games that ignore Ctrl+V, leaves the clipboard alone)
+        val map = KeyCharacterMap.load(KeyCharacterMap.VIRTUAL_KEYBOARD)
+        if (text.all { map.getEvents(charArrayOf(it)) != null }) { type(text); return }
+        val cm = ctx.getSystemService(android.content.ClipboardManager::class.java)
+        val before = runCatching { cm.primaryClip }.getOrNull()
+        val ok = runCatching { cm.setPrimaryClip(android.content.ClipData.newPlainText("Wayfinder", text)) }.isSuccess
+        if (!ok) { type(text); return }
+        val ctrl = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        key(KeyEvent.KEYCODE_CTRL_LEFT, true, ctrl)
+        tap(KeyEvent.KEYCODE_V, ctrl)
+        key(KeyEvent.KEYCODE_CTRL_LEFT, false, 0)
+        // the user's own clip back once the paste went through
+        if (before != null) android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+            runCatching { cm.setPrimaryClip(before) }
+        }, 800)
+    }
+
     fun mouseMove(dx: Int, dy: Int) { if (dx != 0 || dy != 0) InputMonitor.send("M $dx $dy") }
     fun mouseButton(button: Int, down: Boolean) = InputMonitor.send("B $button ${if (down) 1 else 0}")
     fun scroll(vertical: Int, horizontal: Int = 0) = InputMonitor.send("W $vertical $horizontal")

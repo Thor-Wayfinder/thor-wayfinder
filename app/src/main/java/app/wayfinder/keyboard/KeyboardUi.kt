@@ -4,6 +4,7 @@ import android.view.HapticFeedbackConstants
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.KeyboardReturn
 import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ContentPaste
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.KeyboardCapslock
 import androidx.compose.material.icons.rounded.KeyboardHide
@@ -114,7 +116,29 @@ private fun TopBar(kb: KeyboardController, overlay: Boolean, preview: Preview, o
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         val popup = kb.popup
-        if (popup != null) {
+        if (popup != null && popup.first.kind == KeyKind.CLIPBOARD) {
+            // 1.3.2 (GitHub #45): the last copied texts — tap one (or ←/→ + A) to paste it
+            val clipScroll = androidx.compose.foundation.rememberScrollState()
+            androidx.compose.runtime.LaunchedEffect(kb.popupIndex) {
+                val n = popup.second.size
+                if (n > 1) clipScroll.animateScrollTo(clipScroll.maxValue * kb.popupIndex / (n - 1))
+            }
+            Row(Modifier.weight(1f).horizontalScroll(clipScroll),
+                horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                popup.second.forEachIndexed { i, opt ->
+                    val sel = i == kb.popupIndex
+                    Box(
+                        Modifier.height(if (overlay) 56.dp else 40.dp).clip(RoundedCornerShape(10.dp))
+                            .background(if (sel) g.accent else if (g.dark) Color(0x33FFFFFF) else Color(0x99FFFFFF))
+                            .pointerInput(opt) { detectTapGestures { kb.choosePopup(opt) } }
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center,
+                    ) { Text(ClipHistory.preview(opt), color = if (sel) Color.White else g.textPrimary, fontSize = if (overlay) 20.sp else 16.sp, maxLines = 1) }
+                }
+                Box(Modifier.size(if (overlay) 56.dp else 40.dp).pointerInput(Unit) { detectTapGestures { kb.choosePopup(null) } },
+                    contentAlignment = Alignment.Center) { Text("✕", color = g.textSecondary, fontSize = 18.sp) }
+            }
+        } else if (popup != null) {
             // Accents for the held key — tap one (or ←/→ + A with the controller).
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 popup.second.forEachIndexed { i, opt ->
@@ -294,6 +318,12 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
             KeyKind.TO_SYMBOLS -> Text("?123", color = fg, fontSize = if (big) 20.sp else 16.sp)
             KeyKind.TO_SYMBOLS_2 -> Text("=\\<", color = fg, fontSize = if (big) 20.sp else 16.sp)
             KeyKind.TO_LETTERS -> Text("ABC", color = fg, fontSize = if (big) 20.sp else 16.sp)
+            // 1.3.2 (GitHub #48)
+            KeyKind.TO_EMOJI -> Text("🙂", fontSize = if (big) 24.sp else 19.sp)
+            KeyKind.EMOJI_NEXT -> Text(EMOJI_GROUPS[(kb.emojiGroup + 1) % EMOJI_GROUPS.size].first + " ›", color = fg, fontSize = if (big) 20.sp else 16.sp)
+            // 1.3.2 (GitHub #45): dim until something was copied
+            KeyKind.CLIPBOARD -> Icon(Icons.Rounded.ContentPaste, "Clipboard",
+                tint = if (ClipHistory.items.isEmpty()) g.textTertiary else fg, modifier = Modifier.size(if (big) 28.dp else 22.dp))
         }
         // With the controller in use, each special key shows the button that does it.
         if (kb.padActive) padButtonFor(key.kind)?.let { app.wayfinder.ButtonEngine.menuSwap(it) }?.let { b ->

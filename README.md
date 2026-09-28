@@ -4,6 +4,14 @@
 sends the controller where you want it, gives every game its own buttons, and puts the Thor's settings one
 press away — all without leaving your game.
 
+<p align="center">
+<b><a href="https://github.com/Thor-Wayfinder/thor-wayfinder/releases/latest">⬇ Download (free)</a></b> ·
+<b><a href="https://github.com/Thor-Wayfinder/thor-wayfinder/wiki">📖 How to use it (wiki)</a></b> ·
+<a href="CHANGELOG.md">What's new</a> ·
+<a href="https://github.com/Thor-Wayfinder/thor-wayfinder/issues">Report a bug</a> ·
+<a href="https://ko-fi.com/thorwayfinder">☕ Support on Ko-fi</a>
+</p>
+
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 > [!WARNING]
@@ -12,11 +20,16 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 > together for now: turn ClusterTune's limits off (or uninstall it) and use Wayfinder's own Performance settings. If your
 > Thor was unstable with both, restart it after removing ClusterTune.
 
-**[⬇ Download Wayfinder (free)](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/latest)**
+## Highlights
 
-**[📖 How to use it: the Wayfinder wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki)** — every feature explained in simple words.
-
-[![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/thorwayfinder)
+- **Move and swap apps between the screens** — live, the app keeps running (hold Back)
+- **Combos** on Home, Back and the AYN button for 30+ actions, and a cheat sheet when you hold Home
+- **Game controls** (Home + X): remap any button per app or per game — keys, mouse, macros, gyro
+- **Keyboard & mouse** (Home + Y) on the other screen: PC keys, a trackpad (with a Touch mode), your own pad, the
+  game's guide
+- **Quick panel** (AYN button) over your game: brightness, volume, performance, fan, 45 shortcut tiles
+- **Per-app profiles**: screen, performance, fan, refresh rate, lights, controls
+- No root, no PC: one-press setup
 
 ## Screenshots
 
@@ -40,20 +53,28 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 ## Everything it does
 
-Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki).
+Tap a section to open it. Step-by-step help for each is in the [wiki](https://github.com/Thor-Wayfinder/thor-wayfinder/wiki).
 
-### Two screens
+<details>
+<summary><b>Two screens</b></summary>
+
 - Move / swap apps between screens (Back · hold) — live: the app keeps running and keeps its state
 - A glass slide animation when an app moves
-- "Opens on": each app opens on its own screen
+- "Opens on": each app opens on its own screen; apps that break when moved live (Firefox) reopen on the other
+  screen instead
 - App pairs: two apps, one press — from the quick panel or a combo; "Save what's on the screens now"
 - Screens restored after a restart (optional)
-- Recent apps (Back · double), driven by the controller: browse, open, close, clear all — its hint full, compact or off
+- Recent apps (Back · double), driven by the controller: browse, open, close, clear all — its hint one line of words, symbols or off
 - Close background apps (Back · triple) — the apps on both screens stay open
 - Close this app — close the game you're playing with a combo, no multitask view
-- Home goes home on the screen that has the controller
+- Home goes home on the screen that has the controller — or on the top, the bottom or both screens, with your own
+  combo
 
-### Bottom screen & power
+</details>
+
+<details>
+<summary><b>Bottom screen & power</b></summary>
+
 - Bottom screen off with a 3-finger tap (tap again for on) or a 3-finger swipe down
 - Auto-off when the bottom screen is unused (15 s – 2 min)
 - Per-app bottom-screen rule (keep on / off)
@@ -61,7 +82,11 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Stay awake
 - Do not disturb while playing — never touches a Do not disturb you turned on yourself
 
-### Display & sound
+</details>
+
+<details>
+<summary><b>Display & sound</b></summary>
+
 - Brightness per screen; Home + R2 / L2 = brighter / dimmer on both, keeping their difference (or one screen, with your own combo)
 - Volume per screen, and the volume buttons change both together; "Same on both" when they differ
 - Colour saturation (50–130 %)
@@ -71,12 +96,16 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - 60 / 120 Hz, per app or per game
 - FPS counter on either or both screens, in any corner, + battery and temperatures — per app or per game
 
-### Controller
+</details>
+
+<details>
+<summary><b>Controller</b></summary>
+
 - Combos on Home / Back: tap, double, triple, hold, + a button — 30+ actions, volume and brightness per screen included
 - Stick flicks as combo buttons (Home + right stick up / down), and any button can start a combo
 - Combo editor: press the buttons to record a combo
 - Hold Home: a cheat sheet of every combo (let go without pressing anything: nothing happens)
-- Open an app, a pair or a Wayfinder page with a combo
+- Open an app (on the screen you choose), a pair or a Wayfinder page with a combo
 - Per-app combos: normal / custom / off
 - Send the controller to the top or bottom screen, lock it; 4 modes (follows touch, stays where sent,
   always top, always bottom)
@@ -89,7 +118,11 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Bluetooth and USB controllers work alongside — only the Thor's own controls are taken over
 - Button names on screen as printed or the Xbox way (or following AYN's controller style)
 
-### Game controls (Home + X)
+</details>
+
+<details>
+<summary><b>Game controls (Home + X)</b></summary>
+
 - Remap per app, and per game inside emulators — "Which game?" switcher, "Find by pressing"
 - Automatic game detection (RetroArch, other emulators, GameNative, Cocoon)
 - A button can become a button, the D-pad, keys, the mouse, Android Back, nothing, a macro or a Wayfinder action
@@ -107,7 +140,11 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Per-game performance, fan, refresh rate, stick lights, bottom screen and FPS counter
 - Share / import controls as a file — filtered, macros arrive switched off
 
-### Keyboard & mouse
+</details>
+
+<details>
+<summary><b>Keyboard & mouse</b></summary>
+
 - A deck on the other screen (Home + Y): PC keys, trackpad, numpad, emulator, media, video, "My pad" — and the
   game's **Guide** (its guide page and your notes, even over dual-screen games)
 - Trackpad gestures (2-finger tap = right click, 2-finger drag = scroll, hold + move = drag), sticky
@@ -118,9 +155,14 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Stick-as-mouse mode
 - My pad: your own keys and text snippets; a simpler keyboard page
 - Wayfinder Keyboard: type with the controller, 17 languages, accents, password-safe — opens on the other
-  screen so the game keeps its own; pick keys with the D-pad (option); hold Space and slide to move the cursor
+  screen so the game keeps its own; pick keys with the D-pad (option); hold Space and slide to move the cursor;
+  emoji; a clipboard with your last 5 copied texts (also in the deck, pasted into the game's screen)
 
-### Quick panel (AYN button)
+</details>
+
+<details>
+<summary><b>Quick panel (AYN button)</b></summary>
+
 - A glass panel on the bottom screen, with the game blurred behind — over a dual-screen game's second screen too;
   the game never pauses under it
 - The panel takes the controller, or leaves it to the game (touch only)
@@ -130,25 +172,45 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - "Now playing": keep performance, fan, refresh rate and the bottom screen for this game
 - Optional media and details cards
 
-### Per app (App profiles)
+</details>
+
+<details>
+<summary><b>Per app (App profiles)</b></summary>
+
 - Screen, bottom screen, performance, fan, refresh rate, combos, controls, lights, guide
 - Two apps open: performance, fan and refresh rate take the more demanding one; buttons and lights
   follow the app that has the controller
 
-### Guide & notes
+</details>
+
+<details>
+<summary><b>Guide & notes</b></summary>
+
 - A game guide (small browser, pin a page) and your notes — per game, even inside an emulator; on the bottom
   screen, in the Home + Y deck, or beside the game when no screen is free (an action and a tile)
 
-### Stick lights
+</details>
+
+<details>
+<summary><b>Stick lights</b></summary>
+
 - AYN default, off, colour, breathing, strobe, spectrum, screen colour
 - Per app / per game, speed, brightness (down to 1 %), a colour for each stick; screen colour split left / right, taken from
   the top screen, the bottom screen or the controller's screen
 
-### Capture
+</details>
+
+<details>
+<summary><b>Capture</b></summary>
+
 - Screenshots: top, bottom or both stacked (Home + R1)
 - Screen recording of the top screen (up to 3 min, from the quick panel)
 
-### Sleep & standby
+</details>
+
+<details>
+<summary><b>Sleep & standby</b></summary>
+
 - Sleep actions: Wi-Fi, Bluetooth, Tailscale, Syncthing… with conditions (delay, battery, charging, hours)
 - Lid guard: stays asleep in its case — with a heat guard (45 °C closed in the case → pauses media,
   performance to Standard)
@@ -157,7 +219,11 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Standby drain stats, battery health, an activity log
 - Sleep from a tile, a combo or the AYN button
 
-### Look & setup
+</details>
+
+<details>
+<summary><b>Look & setup</b></summary>
+
 - Light / dark / black (OLED) / system theme, see-through glass, blur, your wallpaper or the aurora backdrop
 - The Hub on either screen — with the Hub on top, the bottom screen shows your combos
 - A status strip: where the controller is, the app on each screen, battery, brightness
@@ -168,14 +234,14 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 - Help, troubleshooting, a system-access check, open-source licenses, the version number
 - "Update available" next to Ready when a new version is out (checked once a day, can be turned off)
 
-## Requirements
+</details>
+
+## Install
 
 - An **AYN Thor** on its stock system ("Force SELinux" off — the default).
 - Nothing else: no root, no computer, no Shizuku. Wayfinder uses the Thor's own system service (the one AYN's
   "Run script as root" uses). Root and Shizuku are only fallbacks: on a rooted Thor your root manager may ask
   once, and if Shizuku is running it asks for its permission — saying no is fine to both.
-
-## Install
 
 1. Download the APK (`wayfinder-<version>.apk`, free) from the
    [latest release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/latest) and check it (below)
@@ -184,15 +250,18 @@ Step-by-step help for each of these is in the [wiki](https://github.com/Thor-Way
 3. Open Wayfinder: the tour sets everything up (accessibility service, keyboard, background running) and teaches
    the combos by doing them.
 
-### Verify the APK
+<details>
+<summary><b>Verify the APK</b></summary>
 
 Every release lists the APK's **SHA-256** and the **signing certificate's SHA-256**. Check them before installing:
 
 ```
-certutil -hashfile wayfinder-1.3.apk SHA256            (Windows)
-sha256sum wayfinder-1.3.apk                             (Linux / macOS)
-apksigner verify --print-certs wayfinder-1.3.apk        (the certificate)
+certutil -hashfile wayfinder-1.3.2.apk SHA256            (Windows)
+sha256sum wayfinder-1.3.2.apk                             (Linux / macOS)
+apksigner verify --print-certs wayfinder-1.3.2.apk        (the certificate)
 ```
+
+</details>
 
 ## Privacy and security
 
@@ -204,7 +273,15 @@ apksigner verify --print-certs wayfinder-1.3.apk        (the certificate)
   service). What that access is used for, what was reviewed and what was fixed: [SECURITY.md](SECURITY.md).
 - Screenshots and screen recordings capture everything shown, including what apps hide from screenshots.
 
-## Building from source
+## How it's made
+
+Wayfinder is designed, tested and maintained by one person. **Most of the code was written with an AI
+assistant (Claude, by Anthropic)**, directed and reviewed feature by feature. Every feature was tested on a
+real Thor before release, and the code went through dedicated security review passes, also AI-assisted (see
+[SECURITY.md](SECURITY.md)). No outside firm audited it — the full source is here so anyone can check it.
+
+<details>
+<summary><b>Building from source</b></summary>
 
 The source is published so anyone can audit it.
 
@@ -220,14 +297,10 @@ The source is published so anyone can audit it.
 - Release builds are signed by the maintainer (`tools/release.ps1`); the key is never in this repository.
 - Some code comments refer to the maintainer's private design notes; they aren't needed to build or understand the code.
 
-## How it's made
+</details>
 
-Wayfinder is designed, tested and maintained by one person. **Most of the code was written with an AI
-assistant (Claude, by Anthropic)**, directed and reviewed feature by feature. Every feature was tested on a
-real Thor before release, and the code went through dedicated security review passes, also AI-assisted (see
-[SECURITY.md](SECURITY.md)). No outside firm audited it — the full source is here so anyone can check it.
-
-## Disclaimer
+<details>
+<summary><b>Disclaimer</b></summary>
 
 Wayfinder works around Android's limited support for two screens. Most apps move fine; a few heavy or unusual
 apps may restart or refuse to move.
@@ -237,7 +310,10 @@ named here. AYN, Thor and Odin are trademarks of AYN; Nintendo, Xbox, RetroArch,
 GameNative, Cocoon, Spotify, Steam, Shizuku, Tailscale, Syncthing and other names are trademarks of their
 respective owners, used only to describe compatibility.
 
-## License
+</details>
+
+<details>
+<summary><b>License</b></summary>
 
 Wayfinder's own code: [PolyForm Strict 1.0.0](LICENSE) (SPDX: `PolyForm-Strict-1.0.0`) — source-available, not
 open source. The source is published for **transparency and security auditing**. In short: you may read it,
@@ -252,6 +328,8 @@ Open-source licenses).
 
 Contributions: pull requests aren't accepted (the license doesn't allow changes to the code) — bug reports
 and ideas are welcome as issues.
+
+</details>
 
 ## Support
 

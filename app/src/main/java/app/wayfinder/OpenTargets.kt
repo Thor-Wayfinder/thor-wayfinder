@@ -17,12 +17,17 @@ object OpenTargets {
     )
 
     fun app(pkg: String) = "app:$pkg"
+    /** 1.3.2 (GitHub #42): an app on a chosen screen — `apptop:` / `appbottom:` (plain `app:` = the controller's). */
+    fun app(pkg: String, where: String?) = when (where) { "top" -> "apptop:$pkg"; "bottom" -> "appbottom:$pkg"; else -> "app:$pkg" }
+    fun isApp(arg: String) = arg.startsWith("app:") || arg.startsWith("apptop:") || arg.startsWith("appbottom:")
+    fun appPkg(arg: String) = arg.substringAfter(':')
+    fun appWhere(arg: String): String? = when { arg.startsWith("apptop:") -> "top"; arg.startsWith("appbottom:") -> "bottom"; else -> null }
     fun pair(id: Long) = "pair:$id"
     fun page(id: String) = "page:$id"
 
     fun valid(arg: String?): Boolean = when {
         arg == null -> false
-        arg.startsWith("app:") -> Shell.isPkg(arg.removePrefix("app:"))
+        isApp(arg) -> Shell.isPkg(appPkg(arg))
         arg.startsWith("pair:") -> arg.removePrefix("pair:").toLongOrNull() != null
         arg.startsWith("page:") -> PAGES.any { it.first == arg.removePrefix("page:") }
         else -> false
@@ -35,7 +40,8 @@ object OpenTargets {
     /** "Open Chrome", "Open the pair Chrome + Discord", "Open Wayfinder: Stick lights". */
     fun label(ctx: Context, arg: String?): String = when {
         arg == null -> "Open…"
-        arg.startsWith("app:") -> "Open ${appLabel(ctx, arg.removePrefix("app:"))}"
+        isApp(arg) -> "Open ${appLabel(ctx, appPkg(arg))}" + when (appWhere(arg)) {
+            "top" -> " on the top screen"; "bottom" -> " on the bottom screen"; else -> "" }
         arg.startsWith("pair:") -> Layouts.pairs.firstOrNull { it.id == arg.removePrefix("pair:").toLongOrNull() }
             ?.let { p -> "Open the pair " + listOfNotNull(p.top, p.bottom).joinToString(" + ") { appLabel(ctx, it) } }
             ?: "Open a deleted app pair"

@@ -17,12 +17,12 @@ interface KeySink {
     fun textBeforeCursor(n: Int): String
 }
 
-enum class KeyKind { CHAR, SHIFT, BACKSPACE, SPACE, ENTER, GLOBE, TO_SYMBOLS, TO_SYMBOLS_2, TO_LETTERS }
+enum class KeyKind { CHAR, SHIFT, BACKSPACE, SPACE, ENTER, GLOBE, TO_SYMBOLS, TO_SYMBOLS_2, TO_LETTERS, CLIPBOARD, TO_EMOJI, EMOJI_NEXT }
 
 data class KeySpec(val kind: KeyKind, val text: String = "", val weight: Float = 1f)
 
 enum class Shift { OFF, ONCE, LOCKED }
-enum class Page { LETTERS, SYMBOLS, SYMBOLS_2 }
+enum class Page { LETTERS, SYMBOLS, SYMBOLS_2, EMOJI }
 
 /** How the Enter key looks/acts for the current field. */
 enum class EnterAction { NEWLINE, GO, SEARCH, SEND, NEXT, DONE }
@@ -47,6 +47,9 @@ class KeyboardController(private val sink: () -> KeySink?) {
     var page by mutableStateOf(Page.LETTERS)
         private set
     var shift by mutableStateOf(Shift.OFF)
+        private set
+    /** 1.3.2 (GitHub #48): which emoji group the emoji page shows. */
+    var emojiGroup by mutableIntStateOf(0)
         private set
     var enterAction by mutableStateOf(EnterAction.NEWLINE)
 
@@ -86,6 +89,8 @@ class KeyboardController(private val sink: () -> KeySink?) {
         val bottom = listOf(
             KeySpec(if (page == Page.LETTERS) KeyKind.TO_SYMBOLS else KeyKind.TO_LETTERS, weight = 1.5f),
             KeySpec(KeyKind.GLOBE),
+            KeySpec(KeyKind.CLIPBOARD),      // 1.3.2 (GitHub #45)
+            KeySpec(KeyKind.TO_EMOJI),       // 1.3.2 (GitHub #48)
             KeySpec(KeyKind.CHAR, if (l.id == "ar") "،" else ","),
             KeySpec(KeyKind.SPACE, weight = 5f),
             KeySpec(KeyKind.CHAR, "."),
@@ -104,6 +109,13 @@ class KeyboardController(private val sink: () -> KeySink?) {
                 listOf(KeySpec(KeyKind.TO_SYMBOLS_2, weight = 1.5f)) + chars(SYMBOLS_1[2]) + KeySpec(KeyKind.BACKSPACE, weight = 1.5f), bottom)
             Page.SYMBOLS_2 -> listOf(chars(SYMBOLS_2[0]), chars(SYMBOLS_2[1]),
                 listOf(KeySpec(KeyKind.TO_SYMBOLS, weight = 1.5f)) + chars(SYMBOLS_2[2]) + KeySpec(KeyKind.BACKSPACE, weight = 1.5f), bottom)
+            // 1.3.2 (GitHub #48): three rows of emoji, then ABC · the next group · space · delete
+            Page.EMOJI -> {
+                val g = EMOJI_GROUPS[emojiGroup.coerceIn(0, EMOJI_GROUPS.lastIndex)].second
+                g.map { r -> r.map { KeySpec(KeyKind.CHAR, it) } } + listOf(listOf(
+                    KeySpec(KeyKind.TO_LETTERS, weight = 1.5f), KeySpec(KeyKind.EMOJI_NEXT, weight = 1.5f),
+                    KeySpec(KeyKind.SPACE, weight = 5f), KeySpec(KeyKind.BACKSPACE, weight = 1.5f), KeySpec(KeyKind.ENTER, weight = 1.5f)))
+            }
         }
     }
 
@@ -131,7 +143,7 @@ class KeyboardController(private val sink: () -> KeySink?) {
                 if (before.length == 2 && before[1] == ' ' && before[0].isLetterOrDigit()) {
                     s.deleteBackward(); s.commit(". ")
                 } else s.commit(" ")
-                if (page != Page.LETTERS) page = Page.LETTERS
+                if (page != Page.LETTERS && page != Page.EMOJI) page = Page.LETTERS
                 afterEdit()
             }
             KeyKind.BACKSPACE -> { s.deleteBackward(); afterEdit() }
@@ -145,6 +157,13 @@ class KeyboardController(private val sink: () -> KeySink?) {
             KeyKind.TO_SYMBOLS -> { page = Page.SYMBOLS; clampFocus() }
             KeyKind.TO_SYMBOLS_2 -> { page = Page.SYMBOLS_2; clampFocus() }
             KeyKind.TO_LETTERS -> { page = Page.LETTERS; clampFocus() }
+            // 1.3.2 (GitHub #45): the last copied texts in the strip above — pick one to paste it
+            KeyKind.TO_EMOJI -> { page = Page.EMOJI; clampFocus() }
+            KeyKind.EMOJI_NEXT -> { emojiGroup = (emojiGroup + 1) % EMOJI_GROUPS.size; clampFocus() }
+            KeyKind.CLIPBOARD -> {
+                ClipHistory.read()
+                if (ClipHistory.items.isNotEmpty()) { popup = key to ClipHistory.items.toList(); popupIndex = 0 }
+            }
         }
     }
     private var lastShiftTap = 0L

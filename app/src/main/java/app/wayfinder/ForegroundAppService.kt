@@ -71,10 +71,13 @@ class ForegroundAppService : AccessibilityService() {
             if (TourPractice.intercept(ThorAction.OPEN)) return true
             val a = arg!!
             return when {
-                a.startsWith("app:") -> {
-                    val pkg = a.removePrefix("app:")
+                OpenTargets.isApp(a) -> {
+                    val pkg = OpenTargets.appPkg(a)
                     if (svc.packageManager.getLaunchIntentForPackage(pkg) == null) { pill("That app isn't installed any more"); return false }
-                    val top = svc.controllerDisplay() == PRIMARY_DISPLAY || svc.secondDisplayId() == null
+                    // 1.3.2 (GitHub #42): on a chosen screen, or the controller's
+                    val top = svc.secondDisplayId() == null || when (OpenTargets.appWhere(a)) {
+                        "top" -> true; "bottom" -> false; else -> svc.controllerDisplay() == PRIMARY_DISPLAY
+                    }
                     svc.openLayout(if (top) pkg else null, if (top) null else pkg, "open")
                 }
                 a.startsWith("pair:") -> Layouts.pairs.firstOrNull { it.id == a.removePrefix("pair:").toLongOrNull() }
@@ -244,6 +247,9 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.TOP_QUIETER -> { svc.stepVolume(-1, true); true }
                 ThorAction.BOTTOM_LOUDER -> { svc.stepVolume(+1, false); true }
                 ThorAction.BOTTOM_QUIETER -> { svc.stepVolume(-1, false); true }
+                ThorAction.HOME_TOP -> { svc.homeOn(top = true, bottom = false); true }
+                ThorAction.HOME_BOTTOM -> if (svc.secondDisplayId() == null) false else { svc.homeOn(top = false, bottom = true); true }
+                ThorAction.HOME_BOTH -> { svc.homeOn(top = true, bottom = true); true }
                 ThorAction.QUICK_MENU -> { svc.handler.post { svc.toggleQuickPanel() }; true }
                 ThorAction.FPS_COUNTER -> { svc.handler.post { AppSettings.setFpsCounterOn(!AppSettings.fpsCounter); svc.applyFps() }; true }
                 ThorAction.GAME_CONTROLS -> { svc.handler.post { svc.openGameControls() }; true }
@@ -716,9 +722,10 @@ class ForegroundAppService : AccessibilityService() {
             1 -> focusCue?.showTable(displayId, emptyList(), listOf(
                 "◀ ▶" to "", m(ThorButton.A) to "↗", m(ThorButton.Y) to "✕", "Select" to "✕✕", "Start" to "⌂", m(ThorButton.B) to "↩"),
                 5000, at = AppSettings.recentsHintAt, compact = true)
-            else -> focusCue?.showTable(displayId, listOf("Recent apps"), listOf(
-                "D-pad left / right" to "browse", m(ThorButton.A) to "open", m(ThorButton.Y) to "close the app",
-                "Select" to "close all", "Start" to "home", m(ThorButton.B) to "back"), 5000, at = AppSettings.recentsHintAt)
+            // 1.3.2: one line with words, at the very top (a titled two-row card covered the middle card)
+            else -> focusCue?.showTable(displayId, emptyList(), listOf(
+                "Recent apps" to "", "◀ ▶" to "browse", m(ThorButton.A) to "open", m(ThorButton.Y) to "close",
+                "Select" to "close all", "Start" to "home", m(ThorButton.B) to "back"), 5000, at = AppSettings.recentsHintAt, compact = true)
         }
     }
 
@@ -1692,6 +1699,19 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
+    /** 1.3.2: when an app was last reopened on the other screen (its cold start isn't a failed move). */
+    private val reopenedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /** 1.3.2 (GitHub #42): a screen's home (or both), whichever screen has the controller. */
+    private fun homeOn(top: Boolean, bottom: Boolean) {
+        handler.post { QuickPanelWindow.close() }
+        swapWatchGen++
+        Thread {
+            if (bottom) secondDisplayId()?.let { runCatching { goHomeOnDisplay(it) } }
+            if (top) handler.post { performGlobalAction(GLOBAL_ACTION_HOME) }
+        }.apply { isDaemon = true }.start()
+    }
+
     /** 1.3.1 (GitHub #44): the volume, both screens ([top] null — keeping their difference) or one. */
     private fun stepVolume(dir: Int, top: Boolean?) {
         val pillOn = if (AppSettings.focusLockEnabled || AppSettings.focusSticky) lockTarget() else focusedDisplayId()
@@ -1723,6 +1743,7 @@ class ForegroundAppService : AccessibilityService() {
         val a = AppSettings.aynHold ?: return@Runnable
         if (buttonEngine?.aynInCombo == true) return@Runnable      // AYN + a button: a combo, not a hold
         aynHoldFired = true
+        focusCue?.hideHint()   // 1.3.2: the combo list (if up) closes as the hold acts
         Log.d(TAG, "AYN button held → $a")
         vibrateShort()
         Companion.perform(a)
@@ -2399,8 +2420,10 @@ class ForegroundAppService : AccessibilityService() {
             val where = if (AppSettings.focusLockEnabled) lockTarget() else focusedDisplayId()
             // In words: where the controller is and how it behaves (several ways to route it —
             // the hint says which one is on), then the combos, the button in bold
+            // 1.3.2: the AYN button's own hold fires while you read its combos — so the list says what it does
+            val holdLine = if (modifier == ThorButton.AYN) AppSettings.aynHold?.let { listOf("keep holding" to it.title.lowercase()) }.orEmpty() else emptyList()
             focusCue?.showHint(where, listOf(controllerWhere(where), "Keep ${modifier.label} held and press:"),
-                chords.map { it.trigger.button.spoken to chordLabel(it) })
+                chords.map { it.trigger.button.spoken to chordLabel(it) } + holdLine)
         }
 
         override fun combosOffApp(): String? {
@@ -2563,7 +2586,7 @@ class ForegroundAppService : AccessibilityService() {
                 // No inter-move delay on the binder fast path: the two reparents
                 // must land back-to-back so the cover lands in one frame window.
                 if (i > 0) Thread.sleep(if (fastPath) 0 else 300)
-                launchOnDisplay(move.pkg, move.toDisplay, aggressive = false, fromDisplay = move.fromDisplay)
+                launchOnDisplay(move.pkg, move.toDisplay, aggressive = false, fromDisplay = move.fromDisplay, reopenOk = true)
             }
             if (moves.size == 1) goHomeOnDisplay(moves[0].fromDisplay)
         }
@@ -2593,6 +2616,13 @@ class ForegroundAppService : AccessibilityService() {
 
         // ── Phase 2: verify after delay ──
         Thread.sleep(if (fastPath) 800 else 1500)
+        // 1.3.2: an app reopened on the other screen (Firefox) cold-starts: give it time instead of "retrying" it
+        if (moves.any { android.os.SystemClock.uptimeMillis() - (reopenedAt[it.pkg] ?: 0L) < 5000 }) {
+            for (i in 0 until 10) {
+                if (moves.all { taskDisplayOf(it.pkg) == it.toDisplay }) break
+                Thread.sleep(300)
+            }
+        }
         scanAllDisplayApps()
 
         val clean = mutableSetOf<Move>()
@@ -2751,8 +2781,15 @@ class ForegroundAppService : AccessibilityService() {
     /** Bumped by every swap and the user's Home: a running post-swap watch stops. */
     @Volatile private var swapWatchGen = 0
 
-    private fun launchOnDisplay(pkg: String, targetDisplayId: Int, aggressive: Boolean, fromDisplay: Int? = null) {
+    private fun launchOnDisplay(pkg: String, targetDisplayId: Int, aggressive: Boolean, fromDisplay: Int? = null,
+                                reopenOk: Boolean = false) {
         val shizukuReady = ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()
+        // 1.3.2: apps that break after a live move (Firefox) are reopened on the other screen instead — only for
+        // the user's own move of a running app, with a real force-stop (never in retries, routing, Open, pairs)
+        val reopen = !aggressive && reopenOk && reopensOnMove(pkg) && PServiceBridge.isAvailable() &&
+            taskDisplayOf(pkg)?.let { it != targetDisplayId } == true
+        if (reopen) reopenedAt[pkg] = android.os.SystemClock.uptimeMillis()
+        @Suppress("NAME_SHADOWING") val aggressive = aggressive || reopen
 
         if (aggressive) {
             // A real force-stop needs root/shell authority; killBackgroundProcesses

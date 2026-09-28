@@ -52,6 +52,8 @@ data class AppConfig(
     val backToGame: Boolean? = null,
     /** 1.3 (GitHub #22): the frame-rate counter for this app (null = the usual setting). */
     val fps: Boolean? = null,
+    /** 1.3.2 — moved to the other screen by reopening it (not live). null = automatic ([reopensOnMove]). */
+    val reopenOnMove: Boolean? = null,
 ) {
     val isDefault get() = this == AppConfig()
 
@@ -70,6 +72,7 @@ data class AppConfig(
         .apply { remap?.takeIf { !it.isEmpty }?.let { put("remap", it.toJson()) } }
         .apply { backToGame?.let { put("backGame", it) } }
         .apply { fps?.let { put("fps", it) } }
+        .apply { reopenOnMove?.let { put("reopenMove", it) } }
         .toString()
 
     companion object {
@@ -99,6 +102,7 @@ data class AppConfig(
                 remap = PadRemap.fromJson(o.optJSONObject("remap")),
                 backToGame = if (o.has("backGame")) o.optBoolean("backGame") else null,
                 fps = if (o.has("fps")) o.optBoolean("fps") else null,
+                reopenOnMove = if (o.has("reopenMove")) o.optBoolean("reopenMove") else null,
             )
         }.getOrDefault(AppConfig())
     }
@@ -143,3 +147,12 @@ object AppConfigStore {
     /** Packages with any non-default setting. */
     fun configured(): Set<String> = cache.keys.toSet()
 }
+
+/** 1.3.2 — Firefox-based browsers (GeckoView) keep their popups on the screen they started on after a live
+ *  move, and crash when one opens (selecting a word, a menu): they move by reopening, unless set otherwise. */
+private val REOPEN_BY_DEFAULT = listOf("org.mozilla.", "org.torproject.torbrowser", "io.github.forkmaintainers.iceraven", "org.ironfoxoss.")
+
+fun reopensOnMove(pkg: String): Boolean =
+    AppConfigStore.get(pkg).reopenOnMove ?: REOPEN_BY_DEFAULT.any { pkg.startsWith(it) }
+
+fun reopensOnMoveByDefault(pkg: String): Boolean = REOPEN_BY_DEFAULT.any { pkg.startsWith(it) }

@@ -358,6 +358,13 @@ private fun AppOptionsDialog(
                         GlassSegmentedControl(Route.values().map { it.label }, cfg.route.ordinal, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(route = Route.values()[i]) }
                         }
+                        // 1.3.2: live move, or reopen it there (Firefox crashed after a live move)
+                        OptionLabel("When it moves to the other screen: " + (if (reopensOnMove(app.pkg)) "it reopens there (tabs and state reload)"
+                            else "it keeps running") + if (cfg.reopenOnMove == null && reopensOnMoveByDefault(app.pkg)) " (automatic: Firefox-based browsers reopen)" else "")
+                        GlassSegmentedControl(listOf("Automatic", "Keep running", "Reopen"),
+                            when (cfg.reopenOnMove) { null -> 0; false -> 1; true -> 2 }, Modifier.fillMaxWidth()) { i ->
+                            AppConfigStore.update(app.pkg) { it.copy(reopenOnMove = when (i) { 1 -> false; 2 -> true; else -> null }) }
+                        }
                         OptionLabel("Bottom screen while ${app.label} is on top")
                         GlassSegmentedControl(listOf("Usual", "Keep on", "Off"), cfg.second.ordinal, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(second = SecondScreenPolicy.values()[i]) }
