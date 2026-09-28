@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.1 — September 2026
+
+- **The AYN button's tap and hold are on the Combos page** (they were only under Quick panel), at the top, and a hold
+  shows on the "Your controls" sheet — e.g. hold the AYN button = bottom screen off / on.
+- **New: volume and brightness per screen as actions** — Louder / Quieter (both screens, keeping their difference), Top
+  screen louder / quieter, Bottom screen louder / quieter, and Top / Bottom screen brighter / dimmer. Put them on a combo,
+  the AYN button or a button's long press.
+- **New:** stick lights go down to 1 % (they stopped at 5 %).
+- **Fixed:** Home on the bottom screen did nothing when Wayfinder hadn't seen a launcher there yet — it now opens the
+  launcher Android has for a second screen, or says so.
+- **Fixed (controller):** after picking the AYN button's action, the controller is back on its row.
+- **New:** the version number at the bottom of Help & status.
+- **New: "Update available"** — once a day Wayfinder asks GitHub for the latest version number (nothing else is sent);
+  a newer one shows as a small orange-dot pill next to Ready, and opens the release page. Off in Help & status.
+- **New: the AYN button can start a combo** — hold it and press a button (AYN + X…), like Home and Back. Record it on the
+  Combos page. Its own tap and hold still work when no combo is made.
+
 ## 1.3 — September 2026
 
 - **Fixed:** the quick panel no longer pauses the game under it (WatermelonDS and other emulators paused, and their sound

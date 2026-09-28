@@ -163,7 +163,7 @@ object StickLights {
 
     private fun write(left: Int, right: Int, level: Float) {
         listOf(left, right).forEachIndexed { i, c ->
-            val s = "1-${ch(Color.red(c), level)}:${ch(Color.green(c), level)}:${ch(Color.blue(c), level)}"
+            val s = drive(c, level).joinToString(":", prefix = "1-")
             if (s != lastWritten[i]) {
                 put("${SIDES[i]}/brightness", s); lastWritten[i] = s
                 if (i == 0 && app.wayfinder.BuildConfig.DEBUG && profile.mode == LightMode.SCREEN) Log.v(TAG, "led $s")
@@ -182,10 +182,17 @@ object StickLights {
      * 255:0:0 is a clean red (2026-09-23). So: gamma 2.8, and channels that end up
      * nearly dark are switched fully off.
      */
-    private fun ch(v: Int, level: Float): Int {
-        val lin = Math.pow((v / 255.0), 2.8) * level.coerceIn(0f, 1f)
-        val out = (lin * 255).toInt().coerceIn(0, 255)
-        return if (out < 6) 0 else out
+    private fun drive(c: Int, level: Float): List<Int> {
+        val lin = listOf(Color.red(c), Color.green(c), Color.blue(c)).map { Math.pow(it / 255.0, 2.8) }
+        val peak = lin.max()
+        val l = level.coerceIn(0f, 1f)
+        // "nearly dark" is measured against the brightest channel (it was 6/255 at any level, so a
+        // dim setting — 1 %, GitHub #44 — switched every channel off); a channel that stays on
+        // keeps at least one step, so the rings still glow at 1 %
+        return lin.map { v ->
+            if (l <= 0f || peak <= 0.0 || v < peak * (6.0 / 255)) 0
+            else (v * l * 255).toInt().coerceIn(1, 255)
+        }
     }
 
     private fun put(path: String, value: String) {

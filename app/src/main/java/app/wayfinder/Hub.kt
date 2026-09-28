@@ -86,6 +86,7 @@ import app.wayfinder.ui.SectionHeader
 import app.wayfinder.ui.StatusPill
 import app.wayfinder.ui.VSpace
 import kotlinx.coroutines.delay
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -252,6 +253,7 @@ private fun HubHome(myDisplayId: Int, go: (String) -> Unit) {
     fun cardFocus(page: String) = cardFocus.getOrPut(page) { FocusRequester() }
     val open: (String) -> Unit = { page -> lastHubCard = page; go(page) }
     // the setup button when it's shown (it's what needs doing), else the card last opened, else the first
+    LaunchedEffect(Unit) { UpdateCheck.check(ctx) }      // 1.3.1: at most once a day
     LaunchedEffect(Unit) {
         delay(350)
         val back = lastHubCard?.let { cardFocus[it] }
@@ -274,6 +276,17 @@ private fun HubHome(myDisplayId: Int, go: (String) -> Unit) {
                     Text("For the AYN Thor", color = g.textTertiary, style = MaterialTheme.typography.bodyMedium)
                 }
                 StatusPill(if (st.ready) "Ready" else "Setup needed", st.ready)
+                // 1.3.1 — a newer version on GitHub: a small orange-dot pill that opens the release page
+                // (the same pill as "Ready" — shape, padding, dot, text — only it can be pressed)
+                if (UpdateCheck.available != null) {
+                    FocusableGlass(onClick = { openLink(ctx, UpdateCheck.RELEASES_URL, myDisplayId) }, radius = 14.dp) {
+                        Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Box(Modifier.size(8.dp).background(androidx.compose.ui.graphics.Color(0xFFFF9500), RoundedCornerShape(4.dp)))
+                            Text("Update available", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
+                        }
+                    }
+                }
                 Box(Modifier.weight(1f))
                 // discreet support link (2026-09-26): small, quiet, opens Ko-fi in the browser
                 FocusableGlass(onClick = { openKofi(ctx, myDisplayId) }, radius = 22.dp) {
@@ -290,7 +303,8 @@ private fun HubHome(myDisplayId: Int, go: (String) -> Unit) {
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         Icon(Icons.Rounded.Search, null, tint = g.accent, modifier = Modifier.size(20.dp))
-                        Text("Search settings & features", color = g.textTertiary, style = MaterialTheme.typography.bodyLarge)
+                        Text("Search settings & features", color = g.textTertiary, style = MaterialTheme.typography.bodyLarge,
+                            maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -334,6 +348,15 @@ private var lastHubCard: String? = null
 const val KOFI_URL = "https://ko-fi.com/thorwayfinder"
 
 /** The Ko-fi page in the browser, on the screen the Hub is on. */
+/** 1.3.1 — a web page in the browser, on [displayId]. */
+fun openLink(ctx: android.content.Context, url: String, displayId: Int) {
+    runCatching {
+        ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            android.app.ActivityOptions.makeBasic().setLaunchDisplayId(displayId).toBundle())
+    }.onFailure { ForegroundAppService.pill("No browser to open the page", displayId, 3000) }
+}
+
 fun openKofi(ctx: android.content.Context, displayId: Int) {
     runCatching {
         ctx.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(KOFI_URL))
@@ -724,7 +747,7 @@ private fun PairRow(p: AppPair, top: String, bottom: String) {
 private fun ControllerPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit) =
     SubPage(myDisplayId, "Controller", "Buttons, combos and which screen gets the controller", onBack) {
         @Suppress("UNUSED_VARIABLE") val v = ControlsStore.version.intValue
-        GlassListRow("Combos — Home or Back + a button", value = "${ControlsStore.active().size} set", icon = Icons.Rounded.SportsEsports) { go(HubPage.CONTROLS) }
+        GlassListRow("Combos — Home, Back and the AYN button", value = "${ControlsStore.active().size} set", icon = Icons.Rounded.SportsEsports) { go(HubPage.CONTROLS) }
         AynHomeWarning()
         // round 8: drift, triggers, buttons — and the all-games deadzone
         GlassListRow("Test the controller", value = AppSettings.stickDefaults.let { d ->
@@ -983,9 +1006,13 @@ private fun Troubleshooting(go: (String) -> Unit) {
     }
 }
 
+@OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 private fun HelpPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit) {
     val g = LocalGlass.current
+    // the footer (disclaimer + version) comes into view when the controller reaches the last row
+    val footer = remember { androidx.compose.foundation.relocation.BringIntoViewRequester() }
+    val footerScope = androidx.compose.runtime.rememberCoroutineScope()
     val ctx = LocalContext.current
     val st = rememberHubStatus()
     SubPage(myDisplayId, "Help & status", if (st.ready) "Everything is set up" else "A couple of things need attention", onBack) {
@@ -1028,11 +1055,23 @@ private fun HelpPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit)
             layerWhy.isNotEmpty() -> "stopped: $layerWhy — press to try again"
             else -> "starting…"
         }, icon = Icons.Rounded.Info) { if (!PadLayerCtl.active) { PadLayerCtl.set(ctx, true) } }
-        GlassListRow("Open-source licenses", value = "The libraries inside Wayfinder", icon = Icons.Rounded.Gavel) { go(HubPage.LICENSES) }
+        // 1.3.1 — the daily update check (the only other internet use, besides guides and Ko-fi)
+        SettingCard("Check for updates",
+            (if (UpdateCheck.enabled) "Once a day, Wayfinder asks GitHub for the latest version number — nothing about you is sent. " +
+                "A new version shows as “Update available” next to Ready."
+            else "Off — Wayfinder never checks. New versions are on the GitHub page.") +
+                (UpdateCheck.available?.let { " Version $it is out." } ?: ""),
+            checked = UpdateCheck.enabled, onChecked = { UpdateCheck.setEnabled(ctx, it) })
+        GlassListRow("Open-source licenses", Modifier.onFocusChanged { if (it.isFocused) footerScope.launch { delay(60); footer.bringIntoView() } },
+            value = "The libraries inside Wayfinder", icon = Icons.Rounded.Gavel) { go(HubPage.LICENSES) }
         Text("Wayfinder ${BuildConfig.VERSION_NAME} is an independent project, not affiliated with, endorsed or sponsored by " +
             "AYN or any other company named in it. AYN, Thor and Odin are trademarks of AYN; other names are trademarks of " +
             "their owners, used only to describe compatibility.",
             color = LocalGlass.current.textTertiary, style = MaterialTheme.typography.bodySmall)
+        // 1.3.1 — the version on its own line, easy to find for a bug report
+        Text("Version ${BuildConfig.VERSION_NAME}", color = LocalGlass.current.textTertiary, style = MaterialTheme.typography.labelSmall,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+            modifier = Modifier.fillMaxWidth().padding(top = 4.dp).bringIntoViewRequester(footer))
     }
 }
 
@@ -1088,7 +1127,7 @@ private val SEARCH_INDEX = listOf(
     SearchEntry("Turn the bottom screen off with 3 fingers", "Screens & power", "gesture three 3 finger tap swipe blank wake off", HubPage.SCREENS),
     SearchEntry("Turn the bottom screen off when unused", "Screens & power", "auto off idle timer timeout sleep blank unused", HubPage.SCREENS),
     SearchEntry("Animate apps moving between screens", "Screens & power", "animation slide glass transition move", HubPage.SCREENS),
-    SearchEntry("Combos — Home or Back + a button", "Controller", "buttons combo combos system shortcuts bind chord shortcut hotkey", HubPage.CONTROLS),
+    SearchEntry("Combos — Home, Back and the AYN button", "Controller", "buttons combo combos system shortcuts bind chord shortcut hotkey ayn tap hold long press", HubPage.CONTROLS),
     SearchEntry("Game controls: each game's buttons, gyro and macros", "App profiles", "remap mapping gyro motion aim macro turbo toggle chord game controls per game emulator buttons", HubPage.APPS),
     SearchEntry("Input layer (for game controls)", "Controller", "input layer copy controller emergency home back game controls", HubPage.CONTROLLER),
     SearchEntry("Face buttons: Nintendo or Xbox layout", "Controller", "face buttons nintendo xbox layout abxy swap a b x y", HubPage.CONTROLLER),

@@ -114,7 +114,7 @@ fun LightsPage(myDisplayId: Int, pkg: String?, onBack: () -> Unit) {
             }
             if (p.mode != LightMode.AYN && p.mode != LightMode.OFF) {
                 SectionHeader("Brightness · ${(p.brightness * 100).toInt()} %")
-                app.wayfinder.ui.GlassSlider(p.brightness) { v -> save(p.copy(brightness = v.coerceAtLeast(0.05f))) }
+                app.wayfinder.ui.GlassSlider(p.brightness) { v -> save(p.copy(brightness = v.coerceAtLeast(0.01f))) }
             }
             if (p.mode == LightMode.SCREEN) {
                 // 1.3 (GitHub #15): like BiFrost — each ring its side of the screen

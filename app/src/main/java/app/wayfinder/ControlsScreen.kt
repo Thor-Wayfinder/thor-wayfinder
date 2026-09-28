@@ -144,6 +144,24 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(8.dp),
                 contentPadding = PaddingValues(vertical = 12.dp, horizontal = 4.dp),
             ) {
+                // 1.3.1 — the AYN button first: its tap and hold (they were only under Quick panel), then the combos
+                if (pkg == null) {
+                    item(key = "ayn-h") {
+                        Column(Modifier.padding(start = 4.dp)) {
+                            Text("AYN BUTTON", color = g.textTertiary, style = MaterialTheme.typography.labelMedium)
+                            Text(if (AppSettings.aynButtonOurs) "A tap and a hold can each do an action — e.g. hold = bottom screen off. It never reaches the game."
+                                else "The AYN button opens AYN's own drawer. Turn on “The AYN button opens the quick panel” in Controller → Quick panel (AYN button) to give it a tap and a hold.",
+                                color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    if (AppSettings.aynButtonOurs) item(key = "ayn") {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { AynButtonChoices(canFocus = listFocusable) }
+                    }
+                    item(key = "combos-h") {
+                        Text("COMBOS", color = g.textTertiary, style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(top = 10.dp, start = 4.dp))
+                    }
+                }
                 items(actions, key = { it.name }) { action ->
                     val trigger = if (pkg == null) ControlsStore.triggerFor(action) else ControlsStore.effectiveTriggerFor(pkg, action)
                     val appSpecific = pkg != null && AppConfigStore.get(pkg).let { c ->
@@ -336,6 +354,9 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
                         // Combination complete → decide, stop capturing so the controller navigates again.
                         when {
                             order.size == 1 && order[0] == ThorButton.B -> { onDone(); return@startCapture }   // B alone = cancel
+                            // 1.3.1 (GitHub #44): the AYN button starts a combo, never ends one; alone = its tap / hold
+                            order.size >= 2 && order[1] == ThorButton.AYN -> error = "The AYN button can only start a combo: hold it first, then press another button."
+                            order.size == 1 && order[0] == ThorButton.AYN -> error = "The AYN button on its own: set its tap and hold at the top of the Combos page. For a combo, hold it and press another button."
                             order.size >= 2 -> result = Trigger(order[1], modifier = order[0])
                             order[0].isSystem -> result = Trigger(order[0], press)
                             else -> error = "${order[0].spoken} alone would break games — use Home or Back, " +
@@ -359,7 +380,7 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
                         color = g.textPrimary, style = MaterialTheme.typography.titleMedium)
                 }
                 Text(
-                    if (order.isEmpty()) "Home or Back on their own, or hold one button and press a second. B on its own cancels."
+                    if (order.isEmpty()) "Home or Back on their own, or hold one button (the AYN button too) and press a second. B on its own cancels."
                     else order.joinToString(" + ") { it.spoken },
                     color = if (order.isEmpty()) g.textTertiary else g.accent,
                     style = MaterialTheme.typography.bodyLarge,
@@ -381,6 +402,7 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
                         ) { press = Press.values()[it] }
                     }
                     val note = when {
+                        r.modifier == ThorButton.AYN -> if (r.button.isDpad) "The D-pad press still reaches the game." else null
                         r.isChord && r.modifier?.isSystem == false && r.button.isDpad ->
                             "Both ${r.modifier.spoken} and the D-pad still reach the game."
                         r.isChord && r.modifier?.isSystem == false -> "${r.modifier.spoken} still reaches the game; ${r.button.spoken} is hidden from it."

@@ -52,7 +52,7 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - Do not disturb while playing — never touches a Do not disturb you turned on yourself
 
 ### Display & sound
-- Brightness per screen; Home + R2 / L2 = brighter / dimmer on both, keeping their difference
+- Brightness per screen; Home + R2 / L2 = brighter / dimmer on both, keeping their difference (or one screen, with your own combo)
 - Volume per screen, and the volume buttons change both together; "Same on both" when they differ
 - Colour saturation (50–130 %)
 - Speaker fix: EQ, +15 dB with a limiter and a stereo widener — EQ on / off to compare, never on headphones.
@@ -62,7 +62,7 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - FPS counter on either or both screens, in any corner, + battery and temperatures — per app or per game
 
 ### Controller
-- Combos on Home / Back: tap, double, triple, hold, + a button — 16 actions
+- Combos on Home / Back: tap, double, triple, hold, + a button — 30+ actions, volume and brightness per screen included
 - Stick flicks as combo buttons (Home + right stick up / down), and any button can start a combo
 - Combo editor: press the buttons to record a combo
 - Hold Home: a cheat sheet of every combo (let go without pressing anything: nothing happens)
@@ -70,7 +70,8 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - Per-app combos: normal / custom / off
 - Send the controller to the top or bottom screen, lock it; 4 modes (follows touch, stays where sent,
   always top, always bottom)
-- AYN button opens Wayfinder's quick panel (or AYN's drawer); a tap and a hold can each do an action
+- AYN button opens Wayfinder's quick panel (or AYN's drawer); a tap and a hold can each do an action, and it can
+  start combos too (AYN + a button)
 - One-press fix for AYN's "press Home twice"
 - Face buttons Nintendo-style / Xbox-style, globally or per app / game
 - Test the controller: stick drift → a suggested deadzone for every game
@@ -130,7 +131,7 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 ### Stick lights
 - AYN default, off, colour, breathing, strobe, spectrum, screen colour
-- Per app / per game, speed, brightness, a colour for each stick; screen colour split left / right, taken from
+- Per app / per game, speed, brightness (down to 1 %), a colour for each stick; screen colour split left / right, taken from
   the top screen, the bottom screen or the controller's screen
 
 ### Capture
@@ -154,7 +155,8 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - A welcome tour with practice mode
 - One-press setup — no root, no Shizuku, no PC
 - Backup & restore
-- Help, troubleshooting, a system-access check, open-source licenses
+- Help, troubleshooting, a system-access check, open-source licenses, the version number
+- "Update available" next to Ready when a new version is out (checked once a day, can be turned off)
 
 ## Requirements
 
@@ -186,7 +188,8 @@ apksigner verify --print-certs wayfinder-1.3.apk        (the certificate)
 
 - Nothing is collected or sent. The only internet use is the optional Guide page (a small browser: a DuckDuckGo
   search for your game, or a page you pinned — when you open it, or automatically for apps where you turned the
-  Guide companion on) and the Ko-fi support link.
+  Guide companion on), the Ko-fi support link, and a once-a-day check of the latest version number on GitHub (turn it
+  off in Help & status).
 - Wayfinder needs more access than most apps (accessibility, a keyboard, system commands through the Thor's
   service). What that access is used for, what was reviewed and what was fixed: [SECURITY.md](SECURITY.md).
 - Screenshots and screen recordings capture everything shown, including what apps hide from screenshots.

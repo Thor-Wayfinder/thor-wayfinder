@@ -234,6 +234,16 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.KEYBOARD -> { svc.handler.post { svc.toggleInputDeck() }; true }
                 ThorAction.BRIGHTER -> { svc.stepBrightness(+1); true }
                 ThorAction.DIMMER -> { svc.stepBrightness(-1); true }
+                ThorAction.TOP_BRIGHTER -> { svc.stepBrightness(+1, PRIMARY_DISPLAY); true }
+                ThorAction.TOP_DIMMER -> { svc.stepBrightness(-1, PRIMARY_DISPLAY); true }
+                ThorAction.BOTTOM_BRIGHTER -> svc.secondDisplayId()?.let { svc.stepBrightness(+1, it); true } ?: false
+                ThorAction.BOTTOM_DIMMER -> svc.secondDisplayId()?.let { svc.stepBrightness(-1, it); true } ?: false
+                ThorAction.LOUDER -> { svc.stepVolume(+1, null); true }
+                ThorAction.QUIETER -> { svc.stepVolume(-1, null); true }
+                ThorAction.TOP_LOUDER -> { svc.stepVolume(+1, true); true }
+                ThorAction.TOP_QUIETER -> { svc.stepVolume(-1, true); true }
+                ThorAction.BOTTOM_LOUDER -> { svc.stepVolume(+1, false); true }
+                ThorAction.BOTTOM_QUIETER -> { svc.stepVolume(-1, false); true }
                 ThorAction.QUICK_MENU -> { svc.handler.post { svc.toggleQuickPanel() }; true }
                 ThorAction.FPS_COUNTER -> { svc.handler.post { AppSettings.setFpsCounterOn(!AppSettings.fpsCounter); svc.applyFps() }; true }
                 ThorAction.GAME_CONTROLS -> { svc.handler.post { svc.openGameControls() }; true }
@@ -1669,8 +1679,8 @@ class ForegroundAppService : AccessibilityService() {
     private val brightnessWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     /** Brighter / dimmer on BOTH screens, keeping the difference between them. */
-    private fun stepBrightness(dir: Int) {
-        val ids = listOfNotNull(PRIMARY_DISPLAY, secondDisplayId())
+    private fun stepBrightness(dir: Int, only: Int? = null) {
+        val ids = if (only != null) listOf(only) else listOfNotNull(PRIMARY_DISPLAY, secondDisplayId())
         val pillOn = if (AppSettings.focusLockEnabled || AppSettings.focusSticky) lockTarget() else focusedDisplayId()
         brightnessWorker.execute {
             val cur = ids.mapNotNull { d -> ScreenLevels.get(this, d)?.let { d to it } }.toMap()
@@ -1680,6 +1690,25 @@ class ForegroundAppService : AccessibilityService() {
             val txt = ids.mapNotNull { d -> next[d]?.let { (if (d == PRIMARY_DISPLAY) "top " else "bottom ") + ScreenLevels.percent(it) + " %" } }
             handler.post { focusCue?.show(pillOn, "Brightness — " + txt.joinToString(", "), 1500) }
         }
+    }
+
+    /** 1.3.1 (GitHub #44): the volume, both screens ([top] null — keeping their difference) or one. */
+    private fun stepVolume(dir: Int, top: Boolean?) {
+        val pillOn = if (AppSettings.focusLockEnabled || AppSettings.focusSticky) lockTarget() else focusedDisplayId()
+        LinkedVolume.init(this)
+        val t0 = LinkedVolume.top(); val b0 = LinkedVolume.bottom()
+        val (t, b) = when (top) {
+            null -> (t0 + dir).coerceIn(0, 15).let { it to (it + LinkedVolume.offset).coerceIn(0, 15) }
+            true -> (t0 + dir).coerceIn(0, 15) to b0
+            false -> t0 to (b0 + dir).coerceIn(0, 15)
+        }
+        when (top) {
+            null -> LinkedVolume.setBoth(t)
+            true -> LinkedVolume.setTopOnly(t)
+            false -> LinkedVolume.setBottomOnly(b)
+        }
+        val txt = if (secondDisplayId() == null) "$t / 15" else "top $t, bottom $b"
+        focusCue?.show(pillOn, "Volume — $txt", 1500)
     }
 
     // ── The AYN button ──────────────────────────────────────────────
@@ -1692,6 +1721,7 @@ class ForegroundAppService : AccessibilityService() {
     private var aynHoldFired = false
     private val aynHold = Runnable {
         val a = AppSettings.aynHold ?: return@Runnable
+        if (buttonEngine?.aynInCombo == true) return@Runnable      // AYN + a button: a combo, not a hold
         aynHoldFired = true
         Log.d(TAG, "AYN button held → $a")
         vibrateShort()
@@ -1700,15 +1730,22 @@ class ForegroundAppService : AccessibilityService() {
 
     private fun aynButtonKey(event: KeyEvent): Boolean {
         if (!AppSettings.aynButtonOurs || event.scanCode != 194) return false
+        val engine = buttonEngine
         when (event.action) {
             KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
                 aynHoldFired = false
                 handler.removeCallbacks(aynHold)
-                if (AppSettings.aynHold != null) handler.postDelayed(aynHold, AYN_HOLD_MS)
+                // 1.3.1 (GitHub #44): recording a combo, or AYN + a button — the engine has it first
+                if (engine != null && engine.capturing) { engine.onAyn(true); return true }
+                engine?.onAyn(true)
+                // with AYN combos, the hold waits a little longer (time to press the combo's button)
+                val aynCombos = ControlsStore.effective(buttonHost.currentApp()).any { it.trigger.modifier == ThorButton.AYN }
+                if (AppSettings.aynHold != null) handler.postDelayed(aynHold, if (aynCombos) AYN_HOLD_MS + 400 else AYN_HOLD_MS)
             }
             KeyEvent.ACTION_UP -> {
                 handler.removeCallbacks(aynHold)
-                if (!event.isCanceled && !aynHoldFired) handler.post { onAynButton() }
+                val combo = engine?.onAyn(false) == true
+                if (!event.isCanceled && !aynHoldFired && !combo) handler.post { onAynButton() }
             }
         }
         return true
@@ -2804,6 +2841,15 @@ class ForegroundAppService : AccessibilityService() {
         if (isActivity) launcherScreens[displayId] = "$pkg/$cls"
     }
 
+    /** 1.3.1 — a second-screen home (SECONDARY_HOME): the default launcher's own if it has one,
+     *  else any; "pkg/Activity" as `am start -n` wants it. */
+    private fun secondaryHome(): String? = runCatching {
+        val i = Intent(Intent.ACTION_MAIN).addCategory("android.intent.category.SECONDARY_HOME")
+        val all = packageManager.queryIntentActivities(i, 0).mapNotNull { it.activityInfo }
+        val def = packageManager.resolveActivity(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME), 0)?.activityInfo?.packageName
+        (all.firstOrNull { it.packageName == def } ?: all.firstOrNull())?.let { "${it.packageName}/${it.name}" }
+    }.getOrNull()
+
     /** Not seen yet (e.g. just after a restart): ask the activity list which launcher
      *  screen sits on [displayId]. One output line — pservice returns only the first. */
     private fun findLauncherScreen(displayId: Int): String? {
@@ -2852,7 +2898,17 @@ class ForegroundAppService : AccessibilityService() {
                 Log.d(TAG, "Home on display $displayId → $comp: ${out?.trim()}")
                 if (out != null && !out.contains("Error")) return
             }
-            if (comp == null) { Log.d(TAG, "No known home for display $displayId — left as is"); return }
+            if (comp == null) {
+                val second = secondaryHome()
+                if (second != null && PServiceBridge.isAvailable()) {
+                    val out = PServiceBridge.exec("am start --display $displayId -n $second -f 0x10020000")
+                    Log.d(TAG, "Home on display $displayId → second-screen home $second: ${out?.trim()}")
+                    if (out != null && !out.contains("Error")) return
+                }
+                Log.d(TAG, "No known home for display $displayId — left as is")
+                handler.post { focusCue?.show(displayId, "No home screen found for this screen — open your launcher there once", 2500) }
+                return
+            }
         }
         val ok = when {
             PServiceBridge.isAvailable() -> PServiceBridge.goHomeOnDisplay(displayId)

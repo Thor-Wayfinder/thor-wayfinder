@@ -236,7 +236,34 @@ class ButtonEngine(private val host: Host) {
 
     /** Something else was used while Home/Back was held: letting go of it is then NOT a tap of
      *  Home/Back (you were trying a combo, even an unbound one) — never an unwanted Home. */
-    private fun touchedDuringModifier() { held.filter { it.isSystem }.forEach { chordUsed.add(it); cancelHold(it) } }
+    private fun touchedDuringModifier() { held.filter { it.isSystem || it == ThorButton.AYN }.forEach { chordUsed.add(it); cancelHold(it) } }
+
+    // ── The AYN button as a combo's first button (1.3.1, GitHub #44) ──────────
+    /** AYN pressed / released (from the service: it's not a pad key). While it's held, a button
+     *  bound as "AYN + button" fires its combo (step 1 of [onKey]). Returns, on release, whether
+     *  the press was used for a combo (or to read the combos) — then its own tap must not run. */
+    fun onAyn(down: Boolean): Boolean {
+        val b = ThorButton.AYN
+        capture?.let { cb -> if (down) { capturedUps.add(b); cb(b, true) } else { capturedUps.remove(b); cb(b, false) }; return true }
+        if (!down && capturedUps.remove(b)) return true
+        if (down) {
+            held.add(b); chordUsed.remove(b)
+            if (ControlsStore.effective(host.currentApp()).any { it.trigger.modifier == b }) {
+                hintFor = b; hintShownAt = 0L
+                main.removeCallbacks(hintRunnable); main.postDelayed(hintRunnable, HINT_MS)
+            }
+            return false
+        }
+        held.remove(b)
+        val peek = hintFor == b && peeked()
+        if (hintFor == b) { main.removeCallbacks(hintRunnable); host.hideChordHint(); hintFor = null; hintShownAt = 0L }
+        return chordUsed.remove(b) || peek
+    }
+
+    /** AYN is being used for a combo right now (its hold action must wait). */
+    val aynInCombo: Boolean get() = ThorButton.AYN in chordUsed
+    /** Is the engine recording a combo (the configurator)? */
+    val capturing: Boolean get() = capture != null
     /** A Home / Back hold that was going to fire: not any more — the button became a combo's modifier
      *  (its hold ran at 1 s in the middle of a combo, review 2026-09-25). */
     private fun cancelHold(b: ThorButton) { taps[b]?.let { t -> t.hold?.let { main.removeCallbacks(it) }; t.hold = null } }

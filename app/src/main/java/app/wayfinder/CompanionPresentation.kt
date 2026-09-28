@@ -137,6 +137,12 @@ private fun CompanionScreen() {
             BlankGesture.SWIPE -> add(Card({ app.wayfinder.ui.ThreeFingerGlyph(28.dp, swipe = true) }, Icons.Rounded.DarkMode, "3-finger swipe · bottom screen off"))
             BlankGesture.OFF -> {}
         }
+        // 1.3.1 — the AYN button, when its tap or hold does something else than the quick panel
+        if (AppSettings.aynButtonOurs) {
+            if (AppSettings.aynTap != ThorAction.QUICK_MENU)
+                add(Card({ app.wayfinder.ui.AynGlyph(false, 28.dp) }, app.wayfinder.ui.actionIcon(AppSettings.aynTap), AppSettings.aynTap.title))
+            AppSettings.aynHold?.let { a -> add(Card({ app.wayfinder.ui.AynGlyph(true, 28.dp) }, app.wayfinder.ui.actionIcon(a), a.title)) }
+        }
     }
     GlassScreen(span = app.wayfinder.ui.AuroraSpan.BOTTOM) {
         Column(

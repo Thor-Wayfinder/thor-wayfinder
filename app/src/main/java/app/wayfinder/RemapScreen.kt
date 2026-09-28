@@ -128,7 +128,13 @@ internal fun RemapTarget.short(): String = when (this) {
         ThorAction.SCREENSHOT -> "Screenshot"; ThorAction.TOGGLE_SECOND_SCREEN -> "Bottom screen"; ThorAction.TOGGLE_KEEP_AWAKE -> "Stay awake"
         ThorAction.FOCUS_SWITCH_UP -> "Controller ↑"; ThorAction.FOCUS_SWITCH_DOWN -> "Controller ↓"; ThorAction.FOCUS_LOCK_TOGGLE -> "Lock controller"
         ThorAction.KEYBOARD -> "Kbd & mouse"; ThorAction.QUICK_MENU -> "Quick panel"; ThorAction.BRIGHTER -> "Brighter"
-        ThorAction.DIMMER -> "Dimmer"; ThorAction.FPS_COUNTER -> "FPS"; else -> a.title
+        ThorAction.DIMMER -> "Dimmer"; ThorAction.FPS_COUNTER -> "FPS"
+        // 1.3.1 (GitHub #44): short tags for the drawing
+        ThorAction.TOP_BRIGHTER -> "Top brighter"; ThorAction.TOP_DIMMER -> "Top dimmer"
+        ThorAction.BOTTOM_BRIGHTER -> "Bottom brighter"; ThorAction.BOTTOM_DIMMER -> "Bottom dimmer"
+        ThorAction.TOP_LOUDER -> "Top louder"; ThorAction.TOP_QUIETER -> "Top quieter"
+        ThorAction.BOTTOM_LOUDER -> "Bottom louder"; ThorAction.BOTTOM_QUIETER -> "Bottom quieter"
+        else -> a.title
     }
 }
 

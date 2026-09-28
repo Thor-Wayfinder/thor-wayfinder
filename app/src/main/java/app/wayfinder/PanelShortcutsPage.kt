@@ -15,6 +15,11 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -51,28 +56,38 @@ fun PanelShortcutsPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Uni
         ShortcutGridEditor(columns = 4, cellHeight = 72.dp)
     }
 
-/** 1.3 — what a tap and a hold on the AYN button do (Reddit: holding it used to turn a screen off). */
+/** 1.3 — what a tap and a hold on the AYN button do (Reddit: holding it used to turn a screen off).
+ *  Also on the Combos page (1.3.1), where [canFocus] follows that page's modal rule. */
 @Composable
-private fun AynButtonChoices() {
+internal fun AynButtonChoices(canFocus: Boolean = true) {
     val actions = ThorAction.values().filter { ActionRegistry.isImplemented(it) && it != ThorAction.OPEN && it != ThorAction.BACK }
     var open by remember { mutableStateOf<String?>(null) }
-    GlassListRow("AYN button — tap", value = AppSettings.aynTap.title) { open = if (open == "tap") null else "tap" }
-    if (open == "tap") AynActionList(AppSettings.aynTap, actions) { a -> a?.let { AppSettings.chooseAynTap(it) }; open = null }
-    GlassListRow("AYN button — hold", value = AppSettings.aynHold?.title ?: "Same as a tap") { open = if (open == "hold") null else "hold" }
-    if (open == "hold") AynActionList(AppSettings.aynHold, listOf<ThorAction?>(null) + actions) { AppSettings.chooseAynHold(it); open = null }
+    val focus = Modifier.focusProperties { this.canFocus = canFocus }
+    // after a pick the list closes: the controller goes back to its row (it went nowhere — 1.3.1)
+    val tapFocus = remember { FocusRequester() }
+    val holdFocus = remember { FocusRequester() }
+    var refocus by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(refocus) {
+        val r = refocus ?: return@LaunchedEffect
+        delay(80); runCatching { (if (r == "tap") tapFocus else holdFocus).requestFocus() }; refocus = null
+    }
+    GlassListRow("AYN button — tap", Modifier.focusRequester(tapFocus).then(focus), value = AppSettings.aynTap.title) { open = if (open == "tap") null else "tap" }
+    if (open == "tap") AynActionList(AppSettings.aynTap, actions, focus) { a -> a?.let { AppSettings.chooseAynTap(it) }; open = null; refocus = "tap" }
+    GlassListRow("AYN button — hold", Modifier.focusRequester(holdFocus).then(focus), value = AppSettings.aynHold?.title ?: "Same as a tap") { open = if (open == "hold") null else "hold" }
+    if (open == "hold") AynActionList(AppSettings.aynHold, listOf<ThorAction?>(null) + actions, focus) { AppSettings.chooseAynHold(it); open = null; refocus = "hold" }
 }
 
 @Composable
-private fun AynActionList(current: ThorAction?, options: List<ThorAction?>, onPick: (ThorAction?) -> Unit) {
+private fun AynActionList(current: ThorAction?, options: List<ThorAction?>, focus: Modifier, onPick: (ThorAction?) -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        for (a in options) AynActionRow(a, a == current, onPick)
+        for (a in options) AynActionRow(a, a == current, focus, onPick)
     }
 }
 
 @Composable
-private fun AynActionRow(a: ThorAction?, selected: Boolean, onPick: (ThorAction?) -> Unit) {
+private fun AynActionRow(a: ThorAction?, selected: Boolean, focus: Modifier, onPick: (ThorAction?) -> Unit) {
     val g = LocalGlass.current
-    FocusableGlass(onClick = { onPick(a) }, radius = 12.dp, modifier = Modifier.fillMaxWidth()) {
+    FocusableGlass(onClick = { onPick(a) }, radius = 12.dp, modifier = Modifier.fillMaxWidth().then(focus)) {
         Column(Modifier.fillMaxWidth().then(if (selected) Modifier.background(g.accent.copy(alpha = .9f), RoundedCornerShape(12.dp)) else Modifier)
             .padding(horizontal = 14.dp, vertical = 8.dp)) {
             Text(a?.title ?: "Same as a tap", color = if (selected) Color.White else g.textPrimary, style = MaterialTheme.typography.labelLarge)

@@ -34,6 +34,17 @@ enum class ThorAction(val title: String, val description: String) {
     QUICK_MENU("Quick panel", "Brightness, volume, performance, fan and your shortcuts — on the bottom screen"),
     BRIGHTER("Brighter", "Both screens brighter, keeping their difference"),
     DIMMER("Dimmer", "Both screens dimmer, keeping their difference"),
+    /** 1.3.1 (GitHub #44): one screen's brightness, and the volume — both screens or one. */
+    TOP_BRIGHTER("Top screen brighter", "Only the top screen gets brighter"),
+    TOP_DIMMER("Top screen dimmer", "Only the top screen gets dimmer"),
+    BOTTOM_BRIGHTER("Bottom screen brighter", "Only the bottom screen gets brighter"),
+    BOTTOM_DIMMER("Bottom screen dimmer", "Only the bottom screen gets dimmer"),
+    LOUDER("Louder", "Both screens louder, keeping their difference"),
+    QUIETER("Quieter", "Both screens quieter, keeping their difference"),
+    TOP_LOUDER("Top screen louder", "Only the top screen's apps get louder"),
+    TOP_QUIETER("Top screen quieter", "Only the top screen's apps get quieter"),
+    BOTTOM_LOUDER("Bottom screen louder", "Only the bottom screen's apps get louder"),
+    BOTTOM_QUIETER("Bottom screen quieter", "Only the bottom screen's apps get quieter"),
     FPS_COUNTER("Frame rate (FPS)", "Show or hide the frame-rate counter (where: Screens & power)"),
     GAME_CONTROLS("Game controls", "The game's buttons, gyro and macros, while you play; the same combo or B goes back to the game"),
     /** Round 8: opens an app, an app pair or a Wayfinder page — the target is on the binding
@@ -53,7 +64,10 @@ object ActionRegistry {
         ThorAction.TOGGLE_KEEP_AWAKE, ThorAction.FOCUS_SWITCH_UP, ThorAction.FOCUS_SWITCH_DOWN,
         ThorAction.FOCUS_LOCK_TOGGLE, ThorAction.SCREENSHOT, ThorAction.KEYBOARD,
         ThorAction.BRIGHTER, ThorAction.DIMMER, ThorAction.FPS_COUNTER, ThorAction.QUICK_MENU,
-        ThorAction.GAME_CONTROLS, ThorAction.OPEN, ThorAction.CLOSE_APP, ThorAction.SLEEP, ThorAction.AYN_MOUSE, ThorAction.GUIDE, ThorAction.GYRO_TOGGLE -> true
+        ThorAction.GAME_CONTROLS, ThorAction.OPEN, ThorAction.CLOSE_APP, ThorAction.SLEEP, ThorAction.AYN_MOUSE, ThorAction.GUIDE, ThorAction.GYRO_TOGGLE,
+        ThorAction.TOP_BRIGHTER, ThorAction.TOP_DIMMER, ThorAction.BOTTOM_BRIGHTER, ThorAction.BOTTOM_DIMMER,
+        ThorAction.LOUDER, ThorAction.QUIETER, ThorAction.TOP_LOUDER, ThorAction.TOP_QUIETER,
+        ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER -> true
         else -> false
     }
 }

@@ -33,7 +33,10 @@ enum class ThorButton(val printed: String, val keyCode: Int, val hatAxis: Int = 
     // Stick FLICKS (input layer, phase 1): a quick push of a stick past 60 %, re-armed below
     // 40 %. Only as the 2nd button of a Home/Back combo — "Home + right stick ↑".
     RS_UP("Right stick ↑", -1), RS_DOWN("Right stick ↓", -1), RS_LEFT("Right stick ←", -1), RS_RIGHT("Right stick →", -1),
-    LS_UP("Left stick ↑", -1), LS_DOWN("Left stick ↓", -1), LS_LEFT("Left stick ←", -1), LS_RIGHT("Left stick →", -1);
+    LS_UP("Left stick ↑", -1), LS_DOWN("Left stick ↓", -1), LS_LEFT("Left stick ←", -1), LS_RIGHT("Left stick →", -1),
+    // 1.3.1 (GitHub #44): the AYN button — only as a combo's FIRST button ("AYN + X"). Not a pad key
+    // (gpio-keys, scan code 194): the service hands it to the engine ([ButtonEngine.onAyn]).
+    AYN("AYN", -1);
 
     /** 1.3 (GitHub #27): the name on screen — the face buttons can be named the Xbox way ([ButtonNames]). */
     val label: String get() = ButtonNames.of(this)

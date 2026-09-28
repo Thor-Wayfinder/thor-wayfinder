@@ -21,6 +21,8 @@ import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.BrightnessLow
 import androidx.compose.material.icons.rounded.LightMode
 import androidx.compose.material.icons.rounded.WbTwilight
+import androidx.compose.material.icons.rounded.VolumeUp
+import androidx.compose.material.icons.rounded.VolumeDown
 import androidx.compose.material.icons.rounded.Speed
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Coffee
@@ -98,6 +100,22 @@ private fun PressTag(p: Press) {
     ) { Text(text, color = g.accent, style = MaterialTheme.typography.labelLarge) }
 }
 
+/** 1.3.1 — the AYN button (not a [ThorButton]: it never goes through combos), tapped or held. */
+@Composable
+fun AynGlyph(hold: Boolean, size: Dp = 30.dp) {
+    val g = LocalGlass.current
+    val chip = if (g.dark) Color(0x33FFFFFF) else Color(0x1A000000)
+    val rim = if (g.dark) Color(0x66FFFFFF) else Color(0x40000000)
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Box(
+            Modifier.height(size).widthIn(min = size * 1.5f).background(chip, RoundedCornerShape(size / 2)).border(1.dp, rim, RoundedCornerShape(size / 2))
+                .padding(horizontal = 7.dp),
+            contentAlignment = Alignment.Center,
+        ) { Text("AYN", color = g.textPrimary, fontSize = (size.value * 0.38f).sp, fontWeight = FontWeight.Bold) }
+        if (hold) PressTag(Press.HOLD)
+    }
+}
+
 /** One physical button, drawn the way it looks on a controller. */
 @Composable
 fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false) {
@@ -132,6 +150,7 @@ fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false) {
                 Text(b.label.take(1), color = ink, fontSize = (size.value * 0.36f).sp, fontWeight = FontWeight.Bold)
             }
         }
+        b == ThorButton.AYN -> AynGlyph(false, size)
         b.isDpad -> DpadGlyph(b, size, ink, chip, rim, g.accent)
         b.isFlick -> {
             // The stick seen from above (like L3/R3) with the flick's direction on the rim.
@@ -204,6 +223,10 @@ fun actionIcon(a: ThorAction): ImageVector = when (a) {
     ThorAction.QUICK_MENU -> Icons.Rounded.Menu
     ThorAction.BRIGHTER -> Icons.Rounded.LightMode
     ThorAction.DIMMER -> Icons.Rounded.WbTwilight
+    ThorAction.TOP_BRIGHTER, ThorAction.BOTTOM_BRIGHTER -> Icons.Rounded.BrightnessHigh
+    ThorAction.TOP_DIMMER, ThorAction.BOTTOM_DIMMER -> Icons.Rounded.BrightnessLow
+    ThorAction.LOUDER, ThorAction.TOP_LOUDER, ThorAction.BOTTOM_LOUDER -> Icons.Rounded.VolumeUp
+    ThorAction.QUIETER, ThorAction.TOP_QUIETER, ThorAction.BOTTOM_QUIETER -> Icons.Rounded.VolumeDown
     ThorAction.FPS_COUNTER -> Icons.Rounded.Speed
     ThorAction.GAME_CONTROLS -> Icons.Rounded.Tune
     ThorAction.OPEN -> Icons.Rounded.Apps
