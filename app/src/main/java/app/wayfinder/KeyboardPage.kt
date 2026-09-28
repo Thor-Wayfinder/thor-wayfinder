@@ -66,7 +66,7 @@ fun keyboardSummary(ctx: Context): String = when (keyboardState(ctx)) {
 }
 
 /**
- * #27 — Keyboard page. Setup is two taps and Android's own (it insists the user OKs any
+ * Keyboard page. Setup is two taps and Android's own (it insists the user OKs any
  * new keyboard, since a keyboard sees what you type — no app may skip that): switch
  * it on in the list, then pick it. Gboard can stay installed; nothing to disable.
  */
@@ -106,6 +106,12 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
                 KeyboardSettings.setPlacementMode(KeyboardPlacement.values()[it])
             }
         }
+
+        // 1.3 (GitHub #11)
+        SettingCard("The D-pad picks the keys",
+            if (KeyboardSettings.dpadKeys) "On: the D-pad moves between keys, the left stick moves the text cursor"
+            else "Off: the left stick picks keys, the D-pad moves the text cursor",
+            checked = KeyboardSettings.dpadKeys, onChecked = { KeyboardSettings.chooseDpadKeys(it) })
 
         SectionHeader("Languages · ${KeyboardSettings.layoutIds.size} on — the globe key switches")
         // On first, in their switching order; then the rest.

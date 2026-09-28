@@ -86,11 +86,11 @@ class CompanionPresentation(
             setViewTreeSavedStateRegistryOwner(host)
             setContent {
                 val dark = when (AppSettings.themeMode) {
-                    ThemeMode.DARK -> true
+                    ThemeMode.DARK, ThemeMode.BLACK -> true
                     ThemeMode.LIGHT -> false
                     ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
                 }
-                androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides realGlass.value) {
+                androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && AppSettings.themeMode != ThemeMode.BLACK)) {
                     ThorGlassTheme(dark = dark) { CompanionScreen() }
                 }
             }

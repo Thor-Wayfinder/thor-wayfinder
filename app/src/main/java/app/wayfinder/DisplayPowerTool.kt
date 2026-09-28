@@ -5,7 +5,7 @@ import android.os.IBinder
 /**
  * Entry point run in an app_process VM as root (via pservice/su). Powers a
  * physical display panel off or on WITHOUT touching the app(s) on it — the
- * blank/wake primitive for the second screen (#8/#9/#10/#12).
+ * blank/wake primitive for the second screen.
  *
  *   ... app_process ... app.wayfinder.DisplayPowerTool <physicalId> <mode>
  * mode: 0 = off (blank), 2 = on. Prints "OK ..." / "ERR ...".

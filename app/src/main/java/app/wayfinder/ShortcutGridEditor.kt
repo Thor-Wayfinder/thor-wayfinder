@@ -44,8 +44,8 @@ import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -75,13 +75,22 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
     // where each tile is on screen (window y of its centre) — read while placing the card
     val tileY = remember { HashMap<String, Float>() }
     val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    // 1.3: the description only floats while its tile is on screen, and the controller leaving the
+    // tiles clears it — it stayed over the settings rows above (AYN tap / hold) otherwise
+    val screenH = with(LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() }
+    var selOnScreen by remember { mutableStateOf(true) }
+    var hadFocus by remember { mutableStateOf(false) }
+    val pick: (String) -> Unit = { selected = it; selOnScreen = true }
+    val place: (String, Float) -> Unit = { id, y -> tileY[id] = y; if (id == selected) selOnScreen = y in 0f..screenH }
+    Column(Modifier.onFocusChanged { if (hadFocus && !it.hasFocus) selected = null; hadFocus = it.hasFocus },
+        verticalArrangement = Arrangement.spacedBy(8.dp)) {
         // The description floats over the page — at the top of the list it was off-screen as
         // soon as you'd scrolled down to a tile. It goes to the edge AWAY from the selected tile
         // and is solid: at the bottom, see-through, it covered the very tile the controller was
         // on and its text ran into the tiles behind (review 2026-09-25).
-        if (selected == null) DescriptionCard(null, inPanel = false, add = {}, remove = {})
-        else androidx.compose.ui.window.Popup(
+        // the hint stays in the page (taking it away made the grid jump up under the finger)
+        DescriptionCard(null, inPanel = false, add = {}, remove = {})
+        if (selected != null && selOnScreen) androidx.compose.ui.window.Popup(
             popupPositionProvider = object : androidx.compose.ui.window.PopupPositionProvider {
                 override fun calculatePosition(anchorBounds: androidx.compose.ui.unit.IntRect, windowSize: androidx.compose.ui.unit.IntSize,
                                                layoutDirection: androidx.compose.ui.unit.LayoutDirection,
@@ -100,15 +109,15 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
             }
         }
         Text("In the panel (${chosen.size}) — hold a tile and drag it to move it", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
-        ChosenGrid(chosen, columns, cellHeight, reorder = { save(it) }, remove = { save(chosen - it) }, select = { selected = it },
-            placed = { id, y -> tileY[id] = y })
+        ChosenGrid(chosen, columns, cellHeight, reorder = { save(it) }, remove = { save(chosen - it) }, select = pick,
+            placed = place)
         if (chosen.isEmpty()) Text("Empty — add some below.", color = g.textTertiary, style = MaterialTheme.typography.bodyMedium)
         for (group in PanelShortcuts.Group.values()) {
             val rest = PanelShortcuts.CATALOG.filter { it.value.group == group && it.key !in chosen }.keys.toList()
             if (rest.isEmpty()) continue
             Text("Add — ${group.title}", color = g.textPrimary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
-            AvailableGrid(rest, columns, cellHeight, add = { save(chosen + it) }, select = { selected = it },
-                placed = { id, y -> tileY[id] = y })
+            AvailableGrid(rest, columns, cellHeight, add = { save(chosen + it) }, select = pick,
+                placed = place)
         }
         FocusableGlass(onClick = { save(PanelShortcuts.DEFAULT) }, radius = 14.dp) {
             Text("Back to the default set", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
@@ -140,7 +149,7 @@ private fun DescriptionCard(id: String?, inPanel: Boolean, add: (String) -> Unit
             // Touch: this button. Controller: the button named on it, pressed on the tile — the card
             // can't take focus (it would pull the controller off the tiles), so it says which one.
             FocusableGlass(onClick = { if (inPanel) remove(id) else add(id) }, radius = 12.dp) {
-                Text(if (inPanel) "Remove  ·  Y" else "Add  ·  A", color = if (inPanel) g.textSecondary else g.accent, style = MaterialTheme.typography.labelLarge,
+                Text(if (inPanel) "Remove  ·  ${ButtonNames.m("Y")}" else "Add  ·  ${ButtonNames.m("A")}", color = if (inPanel) g.textSecondary else g.accent, style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }
@@ -264,7 +273,7 @@ private fun EditorCell(id: String, modifier: Modifier, lifted: Boolean, badge: S
     val scale by animateFloatAsState(if (lifted) 1.08f else if (focused) 1.035f else 1f, spring(dampingRatio = 0.6f), label = "lift")
     val shape = RoundedCornerShape(16.dp)
     Box(modifier.graphicsLayer { scaleX = scale; scaleY = scale }
-        .onGloballyPositioned { placed(it.boundsInWindow().center.y) }
+        .onGloballyPositioned { placed(it.positionInWindow().y + it.size.height / 2f) }   // not clipped: off screen = off screen
         .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
         .focusable()
         .glassSurface(g, shape, raised = focused || lifted)

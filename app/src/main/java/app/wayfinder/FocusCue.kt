@@ -16,7 +16,7 @@ import android.widget.TableRow
 import android.widget.TextView
 
 /**
- * #17 — the discreet on-screen cue for controller focus: a small glass pill at the
+ * The discreet on-screen cue for controller focus: a small glass pill at the
  * top of a screen ("🎮 Controller → Top screen"). Never focusable or touchable, so
  * it can't itself steal input. [show] flashes it; [showHint]/[hideHint] keep it up
  * while R3 is held (the "which screen has the controller right now" cue).
@@ -62,16 +62,18 @@ class FocusCue(private val service: AccessibilityService) {
         main.postDelayed(hideRunnable, 8000)
     }
 
-    /** The same table, shown for [holdMs] (e.g. the Recents help). */
-    fun showTable(displayId: Int, title: List<String>, cells: List<Pair<String, String>>, holdMs: Long) = main.post {
-        put(displayId, Content.Table(title, cells), holdMs)
+    /** The same table, shown for [holdMs] (e.g. the Recents help). [at]: 0 top centre · 1 top left ·
+     *  2 top right · 3 bottom left · 4 bottom right. [compact]: one slim row. */
+    fun showTable(displayId: Int, title: List<String>, cells: List<Pair<String, String>>, holdMs: Long,
+                  at: Int = 0, compact: Boolean = false) = main.post {
+        put(displayId, Content.Table(title, cells, at, compact), holdMs)
         main.removeCallbacks(hideRunnable)
         main.postDelayed(hideRunnable, holdMs)
     }
 
     private sealed class Content {
         class Line(val text: String) : Content()
-        class Table(val title: List<String>, val cells: List<Pair<String, String>>) : Content()
+        class Table(val title: List<String>, val cells: List<Pair<String, String>>, val at: Int = 0, val compact: Boolean = false) : Content()
     }
 
     fun hideHint() = main.post { dismiss() }
@@ -93,7 +95,7 @@ class FocusCue(private val service: AccessibilityService) {
         val wm = ctx.getSystemService(WindowManager::class.java)
         val dp = ctx.resources.displayMetrics.density
         val dark = when (AppSettings.themeMode) {
-            ThemeMode.DARK -> true; ThemeMode.LIGHT -> false
+            ThemeMode.DARK, ThemeMode.BLACK -> true; ThemeMode.LIGHT -> false
             ThemeMode.SYSTEM -> (ctx.resources.configuration.uiMode and
                 android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
         }
@@ -115,14 +117,15 @@ class FocusCue(private val service: AccessibilityService) {
                     })
                 }
                 if (content.cells.isNotEmpty()) addView(TableLayout(ctx).apply {
-                    setPadding(0, (8 * dp).toInt(), 0, 0)
-                    for (row in content.cells.chunked(3)) addView(TableRow(ctx).apply {
+                    setPadding(0, if (content.compact) 0 else (8 * dp).toInt(), 0, 0)
+                    for (row in content.cells.chunked(if (content.compact) content.cells.size else 3)) addView(TableRow(ctx).apply {
                         for ((btn, what) in row) {
                             val t = android.text.SpannableStringBuilder().apply {
                                 append(btn, android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0)
-                                append("  "); append(what)
+                                if (what.isNotEmpty()) { append(if (content.compact) " " else "  "); append(what) }
                             }
-                            addView(label(t, 16f).apply { setPadding(0, (3 * dp).toInt(), (26 * dp).toInt(), (3 * dp).toInt()) })
+                            addView(label(t, if (content.compact) 14f else 16f).apply {
+                                setPadding(0, (3 * dp).toInt(), ((if (content.compact) 14 else 26) * dp).toInt(), (3 * dp).toInt()) })
                         }
                     })
                 })
@@ -150,7 +153,16 @@ class FocusCue(private val service: AccessibilityService) {
                 WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
-        ).apply { gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL; y = (22 * dp).toInt() }
+        ).apply {
+            val at = (content as? Content.Table)?.at ?: 0
+            gravity = when (at) {
+                1 -> Gravity.TOP or Gravity.START; 2 -> Gravity.TOP or Gravity.END
+                3 -> Gravity.BOTTOM or Gravity.START; 4 -> Gravity.BOTTOM or Gravity.END
+                else -> Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            }
+            // bottom corners sit above Recents' own row of buttons (Screenshot, Clear all)
+            x = if (at == 0) 0 else (22 * dp).toInt(); y = ((if (at >= 3) 96 else 22) * dp).toInt()
+        }
         try {
             wm.addView(pill, lp)
             pill.animate().alpha(1f).translationY(0f).setDuration(160).start()

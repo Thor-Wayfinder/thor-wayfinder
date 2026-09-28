@@ -2,9 +2,9 @@ package app.wayfinder
 
 /**
  * The AYN Thor's raw (evdev) input map, captured on-device 2026-09-22 by pressing
- * every control (see docs/THOR_INPUT_MAP.md). These are the codes the root
- * [InputMonitor] receives — used by gestures, chords (#17/#26), remaps (#18),
- * screenshot combos (#19), the AYN-button takeover (#20) and linked volume (#13).
+ * every control. These are the codes the root
+ * [InputMonitor] receives — used by gestures, chords, remaps,
+ * screenshot combos, the AYN-button takeover and linked volume.
  */
 object ThorInput {
     // evdev event types

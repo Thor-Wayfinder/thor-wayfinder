@@ -6,12 +6,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 
-enum class ThemeMode { SYSTEM, DARK, LIGHT }
+enum class ThemeMode { SYSTEM, DARK, LIGHT,
+    /** 1.3: pure black for OLED screens (dark glass on #000, no aurora, no background blur). */
+    BLACK }
 
 /** Glass backdrop: your real background (blurred live behind the window) or our aurora. */
 enum class Backdrop { WALLPAPER, AURORA }
 
-/** #8 on-the-fly blank gesture: 3-finger TAP toggles; 3-finger SWIPE down blanks / up wakes. */
+/** On-the-fly blank gesture: 3-finger TAP toggles; 3-finger SWIPE down blanks / up wakes. */
 enum class BlankGesture { OFF, TAP, SWIPE }
 
 /**
@@ -26,7 +28,7 @@ object AppSettings {
     var themeMode by mutableStateOf(ThemeMode.SYSTEM)
         private set
 
-    /** #9 — auto-blank the second screen after [idleBlankSeconds] with no touch on it. */
+    /** Auto-blank the second screen after [idleBlankSeconds] with no touch on it. */
     var idleBlankEnabled by mutableStateOf(false)
         private set
     var idleBlankSeconds by mutableStateOf(30)
@@ -80,7 +82,7 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("dnd_while_playing", on).apply()
     }
 
-    /** Keep the bottom screen on (#10) — remembered across restarts. */
+    /** Keep the bottom screen on — remembered across restarts. */
     var keepBottomOn by mutableStateOf(false)
         private set
     fun rememberKeepBottom(on: Boolean) {
@@ -97,7 +99,7 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("refraction", on).apply()
     }
 
-    /** #19 — what the screenshot action captures. */
+    /** What the screenshot action captures. */
     var shotTarget by mutableStateOf(ShotTarget.TOP)
         private set
 
@@ -106,7 +108,7 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putString("shot_target", t.name).apply()
     }
 
-    /** #17 lock — keep the controller on one screen; touching the other won't move it. */
+    /** Lock — keep the controller on one screen; touching the other won't move it. */
     var focusLockEnabled by mutableStateOf(false)
         private set
     var focusLockTop by mutableStateOf(true)   // lock target: top (true) or bottom screen
@@ -130,7 +132,7 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("focus_sticky", on).apply()
     }
 
-    /** #20 — the AYN button opens Wayfinder's panel instead of AYN's drawer. */
+    /** The AYN button opens Wayfinder's panel instead of AYN's drawer. */
     var aynButtonOurs by mutableStateOf(true)
         private set
 
@@ -139,7 +141,44 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("ayn_button_ours", on).apply()
     }
 
-    /** #20 — FPS counter on the top screen. */
+    /** 1.3 (GitHub #13) — Recents' controller hint: 0 full · 1 compact (symbols, no title) · 2 off; and where:
+     *  0 top centre · 1 top left · 2 top right · 3 bottom left · 4 bottom right. */
+    var recentsHint by mutableStateOf(0)
+        private set
+    var recentsHintAt by mutableStateOf(0)
+        private set
+    fun chooseRecentsHint(mode: Int, at: Int) {
+        recentsHint = mode.coerceIn(0, 2); recentsHintAt = at.coerceIn(0, 4)
+        if (::prefs.isInitialized) prefs.edit().putInt("recents_hint", recentsHint).putInt("recents_hint_at", recentsHintAt).apply()
+    }
+
+    /** 1.3 — what a tap on the AYN button does (the quick panel unless changed). */
+    var aynTap by mutableStateOf(ThorAction.QUICK_MENU)
+        private set
+    /** 1.3 — what holding it does; null = nothing of its own (it acts like a tap when let go). */
+    var aynHold by mutableStateOf<ThorAction?>(null)
+        private set
+
+    fun chooseAynTap(a: ThorAction) {
+        aynTap = a
+        if (::prefs.isInitialized) prefs.edit().putString("ayn_tap", a.name).apply()
+    }
+
+    /** 1.3 (GitHub #31): the quick panel takes the controller (off: touch only, the game keeps it). */
+    var panelTakesController by mutableStateOf(true)
+        private set
+
+    fun setPanelTakesControllerOn(on: Boolean) {
+        panelTakesController = on
+        if (::prefs.isInitialized) prefs.edit().putBoolean("panel_takes_controller", on).apply()
+    }
+
+    fun chooseAynHold(a: ThorAction?) {
+        aynHold = a
+        if (::prefs.isInitialized) prefs.edit().putString("ayn_hold", a?.name).apply()
+    }
+
+    /** FPS counter on the top screen. */
     var fpsCounter by mutableStateOf(false)
         private set
 
@@ -174,7 +213,7 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("hub_on_top", top).apply()
     }
 
-    /** #8 — 3-finger gesture on the bottom screen blanks/wakes it (on the fly). */
+    /** 3-finger gesture on the bottom screen blanks/wakes it (on the fly). */
     var gestureBlankMode by mutableStateOf(BlankGesture.TAP)
         private set
 
@@ -202,8 +241,13 @@ object AppSettings {
         fpsCounter = prefs.getBoolean("fps_counter", false)
         fpsScreens = prefs.getInt("fps_screens", 0)
         fpsCorner = prefs.getInt("fps_corner", 0)
+        recentsHint = prefs.getInt("recents_hint", 0).coerceIn(0, 2)
+        recentsHintAt = prefs.getInt("recents_hint_at", 0).coerceIn(0, 4)
         fpsLevel = prefs.getInt("fps_level", 0).coerceIn(0, 2)
         aynButtonOurs = prefs.getBoolean("ayn_button_ours", true)
+        aynTap = runCatching { ThorAction.valueOf(prefs.getString("ayn_tap", null) ?: "QUICK_MENU") }.getOrDefault(ThorAction.QUICK_MENU)
+        aynHold = runCatching { ThorAction.valueOf(prefs.getString("ayn_hold", null)!!) }.getOrNull()
+        panelTakesController = prefs.getBoolean("panel_takes_controller", true)
         idleBlankEnabled = prefs.getBoolean("idle_blank_enabled", false)
         idleBlankSeconds = prefs.getInt("idle_blank_seconds", 30)
         gestureBlankMode = runCatching { BlankGesture.valueOf(prefs.getString("gesture_blank_mode", null) ?: "TAP") }

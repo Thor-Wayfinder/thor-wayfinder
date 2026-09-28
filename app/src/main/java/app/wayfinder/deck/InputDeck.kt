@@ -31,6 +31,7 @@ import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Mouse
+import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Dialpad
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -74,7 +75,7 @@ enum class Latch { OFF, ONCE, LOCKED }
  * The input deck's state: which pad, the sticky modifiers, and the app it serves.
  * Keys go to the game's screen through [VirtualInput] (root injection).
  */
-class DeckState(val pkg: String?, val appLabel: String?, initialPad: String) {
+class DeckState(val pkg: String?, val appLabel: String?, initialPad: String, val guideOnly: Boolean = false) {
     var padId by mutableStateOf(initialPad)
     private val latches = mutableStateMapOf<Modifier, Latch>()
     private val latchTime = HashMap<Modifier, Long>()
@@ -136,6 +137,7 @@ class DeckState(val pkg: String?, val appLabel: String?, initialPad: String) {
  */
 class InputDeckOverlay(private val service: AccessibilityService) {
     companion object { @Volatile var stickMouseByDeck = false }
+    init { deckService = service }
 
     private var view: ComposeView? = null
     private var wm: WindowManager? = null
@@ -145,14 +147,18 @@ class InputDeckOverlay(private val service: AccessibilityService) {
         private set
     val isShowing get() = view != null
 
-    fun show(displayId: Int, gameDisplay: Int, pkg: String?, appLabel: String?, dark: Boolean, onOpenHub: () -> Unit, onFocusGame: () -> Unit): Boolean {
+    /** [guideOnly]: just the Guide & notes (1.3, GitHub #12); [beside]: a panel on the game's own screen
+     *  (single-screen devices, or the other screen covered by a dual-screen game). */
+    fun show(displayId: Int, gameDisplay: Int, pkg: String?, appLabel: String?, dark: Boolean, onOpenHub: () -> Unit, onFocusGame: () -> Unit,
+             guideOnly: Boolean = false, beside: Boolean = false): Boolean {
         hide()
         val display = service.getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return false
         val ctx = service.createDisplayContext(display)
         val wm = ctx.getSystemService(WindowManager::class.java)
         DeckSettings.init(ctx)
         VirtualInput.targetDisplay = gameDisplay
-        val st = DeckState(pkg, appLabel, DeckSettings.padFor(ctx, pkg))
+        TouchPointer.hide()
+        val st = DeckState(pkg, appLabel, if (guideOnly) PAD_GUIDE else DeckSettings.padFor(ctx, pkg), guideOnly)
         val owner = ComposeOwner()
         val v = ComposeView(ctx).apply {
             owner.attach(this)
@@ -162,18 +168,21 @@ class InputDeckOverlay(private val service: AccessibilityService) {
                 }
             }
         }
+        val screenW = runCatching { wm.currentWindowMetrics.bounds.width() }.getOrDefault(0)
         val lp = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT,
+            if (beside && screenW > 0) (screenW * 0.45f).toInt() else WindowManager.LayoutParams.MATCH_PARENT,
+            WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            if (Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled) {
+            if (!beside && Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled) {
                 flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
                 blurBehindRadius = MainActivity.BLUR_RADIUS_PX
             }
             dimAmount = 0f
+            if (beside) gravity = android.view.Gravity.END or android.view.Gravity.TOP   // beside the game, on the right
             title = "ThorInputDeck"
         }
         return try {
@@ -186,6 +195,7 @@ class InputDeckOverlay(private val service: AccessibilityService) {
     }
 
     fun hide() {
+        TouchPointer.hide()   // 1.3 (GitHub #36): the touch pointer goes with the deck
         state?.releaseAll()   // never leave a key or modifier held or a mouse behind
         // AYN's stick mouse, turned on from the deck: off again, or every game afterwards had
         // L3 / R3 turning the stick into a cursor and the D-pad into volume (review 2026-09-25)
@@ -223,7 +233,7 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
         // Header: pad tabs · focus the game · close.
         Row(Modifier_fillWidthHeight(52), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(UiModifier.weight(1f).horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                pads.forEach { p ->
+                if (!st.guideOnly) pads.forEach { p ->
                     // Only the open pad spells its name — all seven tabs fit the screen.
                     Tab(if (st.padId == p.id) p.name else null, padIcon(p.id), selected = st.padId == p.id) {
                         if (st.padId == PAD_TRACKPAD && p.id != PAD_TRACKPAD) VirtualInput.releaseMouse()
@@ -237,7 +247,7 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
                 }
             }
             // the game's gyro (Buttons for <app> → Gyro): off / on for this game, from here
-            if (app.wayfinder.GyroEngine.configuredForCurrent != null) {
+            if (!st.guideOnly && app.wayfinder.GyroEngine.configuredForCurrent != null) {
                 var gyroOn by remember { mutableStateOf(!app.wayfinder.GyroEngine.pausedByUser) }
                 Tab(if (gyroOn) "Gyro on" else "Gyro off", Icons.Rounded.ScreenRotation, selected = gyroOn) {
                     gyroOn = !gyroOn; app.wayfinder.GyroEngine.setPausedByUser(!gyroOn)
@@ -245,10 +255,10 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
             }
             Tab(null, Icons.Rounded.Close, selected = false, onClick = onClose)
         }
-        val pad = pads.firstOrNull { it.id == st.padId } ?: pads.first()
+        val pad = (pads.firstOrNull { it.id == st.padId } ?: pads.first()).let { if (it.id == PAD_PC && DeckSettings.simpleKeys) PC_SIMPLE else it }
         when {
             st.padId == PAD_GUIDE -> DeckGuidePane(st.pkg, st.appLabel, onClose, UiModifier.fillMaxWidth().weight(1f))
-            pad.isTrackpad -> Trackpad(UiModifier.fillMaxWidth().weight(1f))
+            pad.isTrackpad -> Trackpad(UiModifier.fillMaxWidth().weight(1f), service = deckService)
             pad.id == PAD_CUSTOM && pad.rows.isEmpty() -> Box(UiModifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Your own buttons: text snippets and key combos", color = g.textSecondary, fontSize = 18.sp)
@@ -258,9 +268,14 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
             else -> PadGrid(st, pad, UiModifier.fillMaxWidth().weight(1f))
         }
         // Footer: where the keys go, and a way to hand the controller to that screen.
-        Row(Modifier_fillWidthHeight(40), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!st.guideOnly) Row(Modifier_fillWidthHeight(40), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Sending to: ${st.appLabel ?: "the other screen"}", color = g.textTertiary, fontSize = 13.sp,
                 modifier = UiModifier.weight(1f))
+            // 1.3 (GitHub #26): the PC keys, full or simple (bigger keys) — here, not in the tab strip (it pushed
+            // the last pads off the edge)
+            if (st.padId == PAD_PC) Tab(if (DeckSettings.simpleKeys) "All keys" else "Simpler keys", Icons.Rounded.Keyboard, selected = false) {   // what a tap does
+                DeckSettings.chooseSimpleKeys(!DeckSettings.simpleKeys)
+            }
             Tab("Give the controller to the game", Icons.Rounded.CenterFocusStrong, selected = false, onClick = onFocusGame)
         }
     }
@@ -369,15 +384,58 @@ private fun runAction(ctx: android.content.Context, a: DeckAction) {
     }
 }
 
+/** The deck's service (the touch pointer injects gestures through it). */
+@Volatile private var deckService: AccessibilityService? = null
+
+/** 1.3 (GitHub #36): the trackpad in Touch mode — one finger moves the pointer, a quick tap taps there,
+ *  hold (0.45 s) then move drags a finger, two fingers swipe from the pointer. */
+private suspend fun touchGestures(scope: androidx.compose.ui.input.pointer.PointerInputScope, view: android.view.View) = scope.awaitEachGesture {
+    val first = awaitFirstDown(requireUnconsumed = false)
+    val start = first.uptimeMillis
+    var maxFingers = 1; var travel = 0f; var holding = false
+    var sx = 0f; var sy = 0f
+    while (true) {
+        val ev = awaitPointerEvent()
+        val down = ev.changes.filter { it.pressed }
+        if (down.isEmpty()) break
+        maxFingers = maxOf(maxFingers, down.size)
+        if (!holding && maxFingers == 1 && travel < 12f && ev.changes.first().uptimeMillis - start > 450) {
+            holding = true; TouchPointer.press(); view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+        }
+        if (ev.type == PointerEventType.Move) {
+            val c = down.first()
+            val dx = c.position.x - c.previousPosition.x; val dy = c.position.y - c.previousPosition.y
+            travel += abs(dx) + abs(dy)
+            if (down.size >= 2) { sx += dx * 3f; sy += dy * 3f }
+            else {
+                val gain = 1.3f + ((abs(dx) + abs(dy)) / 25f).coerceAtMost(2.5f)
+                TouchPointer.move(dx * gain, dy * gain)
+            }
+        }
+        ev.changes.forEach { it.consume() }
+    }
+    when {
+        holding -> TouchPointer.release()
+        maxFingers >= 2 && (abs(sx) + abs(sy)) > 30f -> TouchPointer.swipe(sx, sy)
+        travel < 14f && maxFingers == 1 -> TouchPointer.tap()
+    }
+}
+
 /**
  * Laptop-style trackpad driving a real (virtual) mouse, so the game gets the system
  * cursor and true relative motion. One finger moves; tap = click; two-finger tap =
  * right click; two-finger drag = scroll; press-and-hold then move = drag.
  */
 @Composable
-private fun Trackpad(modifier: UiModifier) {
+private fun Trackpad(modifier: UiModifier, service: AccessibilityService?) {
     val g = LocalGlass.current
     val view = LocalView.current
+    // 1.3 (GitHub #36): Touch = a pointer on the game's screen and finger touches there
+    val touch = DeckSettings.touchMode && service != null
+    androidx.compose.runtime.DisposableEffect(touch) {
+        if (touch) TouchPointer.show(service!!, VirtualInput.targetDisplay) else TouchPointer.hide()
+        onDispose { TouchPointer.hide() }
+    }
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
         val shape = RoundedCornerShape(20.dp)
         Box(
@@ -385,7 +443,8 @@ private fun Trackpad(modifier: UiModifier) {
                 .background(if (g.dark) Color(0x26FFFFFF) else Color(0x80FFFFFF), shape)
                 .glassLight(shape, g.dark)
                 .border(1.dp, Brush.linearGradient(0f to g.rimTop, 0.5f to Color.Transparent, 1f to g.rimBottom), shape)
-                .pointerInput(Unit) {
+                .pointerInput(touch) {
+                    if (touch) { touchGestures(this, view); return@pointerInput }
                     awaitEachGesture {
                         val first = awaitFirstDown(requireUnconsumed = false)
                         val start = first.uptimeMillis
@@ -432,14 +491,22 @@ private fun Trackpad(modifier: UiModifier) {
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text("Trackpad · tap = click · 2 fingers: tap = right click, drag = scroll · hold + move = drag",
+            Text(if (touch) "Touch · move = the pointer · tap = a finger tap there · hold + move = drag · 2 fingers = swipe"
+                else "Trackpad · tap = click · 2 fingers: tap = right click, drag = scroll · hold + move = drag",
                 color = g.textTertiary, fontSize = 14.sp)
         }
         Row(UiModifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            MouseButton("Left", 0, UiModifier.weight(1f).fillMaxHeight())
-            MouseButton("Middle", 2, UiModifier.weight(0.6f).fillMaxHeight())
-            MouseButton("Right", 1, UiModifier.weight(1f).fillMaxHeight())
-            AynMouseLink(UiModifier.weight(1.2f).fillMaxHeight())
+            // 1.3 (GitHub #36): a mouse, or finger touches (for games that ignore a mouse)
+            Tab(if (touch) "Touch" else "Mouse", if (touch) Icons.Rounded.TouchApp else Icons.Rounded.Mouse, selected = touch) {
+                DeckSettings.chooseTouchMode(!DeckSettings.touchMode)
+            }
+            if (!touch) {
+                MouseButton("Left", 0, UiModifier.weight(1f).fillMaxHeight())
+                MouseButton("Middle", 2, UiModifier.weight(0.6f).fillMaxHeight())
+                MouseButton("Right", 1, UiModifier.weight(1f).fillMaxHeight())
+                AynMouseLink(UiModifier.weight(1.2f).fillMaxHeight())
+            } else Text("Touches go where the pointer is, on the game's screen — for games a mouse doesn't work in",
+                color = g.textTertiary, fontSize = 13.sp, modifier = UiModifier.weight(1f).align(Alignment.CenterVertically))
         }
     }
 }

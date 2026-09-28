@@ -8,8 +8,7 @@ import android.provider.Settings
  * user_setup_complete`). With either at 0, SystemUI silently refuses Recents — double Back (and
  * Android's own Recents key) do nothing, no error. Their built-in default is 0, so anything that
  * resets settings to defaults (Android's automatic recovery after repeated system crashes) leaves a
- * set-up Thor "unprovisioned" (a user's Thor, 2026-09-26 — THOR_PLATFORM_NOTES "Recents silently
- * dead"). We detect it and offer one press to put them back.
+ * set-up Thor "unprovisioned" (seen on a user's Thor, 2026-09-26). We detect it and offer one press to put them back.
  */
 object SetupFlagGuard {
     fun broken(ctx: Context): Boolean =

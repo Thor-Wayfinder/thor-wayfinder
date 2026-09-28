@@ -46,7 +46,7 @@ object VirtualInput {
 
     /**
      * Per-screen brightness, one eye-scale step — the same per-display control as the
-     * Hub sliders and Home + R2 / L2 (#11). (It used to write AYN's
+     * Hub sliders and Home + R2 / L2. (It used to write AYN's
      * `dual_screen_brightness_level`, which is AYN's "both screens" slider.)
      */
     fun brightness(ctx: Context, top: Boolean, dir: Int) = Thread {

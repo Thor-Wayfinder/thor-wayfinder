@@ -11,7 +11,7 @@ import android.view.WindowManager
 import android.widget.TextView
 
 /**
- * #20 FPS counter pill: a small, untouchable overlay in the top-left corner of a screen.
+ * FPS counter pill: a small, untouchable overlay in the top-left corner of a screen.
  * Green ≥ 55, amber ≥ 28, red below; grey "idle" when nothing was drawn. Numbers come from [FpsSampler] via the root helper.
  */
 class FpsOverlay(private val service: android.accessibilityservice.AccessibilityService) {

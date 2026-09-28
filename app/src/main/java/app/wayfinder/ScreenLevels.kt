@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * #11 App side of per-screen brightness (the root side is [ScreenBrightness]).
+ * App side of per-screen brightness (the root side is [ScreenBrightness]).
  * Levels are 0..1 as Android stores them; the steps and the % shown are on a square-root
  * scale so each press looks like the same change to the eye. Call off the main thread.
  */

@@ -1,5 +1,70 @@
 # Changelog
 
+## 1.3 — September 2026
+
+- **Fixed:** the quick panel no longer pauses the game under it (WatermelonDS and other emulators paused, and their sound
+  drifted out of sync), and closing it no longer sends a frontend (iiSU…) back to its home. It opening over a video on
+  the bottom screen (YouTube…) no longer sends it into picture-in-picture either.
+- **New:** over dual-screen games (melonDS, Azahar, Cemu…) the quick panel now opens on the bottom screen, over the
+  game's second screen, like everywhere else (it was a side sheet on the top screen).
+- **New:** "The panel takes the controller" (Quick panel settings) — off: the panel is touch-only and the game keeps the
+  controller while it's open.
+- **Fixed:** swapping screens never restarts a game: RetroArch launched from a frontend came back at its main menu. The
+  game stays where it was, and a frontend that jumps in front of it after the swap is sent back behind.
+- **Fixed:** swapping onto a screen that shows another app's second screen (NeoStation, a dual-screen game) hid the app
+  under it — Wayfinder now says so instead.
+- **New:** stick lights "Screen colour" can come from the top screen, the bottom screen or the controller's screen
+  (a DS game's bottom screen is menus — keep the colours on the top one).
+- **Fixed:** RetroArch — the controller's Back reaches RetroArch again (held too), so Back hotkeys and Back as the menu
+  button work. Per app: App profiles → "Back button: Automatic / Wayfinder / The game"; Automatic gives Back to RetroArch
+  when its configuration uses Back for a hotkey or the menu.
+- **Fixed:** Bluetooth and USB controllers are left alone — the input layer only takes over the Thor's own controls, even
+  when a pad is already connected when Wayfinder starts (the Thor's own buttons stopped working then).
+- **Fixed:** less battery used in sleep — the input layer's background check (every 3 s, even asleep) now rests while
+  the screens are off.
+- **Fixed:** apps moved to the bottom screen played quieter: Wayfinder kept AYN's untouched bottom-screen level. Both
+  screens now start at the same level, and the Volume card shows when they differ, with "Same on both".
+- **Fixed:** the quick panel over a dual-screen game sometimes didn't take the controller (B went to the game).
+- **New:** Help & status → System access shows the input layer's state, and why it stopped if it did; the "couldn't
+  start" message says why too.
+- **New: Touch mode for the trackpad** (Keyboard & mouse → Trackpad → "Mouse / Touch"): a pointer on the game's screen and
+  real finger touches there — tap, hold and drag, two-finger swipe — for games that ignore a mouse. Remembered.
+- **New: "Gyro on / off"** — an action (a combo, the AYN button, a button's long press in Game controls) and a quick-panel
+  tile: pauses the game's gyro and turns it back on.
+- **Fixed:** the CPU temperature reads the CPU clusters' sensors (it showed the hottest single-core spot, often 10 °C more).
+- **Fixed:** a screenshot of both screens skips a screen that's off.
+- **Fixed:** Android's navigation bar popping back up although it's hidden: Wayfinder hides it again.
+- **Fixed:** the app-profile window scrolls (its last rows were off the screen).
+- **Fixed (controller):** in Game controls, B right after closing a choice now leaves the page (it did nothing once);
+  the D-pad on the controller drawing moves straight across (Left on Y reaches the left stick); back on the Hub's home,
+  the card you opened has the focus again; "Close this app" from the quick panel closes the game it's about.
+- **Fixed:** a Custom fan (AYN's curve) is kept when you change performance; Custom is now in the fan tile and per-app
+  profiles, and a "Fan curve" tile opens AYN's curve editor.
+- **Fixed:** with AYN's Xbox controller style, the keyboard and Recents confirm with the bottom button.
+- **Fixed:** the switches under Sleep actions update straight away; the keyboard has `<` and `>`.
+- **Faster:** moving the controller to the top screen answers as quickly as moving it to the bottom.
+- **New: remap each D-pad direction** — up, down, left, right on their own: a key, a click, the mouse wheel, another button,
+  a Wayfinder action. The D-pad's page is laid out as a D-pad: press a direction to change it.
+- **New: a stick as the mouse, the scroll wheel or four keys** (arrows or W A S D), with a dead zone so a resting or drifting
+  stick never moves anything. Plus a **Web browsing** preset (mouse, scroll, clicks, Back).
+- **New: AYN button — tap and hold** can each do an action (e.g. hold = bottom screen off). Default unchanged.
+- **New: Sleep** — an action and a quick-panel tile.
+- **New: button names on screen** — Automatic (follows AYN's controller style) / As printed / Xbox, for every hint and badge.
+- **New: Guide & notes** — an action and a tile: the game's guide on the other screen (over a dual-screen game's second
+  screen too), or beside the game on a single-screen device.
+- **New: a simpler keyboard in Keyboard & mouse** (letters, numbers and the usual keys), and a D-pad option in Wayfinder's
+  keyboard (the D-pad picks keys). Hold Space and slide to move the text cursor.
+- **New: Black theme** for OLED screens (pure black, no aurora or background blur).
+- **New: volume boost** — +3 to +12 dB with a limiter, on every output; in Screens & power and as a tile.
+- **New: invert a stick left / right.**
+- **New: per app and per game** — the frame-rate counter (usual / shown / hidden) and the bottom screen off; "Keep for
+  <game>" in the quick panel now remembers the bottom screen too. The Frame rate tile steps through FPS, + battery,
+  + temperatures, hidden.
+- **New: Mouse mode (AYN)** — an action for any combo and a tile.
+- **New: stick lights "each stick its own side"** of the screen's colours.
+- **New: the Recents controller hint** can be compact or off, in any corner.
+- While Wayfinder's keyboard is open, the controller types: the app's Game controls pause until it closes.
+
 ## 1.2 — September 2026
 
 - **New: a Guide tab in Keyboard & mouse (Home + Y)** — the game's guide page and your notes on the other screen,

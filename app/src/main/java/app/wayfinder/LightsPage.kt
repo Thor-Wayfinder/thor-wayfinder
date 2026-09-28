@@ -43,7 +43,7 @@ private val ANIMATED = setOf(LightMode.BREATHING, LightMode.STROBE, LightMode.SP
 fun lightsSummary(): String = "Effect: " + LightSettings.global.mode.label
 
 /**
- * #28 — stick lights. [pkg] null = the global setting; otherwise that app's own
+ * Stick lights. [pkg] null = the global setting; otherwise that app's own
  * lights (or "use the global setting"). Every change shows on the sticks right away;
  * leaving the page hands the lights back to whatever app has the controller.
  */
@@ -116,9 +116,22 @@ fun LightsPage(myDisplayId: Int, pkg: String?, onBack: () -> Unit) {
                 SectionHeader("Brightness · ${(p.brightness * 100).toInt()} %")
                 app.wayfinder.ui.GlassSlider(p.brightness) { v -> save(p.copy(brightness = v.coerceAtLeast(0.05f))) }
             }
-            if (p.mode == LightMode.SCREEN)
-                Text("The rings follow the main colour of the game's screen, a few times a second.",
+            if (p.mode == LightMode.SCREEN) {
+                // 1.3 (GitHub #15): like BiFrost — each ring its side of the screen
+                SettingCard("Each stick its own side", if (p.split) "Left ring = the left half of the screen, right ring = the right half"
+                    else "Both rings show the whole screen's main colour", checked = p.split, onChecked = { save(p.copy(split = it)) })
+                // 1.3 (GitHub #33): a DS game's bottom screen is menus — keep the colours on the top one
+                SettingCard("Colour from", when (p.screenFrom) {
+                    1 -> "Always the top screen"
+                    2 -> "Always the bottom screen"
+                    else -> "The screen with the controller (a touch on the other screen moves it)"
+                }) {
+                    app.wayfinder.ui.GlassSegmentedControl(listOf("Controller's screen", "Top screen", "Bottom screen"), p.screenFrom,
+                        Modifier.fillMaxWidth()) { save(p.copy(screenFrom = it)) }
+                }
+                Text("The rings follow the colours of the game's screen, a few times a second.",
                     color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }

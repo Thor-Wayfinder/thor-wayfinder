@@ -1,4 +1,4 @@
-// wfmap — the input layer's mapping engine (docs/INPUT_LAYER_PLAN.md, phase 1).
+// wfmap — the input layer's mapping engine.
 //
 // Pure and STATE-based: the copy's whole output state is a function of
 //   (AYN pad state, the app's profile, "Home/Back held" gate)
@@ -58,16 +58,23 @@ typedef struct {
     int layout;                   // 0 = follow AYN · 'n' = Nintendo (printed) · 'x' = Xbox
     unsigned short keymap[WF_NK]; // printed src → printed dst (0 = itself, WF_NONE, WF_HAT_*)
     int swap_sticks, dpad_ls, inv_ly, inv_ry, trig_digital;
+    int inv_lx, inv_rx;           // 1.3 (`xl=1` / `xr=1`, GitHub #19): left / right inverted
     unsigned char fire[WF_NK];    // how a button fires: 0 normal · 1 turbo · 2 toggle
     int turbo_hz;                 // turbo presses per second (default 12)
     // round 8 (2026-09-25) — sticks: inner deadzone %, full deflection at %, response 0 linear ·
     // 1 precise centre · 2 fast; [0] left, [1] right. Triggers: start / full at % (both).
     int dz[2], oz[2], cv[2];
     int tlo, thi;
-    // hold-to-shift (INPUT_LAYER_PLAN §6l, 2026-09-26): this PRINTED button, held, works like Home /
+    // hold-to-shift (2026-09-26): this PRINTED button, held, works like Home /
     // Back's gate for this profile — nothing reaches the game, presses go to Wayfinder (its "With
     // Shift" layer); pressed alone it reaches the game as a short tap on release. 0 = none (default).
     int shift;
+    // 1.3 (`bg=1`): Back goes straight to the game (RetroArch's Back hotkeys): holding Back doesn't
+    // gate — the other buttons keep reaching the game. Home still gates. 0 = Back gates (default).
+    int back_free;
+    // 1.3 (`apl=1` / `apr=1`): this PHYSICAL stick is Wayfinder's (mouse, scroll, 4 keys): centred for the
+    // game, its shaped position sent to the app ([wf_app_stick], "T" lines). [0] left, [1] right.
+    int app_stick[2];
 } wf_map;
 
 typedef struct {
@@ -95,6 +102,7 @@ typedef struct {
     // pressed while it was held, and until when its lone tap is sent to the game (now_ms)
     int shift, shift_used;
     long shift_tap_until;
+    int back_free;                // copied from the map (`bg=1`): Back held doesn't gate
 } wf_state;
 
 
@@ -132,6 +140,22 @@ static inline int wf_abs_active(const wf_state *s, int a) {
 static inline void wf_map_reset(wf_map *m) { memset(m, 0, sizeof *m); }
 
 static inline int wf_is_system(int printed) { return printed == WF_HOME || printed == WF_BACK; }
+
+/** 1.3 — the D-pad's directions are sources of their own (printed codes WF_HAT_UP..RIGHT, keymap
+ *  like a button): is [dir] pressed, for a HAT at (hx, hy)? */
+static inline int wf_dir_on(int hx, int hy, int dir) {
+    switch (dir) {
+        case WF_HAT_UP: return hy < 0; case WF_HAT_DOWN: return hy > 0;
+        case WF_HAT_LEFT: return hx < 0; case WF_HAT_RIGHT: return hx > 0;
+    }
+    return 0;
+}
+
+/** The gate is open (nothing reaches the game): Home held, Back held (unless the profile gives Back
+ *  to the game), or the profile's shift button held. */
+static inline int wf_gate(const wf_state *s) {
+    return s->key[WF_HOME] || (s->key[WF_BACK] && !s->back_free) || (s->shift && s->key[s->shift]);
+}
 
 /** One output of the copy: a printed button (layout applied), a D-pad direction, or — for a
  *  non-trigger source — a full pull of L2 / R2. */
@@ -200,7 +224,7 @@ static inline int wf_event(wf_state *s, int type, int code, int value, int *prin
             // released alone (no other button, no Home / Back meanwhile): the game gets a short tap
             if (is_shift && value == 0 && !s->shift_used && !s->key[WF_HOME] && !s->key[WF_BACK])
                 s->shift_tap_until = s->now_ms + 60;
-            int g = s->key[WF_HOME] || s->key[WF_BACK] || (s->shift && s->key[s->shift]);
+            int g = wf_gate(s);
             if (g && !s->gated) {         // gate opens: what's held now is NOT consumed
                 for (int i = 0; i < s->nk; i++) s->akey_prev[s->keys[i]] = s->key[s->keys[i]];
                 for (int i = 0; i < s->na; i++) s->aabs_prev[s->axes[i]] = (unsigned char)wf_abs_active(s, s->axes[i]);
@@ -241,6 +265,22 @@ static inline int wf_ext_event(const wf_state *s, const wf_map *m, int printed, 
     if (printed < 0 || printed >= WF_NK || m->keymap[printed] != WF_EXT) return 0;
     if (value == 0) return 1;
     return value == 1 && !s->gated && !s->ckey[printed];
+}
+
+/**
+ * 1.3 — after [wf_event] for a HAT axis that moved from [oldv] to [newv]: the D-pad directions it
+ * presses / releases that Wayfinder plays (keymap WF_EXT) — "X <dir> <1|0>" lines, like buttons.
+ * Presses only when the game would have got them (no gate, not consumed); releases always.
+ * Writes up to 4 (code, value) pairs, releases first; returns how many.
+ */
+static inline int wf_dir_ext(const wf_state *s, const wf_map *m, int axis, int oldv, int newv, int *codes, int *vals) {
+    if (axis != WF_HX && axis != WF_HY) return 0;
+    int dirs[2] = { axis == WF_HX ? WF_HAT_LEFT : WF_HAT_UP, axis == WF_HX ? WF_HAT_RIGHT : WF_HAT_DOWN };
+    int was[2] = { oldv < 0, oldv > 0 }, now[2] = { newv < 0, newv > 0 };
+    int n = 0;
+    for (int i = 0; i < 2; i++) if (was[i] && !now[i] && m->keymap[dirs[i]] == WF_EXT) { codes[n] = dirs[i]; vals[n++] = 0; }
+    for (int i = 0; i < 2; i++) if (!was[i] && now[i] && m->keymap[dirs[i]] == WF_EXT && !s->gated && !s->cabs[axis]) { codes[n] = dirs[i]; vals[n++] = 1; }
+    return n;
 }
 
 static inline int wf_clamp(const wf_state *s, int a, int v) {
@@ -314,7 +354,20 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
     }
     // Wayfinder's virtual presses (a trigger pressed this way = a full pull)
     // (silent under Home / Back; under the shift button they ARE its layer's outputs — a button target)
-    if (!s->key[WF_HOME] && !s->key[WF_BACK]) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
+    if (!s->key[WF_HOME] && !(s->key[WF_BACK] && !s->back_free)) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
+    // 1.3: a remapped D-pad direction leaves the game's D-pad for its target (another button, a
+    // direction, nothing, or Wayfinder); the other directions stay as they are
+    int hat_x_off = 0, hat_y_off = 0;
+    if (s->info[WF_HX].maximum) {
+        static const int DIRS[4] = { WF_HAT_UP, WF_HAT_DOWN, WF_HAT_LEFT, WF_HAT_RIGHT };
+        int dx0, dy0; wf_live_abs(s, WF_HX, &dx0); wf_live_abs(s, WF_HY, &dy0);
+        for (int i = 0; i < 4; i++) {
+            int d = DIRS[i], t = m->keymap[d];
+            if (!t || !wf_dir_on(dx0, dy0, d)) continue;
+            if (d == WF_HAT_UP || d == WF_HAT_DOWN) hat_y_off = 1; else hat_x_off = 1;
+            if (t != WF_NONE && t != WF_EXT) wf_put(s, m, o, t, 0, &hx, &hy, trig_full);
+        }
+    }
     // Trigger analog follows its button: L2 → R2 moves BRAKE to GAS; L2 → A drops the analog.
     // Both triggers on one output (L2 → R2, R2 stays R2): the one pressed further wins.
     for (int t = 0; t < 2; t++) {
@@ -339,12 +392,19 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
     wf_live_abs(s, WF_LX, &lx); wf_live_abs(s, WF_LY, &ly);
     wf_live_abs(s, WF_RX, &rx); wf_live_abs(s, WF_RY, &ry);
     wf_live_abs(s, WF_HX, &sx); wf_live_abs(s, WF_HY, &sy);
+    if (hat_x_off) sx = 0;
+    if (hat_y_off) sy = 0;
     // the PHYSICAL stick's shape (its drift), before any swap
     if (s->info[WF_LX].maximum) wf_shape(s, WF_LX, WF_LY, &lx, &ly, m->dz[0], m->oz[0], m->cv[0]);
     if (s->info[WF_RX].maximum) wf_shape(s, WF_RX, WF_RY, &rx, &ry, m->dz[1], m->oz[1], m->cv[1]);
+    // 1.3: a stick that is Wayfinder's (mouse / scroll / keys) rests for the game
+    if (m->app_stick[0]) { lx = wf_rest(s, WF_LX); ly = wf_rest(s, WF_LY); }
+    if (m->app_stick[1]) { rx = wf_rest(s, WF_RX); ry = wf_rest(s, WF_RY); }
     if (m->swap_sticks) { int t; t = lx; lx = rx; rx = t; t = ly; ly = ry; ry = t; }
     if (m->inv_ly) ly = 2 * wf_rest(s, WF_LY) - ly;
     if (m->inv_ry) ry = 2 * wf_rest(s, WF_RY) - ry;
+    if (m->inv_lx) lx = 2 * wf_rest(s, WF_LX) - lx;
+    if (m->inv_rx) rx = 2 * wf_rest(s, WF_RX) - rx;
     if (m->dpad_ls) {
         // D-pad drives the left stick (full deflection); the left stick drives the D-pad (50 %).
         int cx = wf_rest(s, WF_LX), cy = wf_rest(s, WF_LY);
@@ -369,6 +429,28 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
         if (a == WF_LX || a == WF_LY || a == WF_RX || a == WF_RY || a == WF_HX || a == WF_HY || a == WF_GAS || a == WF_BRAKE) continue;
         int v; wf_live_abs(s, a, &v); o->abs[a] = v;
     }
+}
+
+/**
+ * 1.3 — a stick given to Wayfinder ([wf_map.app_stick]): its position for the app, −1000..1000 each
+ * way (y: down = +), through the stick's shape with a deadzone of AT LEAST 10 % — a resting or
+ * drifting stick sends exactly 0, so nothing moves or scrolls by itself. Centred while gated or
+ * consumed (Home + that stick is a Wayfinder shortcut).
+ */
+static inline void wf_app_stick(const wf_state *s, const wf_map *m, int side, int *nx, int *ny) {
+    int ax = side ? WF_RX : WF_LX, ay = side ? WF_RY : WF_LY;
+    *nx = *ny = 0;
+    if (!m->app_stick[side] || !s->info[ax].maximum) return;
+    int x, y;
+    if (!wf_live_abs(s, ax, &x) || !wf_live_abs(s, ay, &y)) return;
+    int dz = m->dz[side] < 10 ? 10 : m->dz[side];
+    wf_shape(s, ax, ay, &x, &y, dz, m->oz[side], m->cv[side]);
+    int cx = wf_rest(s, ax), cy = wf_rest(s, ay);
+    int hx = s->info[ax].maximum - cx, hy = s->info[ay].maximum - cy;
+    if (hx <= 0 || hy <= 0) return;
+    long vx = (long)(x - cx) * 1000 / hx, vy = (long)(y - cy) * 1000 / hy;
+    *nx = (int)(vx > 1000 ? 1000 : vx < -1000 ? -1000 : vx);
+    *ny = (int)(vy > 1000 ? 1000 : vy < -1000 ? -1000 : vy);
 }
 
 /**
@@ -422,7 +504,12 @@ static inline int wf_parse(wf_map *out, const wf_state *s, const char *line) {
         else if (!strcmp(k, "dl")) m.dpad_ls = (int)n;
         else if (!strcmp(k, "il")) m.inv_ly = (int)n;
         else if (!strcmp(k, "ir")) m.inv_ry = (int)n;
+        else if (!strcmp(k, "xl")) m.inv_lx = (int)n;
+        else if (!strcmp(k, "xr")) m.inv_rx = (int)n;
         else if (!strcmp(k, "td")) m.trig_digital = (int)n;
+        else if (!strcmp(k, "bg")) m.back_free = (int)n;
+        else if (!strcmp(k, "apl")) m.app_stick[0] = (int)n;
+        else if (!strcmp(k, "apr")) m.app_stick[1] = (int)n;
         else return -1;
     }
     *out = m;

@@ -3,7 +3,7 @@ package app.wayfinder.keyboard
 import java.util.Locale
 
 /**
- * #27 — the keyboard layouts. Each layout is its letter rows (space-separated keys),
+ * The keyboard layouts. Each layout is its letter rows (space-separated keys),
  * the long-press alternates that matter for its language first, and the currency
  * shown on the symbols page. The bottom row and the symbol pages are shared.
  *
@@ -169,4 +169,4 @@ fun defaultLayoutIds(locales: List<Locale>): List<String> {
 
 /** Symbols pages (shared). "\$CUR" = the layout's currency. */
 val SYMBOLS_1 = rows("1 2 3 4 5 6 7 8 9 0", "@ # \$CUR _ & - + ( ) /", "* \" ' : ; ! ?")
-val SYMBOLS_2 = rows("~ ` | • √ π ÷ × ¶ ∆", "€ £ ¥ ¢ ^ ° = { } \\", "% © ® ™ ✓ [ ]")
+val SYMBOLS_2 = rows("~ ` | < > • √ π ÷ ×", "€ £ ¥ ¢ ^ ° = { } \\", "% © ® ™ ✓ [ ]")

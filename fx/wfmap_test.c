@@ -150,8 +150,83 @@ int main(void) {
     pad(0); key(WF_BACK, 1); key(WF_A, 1); frame();
     CHECK(O.key[WF_BACK] && !O.key[WF_A], "Back gates too");
 
+    // ── 1.3: bg=1 — Back goes to the game (RetroArch's Back hotkeys) ─────
+    { wf_map mb; CHECK(wf_parse(&mb, &S, "bg=1") == 0 && mb.back_free == 1, "bg=1 parses"); }
+    { wf_map mb; CHECK(wf_parse(&mb, &S, "k0x220=0x130 k0x221=0xfffe k0x222=65535 k0x223=0x220 apl=1 apr=0") == 0 &&
+          mb.keymap[WF_HAT_UP] == WF_A && mb.keymap[WF_HAT_DOWN] == WF_EXT && mb.keymap[WF_HAT_LEFT] == WF_NONE &&
+          mb.keymap[WF_HAT_RIGHT] == WF_HAT_UP && mb.app_stick[0] == 1 && mb.app_stick[1] == 0, "D-pad sources + apl parse"); }
+    { wf_map mb; CHECK(wf_parse(&mb, &S, "apl=2") == -1, "apl=2 refused"); }
+    pad(0); S.back_free = 1; key(WF_BACK, 1); CHECK(key(WF_A, 1) == 0, "bg=1: A during Back not echoed"); frame();
+    CHECK(O.key[WF_BACK] && O.key[WF_A], "bg=1: Back + A both reach the game");
+    key(WF_A, 0); key(WF_BACK, 0); frame();
+    CHECK(!O.key[WF_BACK] && !O.key[WF_A], "bg=1: both released");
+    pad(0); S.back_free = 1; key(WF_HOME, 1); key(WF_A, 1); frame();
+    CHECK(!O.key[WF_A], "bg=1: Home still gates");
+
     pad(0); key(WF_A, 1); key(WF_HOME, 1); key(WF_A, 0); key(WF_A, 1); key(WF_HOME, 0); frame();
     CHECK(!O.key[WF_A], "released and re-pressed during Home → consumed");
+
+    // ── 1.3: D-pad directions as sources ─────────────────────────
+    pad(0); M.keymap[WF_HAT_UP] = WF_A; ab(WF_HY, -1); frame();
+    CHECK(O.key[WF_A] && O.abs[WF_HY] == 0, "D-pad up → A: A pressed, the game's D-pad stays centred");
+    ab(WF_HY, 1); frame();
+    CHECK(!O.key[WF_A] && O.abs[WF_HY] == 1, "D-pad down (not remapped) still works");
+    ab(WF_HY, 0); frame(); CHECK(!O.key[WF_A] && O.abs[WF_HY] == 0, "D-pad released");
+    pad(0); M.keymap[WF_HAT_UP] = WF_HAT_DOWN; ab(WF_HY, -1); frame();
+    CHECK(O.abs[WF_HY] == 1, "D-pad up → down");
+    pad(0); M.keymap[WF_HAT_LEFT] = WF_NONE; ab(WF_HX, -1); frame();
+    CHECK(O.abs[WF_HX] == 0, "D-pad left → nothing");
+    ab(WF_HX, 1); frame(); CHECK(O.abs[WF_HX] == 1, "D-pad right still works");
+    pad(0); M.keymap[WF_HAT_RIGHT] = WF_L2; ab(WF_HX, 1); frame();
+    CHECK(O.key[WF_L2] && O.abs[WF_BRAKE] == 32767 && O.abs[WF_HX] == 0, "D-pad right → L2: a full pull");
+    pad(0); M.keymap[WF_HAT_UP] = WF_A; ab(WF_HY, -1); ab(WF_HX, 1); frame();
+    CHECK(O.key[WF_A] && O.abs[WF_HY] == 0 && O.abs[WF_HX] == 1, "diagonal: up remapped, right kept");
+    pad(0); M.dpad_ls = 1; M.keymap[WF_HAT_UP] = WF_A; ab(WF_HY, -1); frame();
+    CHECK(O.key[WF_A] && O.abs[WF_LY] == 0, "D-pad ↔ stick: a remapped direction doesn't move the stick");
+    {   // Wayfinder plays a direction ("X" lines)
+        int dc[4], dv[4], dn;
+        pad(0); M.keymap[WF_HAT_DOWN] = WF_EXT; ab(WF_HY, 1); frame();
+        CHECK(O.abs[WF_HY] == 0, "D-pad down → Wayfinder: nothing for the game");
+        dn = wf_dir_ext(&S, &M, WF_HY, 0, 1, dc, dv);
+        CHECK(dn == 1 && dc[0] == WF_HAT_DOWN && dv[0] == 1, "D-pad down press → X line");
+        ab(WF_HY, 0); dn = wf_dir_ext(&S, &M, WF_HY, 1, 0, dc, dv);
+        CHECK(dn == 1 && dc[0] == WF_HAT_DOWN && dv[0] == 0, "D-pad down release → X line");
+        dn = wf_dir_ext(&S, &M, WF_HY, 0, -1, dc, dv);
+        CHECK(dn == 0, "D-pad up (not Wayfinder's): no X line");
+        M.keymap[WF_HAT_UP] = WF_EXT; ab(WF_HY, 1);
+        dn = wf_dir_ext(&S, &M, WF_HY, 1, -1, dc, dv);
+        CHECK(dn == 2 && dv[0] == 0 && dc[0] == WF_HAT_DOWN && dv[1] == 1 && dc[1] == WF_HAT_UP, "down → up in one move: release first");
+        pad(0); M.keymap[WF_HAT_DOWN] = WF_EXT; key(WF_HOME, 1); ab(WF_HY, 1);
+        dn = wf_dir_ext(&S, &M, WF_HY, 0, 1, dc, dv);
+        CHECK(dn == 0, "Home held: the direction is Wayfinder's shortcut, no X press");
+    }
+    // ── 1.3: a stick that is Wayfinder's (mouse / scroll / keys) ─────
+    {
+        int x, y;
+        pad(0); M.app_stick[0] = 1; ab(WF_LX, 32767); ab(WF_RX, 20000); frame();
+        CHECK(O.abs[WF_LX] == 0 && O.abs[WF_RX] == 20000, "left stick is Wayfinder's: centred for the game, right untouched");
+        wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 1000 && y == 0, "full right → 1000, 0");
+        ab(WF_LX, 3000); wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 0 && y == 0, "a 9 %% drift → exactly 0 (at least a 10 %% deadzone)");
+        M.dz[0] = 20; ab(WF_LX, 5000); wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 0, "the stick's own bigger deadzone (20 %%) applies");
+        M.dz[0] = 0; ab(WF_LX, 0); ab(WF_LY, 32767); wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 0 && y == 1000, "down → y 1000");
+        key(WF_HOME, 1); wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 0 && y == 0, "Home held: 0 (Home + stick is a shortcut)");
+        pad(0); wf_app_stick(&S, &M, 1, &x, &y);
+        CHECK(x == 0 && y == 0, "a stick that isn't Wayfinder's: 0");
+        pad(0); M.app_stick[1] = 1; M.swap_sticks = 1; ab(WF_RX, 32767); ab(WF_LX, 10000); frame();
+        CHECK(O.abs[WF_RX] == 10000 && O.abs[WF_LX] == 0, "swap + right stick Wayfinder's: the physical right one is taken");
+    }
+
+    // ── 1.3: invert left / right (GitHub #19) ─────────────────────
+    pad(0); M.inv_lx = 1; ab(WF_LX, 20000); ab(WF_LY, 10000); ab(WF_RX, 5000); frame();
+    CHECK(O.abs[WF_LX] == -20000 && O.abs[WF_LY] == 10000 && O.abs[WF_RX] == 5000, "xl: left X mirrored, Y and the right stick untouched");
+    pad(0); M.inv_rx = 1; ab(WF_RX, -32767); frame();
+    CHECK(O.abs[WF_RX] == 32767, "xr: right X mirrored");
+    { wf_map mx; CHECK(wf_parse(&mx, &S, "xl=1 xr=1") == 0 && mx.inv_lx && mx.inv_rx, "xl / xr parse"); }
 
     // ── profile parsing ──────────────────────────────────────────
     pad(0);

@@ -29,7 +29,8 @@ object AmbientSampler {
         while (true) {
             val id = phys ?: run { thread = null; return }
             val t0 = System.nanoTime()
-            runCatching { sample(id) }.onSuccess { c -> if (c != null) send?.invoke("C ${c[0]} ${c[1]} ${c[2]}\n") }
+            // C <avg r g b> <left half r g b> <right half r g b> (1.3: each stick its side — GitHub #15)
+            runCatching { sample(id) }.onSuccess { c -> if (c != null) send?.invoke("C " + c.joinToString(" ") + "\n") }
                 .onFailure { Log.w(TAG, "sample: $it") }
             val spent = (System.nanoTime() - t0) / 1_000_000
             Thread.sleep((80 - spent).coerceIn(5, 80))
@@ -47,19 +48,23 @@ object AmbientSampler {
             val w = le(0); val h = le(4)
             if (w <= 0 || h <= 0 || w > 8192 || h > 8192) return null
             val row = ByteArray(w * 4)
-            var r = 0L; var g = 0L; var b = 0L; var n = 0L
+            val sum = LongArray(6); val cnt = LongArray(2)      // [left r g b, right r g b]
+            val half = w / 2
             for (y in 0 until h) {
                 if (!readFully(input, row)) break
                 if (y % STEP != 0) continue
                 var x = 0
                 while (x < w) {
-                    val o = x * 4
-                    r += row[o].toInt() and 0xFF; g += row[o + 1].toInt() and 0xFF; b += row[o + 2].toInt() and 0xFF
-                    n++; x += STEP
+                    val o = x * 4; val s = if (x < half) 0 else 1
+                    sum[s * 3] += row[o].toLong() and 0xFF; sum[s * 3 + 1] += row[o + 1].toLong() and 0xFF; sum[s * 3 + 2] += row[o + 2].toLong() and 0xFF
+                    cnt[s]++; x += STEP
                 }
             }
-            if (n == 0L) return null
-            return intArrayOf((r / n).toInt(), (g / n).toInt(), (b / n).toInt())
+            val n = cnt[0] + cnt[1]
+            if (n == 0L || cnt[0] == 0L || cnt[1] == 0L) return null
+            return intArrayOf(((sum[0] + sum[3]) / n).toInt(), ((sum[1] + sum[4]) / n).toInt(), ((sum[2] + sum[5]) / n).toInt(),
+                (sum[0] / cnt[0]).toInt(), (sum[1] / cnt[0]).toInt(), (sum[2] / cnt[0]).toInt(),
+                (sum[3] / cnt[1]).toInt(), (sum[4] / cnt[1]).toInt(), (sum[5] / cnt[1]).toInt())
         } finally {
             p.destroy()
         }

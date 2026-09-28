@@ -4,7 +4,7 @@ import android.view.KeyEvent
 import org.json.JSONObject
 
 /**
- * Input layer, phase 2 — what one app's controls become (docs/INPUT_LAYER_PLAN.md §5).
+ * Input layer, phase 2 — what one app's controls become.
  * Buttons are PRINTED buttons (as on the Thor), whatever AYN's layout. Home and Back are never
  * remapped (plan §9, decision 3). Turned into the mapping engine's tokens by [engineTokens]
  * (fx/wfmap.h `wf_parse`); keyboard keys and Wayfinder actions are done by the app ("X" lines).
@@ -167,6 +167,28 @@ data class Chord(val a: ThorButton, val b: ThorButton, val target: RemapTarget) 
     fun has(x: ThorButton) = x == a || x == b
 }
 
+/** 1.3 — what a stick does for this app: itself, or it's Wayfinder's (fx/wfmap.h `apl` / `apr`, the
+ *  game then sees it centred): the mouse pointer, the mouse wheel, or 4 keys. */
+enum class StickUse(val label: String, val caption: String) {
+    STICK("Stick", "as usual"), MOUSE("Mouse", "moves the pointer"), SCROLL("Scroll", "the mouse wheel"), KEYS("4 keys", "arrows or W A S D")
+}
+
+/** 1.3 — a stick's job. [speed] 1..10 (mouse, scroll); [wasd] = W A S D instead of the arrow keys. The
+ *  stick's own shape (deadzone, full at, response) applies, with a deadzone of at least 10 %. */
+data class StickJob(val use: StickUse = StickUse.STICK, val speed: Int = 5, val wasd: Boolean = false) {
+    val isDefault get() = use == StickUse.STICK
+    val summary: String get() = when (use) {
+        StickUse.STICK -> "Stick"; StickUse.MOUSE -> "🖱 Mouse"; StickUse.SCROLL -> "🖱 Scroll"
+        StickUse.KEYS -> if (wasd) "⌨ W A S D" else "⌨ Arrow keys"
+    }
+    fun toJson(): JSONObject = JSONObject().put("u", use.name).put("s", speed).put("k", wasd)
+    companion object {
+        fun fromJson(o: JSONObject?): StickJob = o?.let {
+            StickJob(runCatching { StickUse.valueOf(it.optString("u")) }.getOrDefault(StickUse.STICK), it.optInt("s", 5).coerceIn(1, 10), it.optBoolean("k"))
+        }?.takeIf { !it.isDefault } ?: StickJob()
+    }
+}
+
 /** Round 8: a stick's shape. [dead] % inner deadzone (0..30, hides drift), [full] % where full
  *  deflection is reached (70..100), [curve] 0 linear · 1 precise centre · 2 fast. Values clamped on
  *  read: they also come from shared files and backups. */
@@ -213,25 +235,34 @@ data class PadRemap(
     /** Hold-to-shift (§6l): this button, held, gives the others their [shifted] job; null = none (default). */
     val shift: ThorButton? = null,
     val shifted: Map<ThorButton, RemapTarget> = emptyMap(),
+    /** 1.3 — each PHYSICAL stick's job: itself (default), or the mouse / wheel / 4 keys (Wayfinder plays it). */
+    val jobL: StickJob = StickJob(),
+    val jobR: StickJob = StickJob(),
+    /** 1.3 (GitHub #19): left / right inverted (old camera controls). */
+    val invertLeftX: Boolean = false,
+    val invertRightX: Boolean = false,
 ) {
     val isEmpty get() = this == PadRemap()
     val trigRanged get() = trigStart != 0 || trigFull != 100
     val changes: Int get() = (buttons.keys + fire.keys).size + chords.size +
         listOf(swapSticks, invertLeftY, invertRightY, dpadStick, digitalTriggers, gyro.isOn,
-            !stickL.isDefault, !stickR.isDefault, trigRanged, shift != null).count { it } + (if (shift != null) shifted.size else 0)
+            !stickL.isDefault, !stickR.isDefault, trigRanged, shift != null, !jobL.isDefault, !jobR.isDefault,
+            invertLeftX, invertRightX).count { it } +
+            (if (shift != null) shifted.size else 0)
 
     /** This button is played by the app (ExtEngine): a target the engine can't do alone, a
      *  long / double press, or a chord member. The engine sends its presses as "X" lines. */
     fun byApp(src: ThorButton): Boolean {
         val t = buttons[src]
         return (t != null && t !is RemapTarget.Button && t != RemapTarget.None) ||
-            fire[src]?.hasAlt == true || chords.any { it.has(src) }
+            fire[src]?.hasAlt == true || chords.any { it.has(src) } ||
+            (src.isDpad && fire[src] != null)          // 1.3: a D-pad direction's turbo / toggle: the app does it
     }
 
     fun toJson(): JSONObject = JSONObject()
         .put("b", JSONObject().apply { buttons.forEach { (k, v) -> put(k.name, v.token()) } })
         .put("sw", swapSticks).put("il", invertLeftY).put("ir", invertRightY)
-        .put("dl", dpadStick).put("td", digitalTriggers)
+        .put("dl", dpadStick).put("td", digitalTriggers).put("xl", invertLeftX).put("xr", invertRightX)
         .put("f", JSONObject().apply { fire.forEach { (k, v) -> put(k.name, v.name) } })
         .put("tr", turboHz)
         .apply { if (gyro != GyroSettings()) put("g", gyro.toJson()) }
@@ -241,11 +272,12 @@ data class PadRemap(
         .apply { if (!stickL.isDefault) put("sl", stickL.toJson()); if (!stickR.isDefault) put("sr", stickR.toJson()) }
         .apply { if (trigRanged) put("ts", trigStart).put("tf", trigFull) }
         .apply { shift?.let { put("sh", it.name) }; if (shifted.isNotEmpty()) put("shl", JSONObject().apply { shifted.forEach { (k, v) -> put(k.name, v.token()) } }) }
+        .apply { if (!jobL.isDefault) put("jl", jobL.toJson()); if (!jobR.isDefault) put("jr", jobR.toJson()) }
 
     /** Tokens for the mapping engine (fx/wfmap.h `wf_parse`). */
     fun engineTokens(): String = buildList {
         for (src in SOURCES) {
-            val s = CODE[src] ?: continue
+            val s = outCode(src) ?: continue
             val t = buttons[src]
             val d = when {
                 byApp(src) -> 0xfffe
@@ -257,7 +289,7 @@ data class PadRemap(
         }
         // turbo / toggle on what the game gets (the app's buttons: the app does it — "X" lines)
         for ((src, f) in fire) {
-            if (byApp(src) || f.hasAlt) continue
+            if (byApp(src) || f.hasAlt || src.isDpad) continue
             CODE[src]?.let { add("f0x${it.toString(16)}=${f.ordinal}") }
         }
         if (fire.isNotEmpty() && turboHz != 12) add("tr=${turboHz.coerceIn(2, 30)}")
@@ -265,18 +297,26 @@ data class PadRemap(
         if (dpadStick) add("dl=1")
         if (invertLeftY) add("il=1")
         if (invertRightY) add("ir=1")
+        if (invertLeftX) add("xl=1")
+        if (invertRightX) add("xr=1")
         if (digitalTriggers) add("td=1")
         addAll(stickL.tokens("l")); addAll(stickR.tokens("r"))
         if (trigRanged) { add("tlo=${trigStart.coerceIn(0, 50)}"); add("thi=${trigFull.coerceIn(50, 100)}") }
         shift?.let { b -> CODE[b]?.let { add("sh=0x${it.toString(16)}") } }
+        if (!jobL.isDefault) add("apl=1")
+        if (!jobR.isDefault) add("apr=1")
     }.joinToString(" ")
 
     companion object {
-        /** Buttons that can be remapped (not Home/Back, not the D-pad — see [dpadStick]). */
-        val SOURCES = listOf(
+        /** The pad's buttons that can be remapped (not Home / Back). */
+        val BUTTONS = listOf(
             ThorButton.A, ThorButton.B, ThorButton.X, ThorButton.Y, ThorButton.L1, ThorButton.R1,
             ThorButton.L2, ThorButton.R2, ThorButton.L3, ThorButton.R3, ThorButton.SELECT, ThorButton.START,
         )
+        /** 1.3: the D-pad's directions, each remappable on its own (GitHub #9: browsing). */
+        val DIRS = listOf(ThorButton.UP, ThorButton.DOWN, ThorButton.LEFT, ThorButton.RIGHT)
+        /** Everything that can be remapped: the buttons and the D-pad's directions. */
+        val SOURCES = BUTTONS + DIRS
         /** Printed button → the pad's evdev code in Nintendo ("Odin") numbering (fx/wfmap.h). */
         val CODE = mapOf(
             ThorButton.A to 0x130, ThorButton.B to 0x131, ThorButton.X to 0x133, ThorButton.Y to 0x134,
@@ -285,13 +325,14 @@ data class PadRemap(
         )
         val DPAD = mapOf(ThorButton.UP to 0x220, ThorButton.DOWN to 0x221, ThorButton.LEFT to 0x222, ThorButton.RIGHT to 0x223)
         /** What Wayfinder can press on the game's pad (combos, macros): the buttons + D-pad. */
-        val OUTPUTS = SOURCES + listOf(ThorButton.UP, ThorButton.DOWN, ThorButton.LEFT, ThorButton.RIGHT)
+        val OUTPUTS = BUTTONS + DIRS
         const val MAX_CHORDS = 4
         /** The buttons that can be the shift button (ones games rarely need held). */
         val SHIFTS = listOf(ThorButton.SELECT, ThorButton.START, ThorButton.L3, ThorButton.R3)
-        /** The code wfpad's virtual presses take (`p <code> <0|1>`). */
+        /** A button's or D-pad direction's (0x220..0x223) code in the engine: what wfpad's virtual presses
+         *  take (`p <code> <0|1>`), and a source's id. */
         fun outCode(b: ThorButton): Int? = CODE[b] ?: DPAD[b]
-        val BY_CODE = CODE.entries.associate { (k, v) -> v to k }
+        val BY_CODE = (CODE + DPAD).entries.associate { (k, v) -> v to k }
 
         fun fromJson(o: JSONObject?): PadRemap? {
             o ?: return null
@@ -324,7 +365,7 @@ data class PadRemap(
                 val x = runCatching { ThorButton.valueOf(j.getString("a")) }.getOrNull()
                 val y = runCatching { ThorButton.valueOf(j.getString("b")) }.getOrNull()
                 val t = RemapTarget.fromToken(j.optString("t"))
-                if (x == null || y == null || t == null || x == y || x !in SOURCES || y !in SOURCES) null else Chord(x, y, t)
+                if (x == null || y == null || t == null || x == y || x !in BUTTONS || y !in BUTTONS) null else Chord(x, y, t)
             }.take(MAX_CHORDS)
             return PadRemap(buttons, o.optBoolean("sw"), o.optBoolean("il"), o.optBoolean("ir"),
                 o.optBoolean("dl"), o.optBoolean("td"), fire, o.optInt("tr", 12).coerceIn(2, 30),
@@ -335,8 +376,10 @@ data class PadRemap(
                 shifted = o.optJSONObject("shl")?.let { m -> buildMap {
                     m.keys().forEach { k ->
                         val src = runCatching { ThorButton.valueOf(k) }.getOrNull() ?: return@forEach
-                        if (src in SOURCES) RemapTarget.fromToken(m.getString(k))?.let { put(src, it) }
-                    } } } ?: emptyMap()).takeIf { !it.isEmpty }
+                        if (src in BUTTONS) RemapTarget.fromToken(m.getString(k))?.let { put(src, it) }
+                    } } } ?: emptyMap(),
+                jobL = StickJob.fromJson(o.optJSONObject("jl")), jobR = StickJob.fromJson(o.optJSONObject("jr")),
+                invertLeftX = o.optBoolean("xl"), invertRightX = o.optBoolean("xr")).takeIf { !it.isEmpty }
         }
     }
 }

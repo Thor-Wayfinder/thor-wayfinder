@@ -20,8 +20,7 @@ import app.wayfinder.lights.StickLights
  * Every shortcut the quick panel can show (Controller → Quick panel shortcuts): Wayfinder's
  * own, Android's quick settings, and the Thor switches AYN's drawer has. The user picks
  * which, and in what order. Switches that Android or AYN apply by themselves are written
- * through root (`settings put …`, `cmd …`) — the same keys their own tiles write (see
- * docs/THOR_PLATFORM_NOTES.md §2 for the AYN keys).
+ * through root (`settings put …`, `cmd …`) — the same keys their own tiles write.
  */
 object PanelShortcuts {
     enum class Group(val title: String) { WAYFINDER("Wayfinder"), ANDROID("Android"), THOR("Thor") }
@@ -35,13 +34,16 @@ object PanelShortcuts {
         "deck" to Info(Icons.Rounded.Keyboard, "Keyboard & mouse", "Puts keys and a trackpad on the other screen, for the game — for PC games and apps that need a keyboard or mouse.", Group.WAYFINDER),
         "controls" to Info(Icons.Rounded.Tune, "Game controls", "Opens the buttons, gyro and macros of the game you're playing — change them without leaving the game. Press again (or B) to go back to it.", Group.WAYFINDER),
         "lock" to Info(Icons.Rounded.Lock, "Controller lock", "Keeps the controller on the top or the bottom screen, so touching the other screen doesn't move it. Each press switches (and, unless the controller stays where you send it, the third press unlocks it). More choices in Controller.", Group.WAYFINDER),
-        "fps" to Info(Icons.Rounded.Timeline, "Frame rate", "Shows or hides a small frames-per-second counter over the game.", Group.WAYFINDER),
+        "fps" to Info(Icons.Rounded.Timeline, "Frame rate", "A small counter over the game — each press: frames per second, then + battery, then + temperatures, then hidden.", Group.WAYFINDER),
         "shot" to Info(Icons.Rounded.PhotoCamera, "Screenshot", "Takes a screenshot — of the top, the bottom or both screens (you choose which in Wayfinder).", Group.WAYFINDER),
         "recents" to Info(Icons.Rounded.GridView, "Recent apps", "Opens Android's recent-apps view on the screen with the controller.", Group.WAYFINDER),
         "clear" to Info(Icons.Rounded.DeleteSweep, "Close background apps", "Closes the apps running in the background to free memory. The apps showing on the two screens stay open.", Group.WAYFINDER),
         "bottomoff" to Info(Icons.Rounded.DarkMode, "Bottom screen off", "Turns the bottom screen off to save battery while the top keeps running. Touch it to turn it back on.", Group.WAYFINDER),
+        "guide" to Info(Icons.Rounded.MenuBook, "Guide & notes", "The game's guide page and your notes — on the other screen, or beside the game when there's only one.", Group.WAYFINDER),
+        "sleep" to Info(Icons.Rounded.Bedtime, "Sleep", "Puts the Thor to sleep — both screens off, like a press on the power button.", Group.WAYFINDER),
         "keepon" to Info(Icons.Rounded.Coffee, "Stay awake", "The screens don't turn off on their own — for maps, videos, guides. The power button still works.", Group.WAYFINDER),
         "speaker" to Info(Icons.Rounded.GraphicEq, "Speaker sound fix", "Makes the built-in speakers clearer and louder (Wayfinder's equalizer). Headphones are left alone.", Group.WAYFINDER),
+        "boost" to Info(Icons.Rounded.VolumeUp, "Volume boost", "Louder than the maximum: off, +6 dB, +12 dB (a limiter keeps it clean). Every output — start low with headphones.", Group.WAYFINDER),
         "speakereq" to Info(Icons.Rounded.Equalizer, "Speaker EQ", "The speaker fix's equalizer and loudness on or off — hear the difference (the stereo widener stays as set).", Group.WAYFINDER),
         "lights" to Info(Icons.Rounded.Lightbulb, "Stick light settings", "Opens the stick-lights page: colours, effects, lighting per game.", Group.WAYFINDER),
         "lightsonoff" to Info(Icons.Rounded.FlashlightOn, "Stick lights on/off", "Turns the lights around the sticks off — and back on to the lighting you had.", Group.WAYFINDER),
@@ -64,7 +66,10 @@ object PanelShortcuts {
         "cast" to Info(Icons.Rounded.Cast, "Cast", "Opens Android's cast settings, to show the screen on a TV.", Group.ANDROID),
         // ── Thor (AYN's drawer and quick settings)
         "perf" to Info(Icons.Rounded.Speed, "Performance", "How hard the chip may work: Standard, Medium or High (each press moves to the next). Higher = smoother games, more heat and battery.", Group.THOR),
-        "fan" to Info(Icons.Rounded.Air, "Fan", "Fan behaviour: Quiet, Smart (follows the temperature) or Sports (always strong, coolest) — each press moves to the next.", Group.THOR),
+        "fan" to Info(Icons.Rounded.Air, "Fan", "Fan behaviour: Quiet, Smart (follows the temperature), Sports (always strong, coolest) or Custom (your own curve) — each press moves to the next.", Group.THOR),
+        "gyro" to Info(Icons.Rounded.ScreenRotation, "Gyro", "The game's gyro on or off (set it up in Game controls → Gyro).", Group.WAYFINDER),
+        "aynmouse" to Info(Icons.Rounded.Mouse, "Mouse mode", "AYN's virtual mouse on or off: once on, click a stick (L3 / R3) and it moves a pointer — for GameNative, web pages, apps made for touch.", Group.THOR),
+        "fancurve" to Info(Icons.Rounded.Thermostat, "Fan curve", "Opens AYN's fan-curve editor: how fast the fan spins at each temperature. The Custom fan mode follows it.", Group.THOR),
         "hz" to Info(Icons.Rounded.Refresh, "Refresh rate", "Screen refresh rate: 60 Hz saves battery, 120 Hz is smoother.", Group.THOR),
         "style" to Info(Icons.Rounded.SportsEsports, "Face buttons", "Nintendo (as printed, A on the right) or Xbox (A at the bottom) for every app — the same setting as the Controller page. One game differently: Game controls.", Group.THOR),
         "trigger" to Info(Icons.Rounded.Gamepad, "L2 / R2 mode", "How L2 / R2 talk to games: Analog (how far you press), Digital (on/off, like a button) or Both.", Group.THOR),
@@ -83,6 +88,22 @@ object PanelShortcuts {
     /** Bumps on every change: a second change after "Keep" can be kept too. */
     var touchCount by androidx.compose.runtime.mutableIntStateOf(0)
     fun touch(what: String) { if (what !in touched) touched.add(what); touchCount++ }
+    /** 1.3 (GitHub #25): the bottom screen changed from the panel — which closes it (the panel lives on
+     *  that screen), so the NEXT panel for the same app still offers "Keep for <game>" (10 min). */
+    @Volatile private var bottomApp: String? = null
+    @Volatile private var bottomAt = 0L
+    fun touchBottom() {
+        touch("bottomoff"); bottomApp = ForegroundAppService.panelApp(); bottomAt = android.os.SystemClock.elapsedRealtime()
+    }
+    /** A new panel: forget what the last one changed, except a recent bottom-screen change for [app]. */
+    fun startPanel(app: String?) {
+        touched.clear(); touchCount = 0
+        if (app != null && app == bottomApp && android.os.SystemClock.elapsedRealtime() - bottomAt < 10 * 60_000L) {
+            touched.add("bottomoff"); touchCount = 1
+        }
+    }
+    /** Kept (or "Use my usual"): nothing left to offer. */
+    fun bottomKept() { bottomApp = null }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("thor_panel", Context.MODE_PRIVATE)
     fun chosen(ctx: Context): List<String> {
@@ -142,9 +163,21 @@ object PanelShortcuts {
                 touch("perf"); QuickSettings.cyclePerformance(ctx); refresh(350); refresh(2000) },
             "fan" to PanelTile(ic("fan"), "Fan", FanMode.values().firstOrNull { it.value == fan }?.label ?: "Custom", fan != 4) {
                 touch("fan"); QuickSettings.cycleFan(ctx); refresh(350) },
+            "fancurve" to PanelTile(ic("fancurve"), "Fan curve", null, false) { after(300) { QuickSettings.openFanCurve(ctx) } },
+            "gyro" to (GyroEngine.configuredForCurrent != null).let { set ->
+                val on = set && !GyroEngine.pausedByUser
+                PanelTile(ic("gyro"), "Gyro", if (!set) "Not set up" else onOff(on), on) { ActionRegistry.perform(ThorAction.GYRO_TOGGLE); refresh(300) } },
+            "aynmouse" to sys("global_gamepad_to_mouse_mode", 0).let { m ->
+                PanelTile(ic("aynmouse"), "Mouse mode", onOff(m == 1), m == 1) { after(300) { ActionRegistry.perform(ThorAction.AYN_MOUSE) } } },
             "hz" to PanelTile(ic("hz"), "Refresh rate", "${hz.toInt()} Hz", hz > 90f) { touch("hz"); QuickSettings.toggleRefresh(ctx); refresh(350) },
-            "fps" to PanelTile(ic("fps"), "Frame rate", if (AppSettings.fpsCounter) "Shown" else "Hidden", AppSettings.fpsCounter) {
-                AppSettings.setFpsCounterOn(!AppSettings.fpsCounter); ForegroundAppService.reapplyFps(); refresh(0) },
+            // 1.3: Hidden → FPS → + battery → + temperatures (the extra stats were hard to find)
+            "fps" to PanelTile(ic("fps"), "Frame rate", if (!AppSettings.fpsCounter) "Hidden" else listOf("FPS", "+ battery", "+ temps")[AppSettings.fpsLevel.coerceIn(0, 2)], AppSettings.fpsCounter) {
+                when {
+                    !AppSettings.fpsCounter -> { AppSettings.setFpsLevelTo(0); AppSettings.setFpsCounterOn(true) }
+                    AppSettings.fpsLevel < 2 -> AppSettings.setFpsLevelTo(AppSettings.fpsLevel + 1)
+                    else -> { AppSettings.setFpsCounterOn(false); AppSettings.setFpsLevelTo(0) }
+                }
+                ForegroundAppService.reapplyFps(); refresh(0) },
             "lock" to PanelTile(ic("lock"), "Controller lock",
                 if (AppSettings.focusSticky && !AppSettings.focusLockEnabled) "Unlocked"
                 else if (!AppSettings.focusLockEnabled) "Off"
@@ -167,10 +200,15 @@ object PanelShortcuts {
             "clear" to PanelTile(ic("clear"), "Close background", null, false) { after(400) { ActionRegistry.perform(ThorAction.CLEAR_BACKGROUND) } },
             "swap" to PanelTile(ic("swap"), "Move / swap apps", null, false) { after(400) { ActionRegistry.perform(ThorAction.SWAP_OR_SEND) } },
             "bottomoff" to PanelTile(ic("bottomoff"), "Bottom screen", if (bottomOff) "Off" else "On", bottomOff) {
+                touchBottom()   // 1.3 (GitHub #25): "Keep for <game>" remembers it
                 // Turning it off closes the panel first (it lives on that screen).
                 if (!bottomOff) after(300) { ForegroundAppService.setScreenMode(1) } else { ForegroundAppService.setScreenMode(0); refresh(300) } },
+            "sleep" to PanelTile(ic("sleep"), "Sleep", null, false) { after(300) { ActionRegistry.perform(ThorAction.SLEEP) } },
+            "guide" to PanelTile(ic("guide"), "Guide & notes", null, false) { after(400) { ActionRegistry.perform(ThorAction.GUIDE) } },
             "keepon" to PanelTile(ic("keepon"), "Stay awake", onOff(keptOn), keptOn) {
                 ActionRegistry.perform(ThorAction.TOGGLE_KEEP_AWAKE); refresh(300) },
+            "boost" to PanelTile(ic("boost"), "Volume boost", if (SpeakerTune.boost == 0) "Off" else "+${SpeakerTune.boost} dB", SpeakerTune.boost > 0) {
+                SpeakerTune.setVolumeBoost(when (SpeakerTune.boost) { 0 -> 6; 6 -> 12; else -> 0 }); refresh(0) },
             "speaker" to PanelTile(ic("speaker"), "Speaker fix", onOff(SpeakerTune.enabled), SpeakerTune.enabled) {
                 SpeakerTune.setOn(!SpeakerTune.enabled); refresh(0) },
             "speakereq" to PanelTile(ic("speakereq"), "Speaker EQ",
@@ -238,12 +276,21 @@ object QuickSettings {
     }
 
     fun cycleFan(ctx: Context) {
-        // Quiet → Smart → Sports → Quiet: one tap too many must never turn the fan OFF
+        // Quiet → Smart → Sports → Custom → Quiet: one tap too many must never turn the fan OFF
         // mid-game (Off stays in AYN's own settings for whoever really wants it).
-        val order = listOf(FanMode.QUIET, FanMode.SMART, FanMode.SPORTS).map { it.value }
+        val order = listOf(FanMode.QUIET, FanMode.SMART, FanMode.SPORTS, FanMode.CUSTOM).map { it.value }
         val cur = Settings.System.getInt(ctx.contentResolver, "fan_mode", 4)
         val next = order[(order.indexOf(cur).coerceAtLeast(-1) + 1) % order.size]
+        PerfProfiles.markOwn(next)
         exec("settings put system fan_mode $next")
+    }
+
+    /** AYN's fan-curve editor (exported), on the top screen. */
+    fun openFanCurve(ctx: Context) {
+        runCatching {
+            ctx.startActivity(Intent("action_fan_temp_control_curve_config").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                android.app.ActivityOptions.makeBasic().setLaunchDisplayId(android.view.Display.DEFAULT_DISPLAY).toBundle())
+        }.onFailure { ForegroundAppService.pill("AYN's fan curve isn't on this device", android.view.Display.DEFAULT_DISPLAY, 2500) }
     }
 
     fun toggleRefresh(ctx: Context) {

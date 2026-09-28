@@ -3,7 +3,7 @@ package app.wayfinder.deck
 import android.view.KeyEvent as K
 
 /**
- * #27 input deck — the built-in pads. A pad is rows of [DeckKey]s; a key sends a key
+ * Input deck — the built-in pads. A pad is rows of [DeckKey]s; a key sends a key
  * code to the game (held while the finger is down, so movement keys work), types a
  * snippet, or runs a deck action. Pads and ideas inspired by what dual-screen
  * players use; RetroArch's pad uses its DEFAULT hotkeys, so it works with zero setup.
@@ -126,6 +126,19 @@ val VIDEO_PAD = DeckPad(
         listOf(k("⏮ 10s", K.KEYCODE_J, caption = "J"), k("Space", K.KEYCODE_SPACE, caption = "Pause"), k("10s ⏭", K.KEYCODE_L, caption = "L")),
         listOf(k("Fullscreen", K.KEYCODE_F, caption = "F"), k("Subtitles", K.KEYCODE_C, caption = "C"), k("Speed −", K.KEYCODE_COMMA, caption = "<"), k("Speed +", K.KEYCODE_PERIOD, caption = ">")),
         listOf(act("🔉", DeckAction.VOLUME_DOWN, "Volume −"), act("🔇", DeckAction.MUTE, "Mute"), act("🔊", DeckAction.VOLUME_UP, "Volume +")),
+    ),
+)
+
+/** 1.3 (GitHub #26): the PC keys, simple — bigger keys, only what typing needs (like the Wayfinder keyboard).
+ *  Same pad id: the Full / Simple chip on the deck switches between them ([DeckSettings.simpleKeys]). */
+val PC_SIMPLE = DeckPad(
+    PAD_PC, "PC keys",
+    listOf(
+        (1..9).map { k("$it", K.KEYCODE_0 + it) } + listOf(k("0", K.KEYCODE_0), k("⌫", K.KEYCODE_DEL, 1.5f)),
+        letters("qwertyuiop") + listOf(k("Esc", K.KEYCODE_ESCAPE, 1.2f)),
+        letters("asdfghjkl") + listOf(k("Enter", K.KEYCODE_ENTER, 1.8f)),
+        listOf(mod(Modifier.SHIFT, 1.6f)) + letters("zxcvbnm") + listOf(k(",", K.KEYCODE_COMMA), k(".", K.KEYCODE_PERIOD), k("↑", K.KEYCODE_DPAD_UP)),
+        listOf(k("Tab", K.KEYCODE_TAB, 1.3f), k("Space", K.KEYCODE_SPACE, 5.2f), k("←", K.KEYCODE_DPAD_LEFT), k("↓", K.KEYCODE_DPAD_DOWN), k("→", K.KEYCODE_DPAD_RIGHT)),
     ),
 )
 

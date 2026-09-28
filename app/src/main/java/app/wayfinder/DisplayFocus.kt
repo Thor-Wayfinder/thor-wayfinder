@@ -4,7 +4,7 @@ import android.app.ActivityManager
 import android.os.IBinder
 
 /**
- * #17 — move Android's input focus (the "focused display" that receives controller
+ * Move Android's input focus (the "focused display" that receives controller
  * / key input) to a given display. ROOT-SIDE ONLY: runs inside an app_process VM
  * (the persistent [InputMonitorTool] helper, or [FocusTool] for one-shot tests),
  * where hidden framework calls resolve freely.

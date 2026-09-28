@@ -9,7 +9,7 @@ import androidx.compose.runtime.setValue
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** #15 — two apps opened together, each on its screen (null = leave that screen as is). */
+/** Two apps opened together, each on its screen (null = leave that screen as is). */
 data class AppPair(val id: Long, val top: String?, val bottom: String?) {
     fun toJson(): JSONObject = JSONObject().put("id", id).put("top", top ?: "").put("bottom", bottom ?: "")
 
@@ -21,7 +21,7 @@ data class AppPair(val id: Long, val top: String?, val bottom: String?) {
 }
 
 /**
- * #15 app pairs + #16 restore the screens after a restart. Pairs are saved from what's
+ * App pairs + restore the screens after a restart. Pairs are saved from what's
  * on the screens (plug and play: set it up once, save it). The last layout is recorded
  * continuously; at boot, the one from BEFORE the restart is kept aside ([bootLayout])
  * before anything new is recorded, then reopened if the user turned that on.

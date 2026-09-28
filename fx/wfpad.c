@@ -29,7 +29,9 @@
 //                         "J <type> <code> <value>"  an event withheld from the game (gate):
 //                                             for Wayfinder's shortcuts; keys as PRINTED codes
 //                         "X <code> <1|0>"    a button mapped to a keyboard key / action
-//                                             (printed code): Wayfinder performs it
+//                                             (printed code; 0x220..0x223 = a D-pad direction): Wayfinder performs it
+//                         "T <0|1> <x> <y>"   1.3: a stick that is Wayfinder's (0 left, 1 right): its
+//                                             shaped position, −1000..1000, at most every 8 ms
 //                         "M ok|bad"          answer to a profile line
 //                         "E <reason>"        fatal; then exit: 2 = no source for 10 s,
 //                                             4 = takeover: AYN's pad never went away,
@@ -81,6 +83,9 @@ static void out(const char *fmt, ...) {
     for (char *c = b; *c; c++) if ((unsigned char)*c < 0x20 || *c == 0x7f) *c = ' ';
     fputs(b, stdout); putchar('\n'); fflush(stdout);
 }
+
+static void app_resend(void);
+static void ext_release(void);
 
 static void drop_source(void) { if (src >= 0) { ioctl(src, EVIOCGRAB, 0); close(src); src = -1; } }
 static void drop_clone(void) { if (ufd >= 0) { ioctl(ufd, UI_DEV_DESTROY); close(ufd); ufd = -1; } }
@@ -201,7 +206,7 @@ static void init_state(int fd) {
     for (int i = 0; i < S.na; i++) S.abs[S.axes[i]] = S.info[S.axes[i]].value;
     // keys already held (e.g. AYN rebuilt its pad mid-press): through the engine, so a held
     // Home opens the gate as it should
-    S.shift = M.shift;
+    S.shift = M.shift; S.back_free = M.back_free;
     ioctl(fd, EVIOCGKEY(sizeof ks), ks);
     for (int i = 0; i < S.nk; i++) if (TEST(S.keys[i], ks)) { int p; wf_event(&S, EV_KEY, S.keys[i], 1, &p); }
 }
@@ -210,12 +215,21 @@ static void init_state(int fd) {
  *  toggle latches, the gyro stick, its held virtual presses. A plain re-init wiped them: the gyro
  *  stayed dead until it moved, macro keys were silently released (review 2026-09-25). */
 static void resync_state(int fd) {
+    ext_release();
     unsigned char latch[WF_NK], vkey[WF_NK];
     memcpy(latch, S.latch, sizeof latch); memcpy(vkey, S.vkey, sizeof vkey);
     int gs = S.gyro_stick, gx = S.gyro_x, gy = S.gyro_y;
     init_state(fd);
     memcpy(S.latch, latch, sizeof latch); memcpy(S.vkey, vkey, sizeof vkey);
     S.gyro_stick = gs; S.gyro_x = gx; S.gyro_y = gy;
+}
+
+/** 1.3: before the source state is thrown away (pad rebuilt, events dropped): a release for every button
+ *  and D-pad direction Wayfinder plays that is down now, so no keyboard key stays held. */
+static void ext_release(void) {
+    for (int i = 0; i < S.nk; i++) { int p = S.keys[i]; if (S.key[p] && M.keymap[p] == WF_EXT) out("X %d 0", p); }
+    static const int DIRS[4] = { WF_HAT_UP, WF_HAT_DOWN, WF_HAT_LEFT, WF_HAT_RIGHT };
+    for (int i = 0; i < 4; i++) if (M.keymap[DIRS[i]] == WF_EXT && wf_dir_on(S.abs[WF_HX], S.abs[WF_HY], DIRS[i])) out("X %d 0", DIRS[i]);
 }
 
 /** Write the copy's new state: only what changed (everything after a fresh copy). */
@@ -241,7 +255,23 @@ static void emit(void) {
 }
 
 /** The source is gone: the game sees everything released (no stuck keys across AYN rebuilds). */
-static void source_rest(void) { wf_state_rest(&S); emit(); }
+static void source_rest(void) { ext_release(); wf_state_rest(&S); emit(); }
+
+/** 1.3 (GitHub #4): AYN re-emits every EXTERNAL pad under its own ids (2020:0111) with the external's
+ *  name — that copy is the player's controller, never AYN's pad. True if a non-AYN device has [name]. */
+static int foreign_name(const char *name) {
+    DIR *d = opendir("/sys/class/input"); if (!d) return 0;
+    struct dirent *e; int hit = 0; char p[160], v[128];
+    while (!hit && (e = readdir(d))) {
+        if (strncmp(e->d_name, "event", 5)) continue;
+        snprintf(p, sizeof p, "/sys/class/input/%s/device/id/vendor", e->d_name);
+        if (read_sys(p, v, sizeof v) < 0 || strtol(v, NULL, 16) == 0x2020) continue;
+        snprintf(p, sizeof p, "/sys/class/input/%s/device/name", e->d_name);
+        if (read_sys(p, v, sizeof v) == 0 && !strcmp(v, name)) hit = 1;
+    }
+    closedir(d);
+    return hit;
+}
 
 /** Look for AYN's (new) pad: same vendor as the copy, not the copy itself. Grab it. */
 static int find_source(void) {
@@ -254,6 +284,13 @@ static int find_source(void) {
         if (read_sys(p, v, sizeof v) == 0 && !strcmp(v, phys)) continue;
         snprintf(p, sizeof p, "/sys/class/input/%s/device/id/vendor", e->d_name);
         if (read_sys(p, v, sizeof v) < 0 || strtol(v, NULL, 16) != clone_id.vendor) continue;
+        {   // an external pad's AYN copy (2020:0111 under a name a non-AYN device has): not AYN's pad
+            char nm[128];
+            snprintf(p, sizeof p, "/sys/class/input/%s/device/id/product", e->d_name);
+            long prod = read_sys(p, v, sizeof v) == 0 ? strtol(v, NULL, 16) : 0;
+            snprintf(p, sizeof p, "/sys/class/input/%s/device/name", e->d_name);
+            if (prod != 0x0112 && read_sys(p, nm, sizeof nm) == 0 && foreign_name(nm)) continue;
+        }
         snprintf(p, sizeof p, "/dev/input/%s", e->d_name);
         int fd = open_source(p);                  // may fail for a moment: node not made yet
         if (fd < 0) continue;
@@ -311,13 +348,32 @@ static int command(char *line) {
         if (wf_parse(&m, &S, line + 1) == 0) {
             M = m; memset(S.latch, 0, sizeof S.latch); memset(S.vkey, 0, sizeof S.vkey);
             // a new shift button (or none): the gate follows what's held now
-            S.shift = M.shift; S.shift_tap_until = 0;
-            S.gated = S.key[WF_HOME] || S.key[WF_BACK] || (S.shift && S.key[S.shift]);
+            S.shift = M.shift; S.shift_tap_until = 0; S.back_free = M.back_free;
+            S.gated = wf_gate(&S);
             emit(); out("M ok");
+            app_resend();                              // Wayfinder released everything: say where the sticks are
         }
         else out("M bad");
     }
     return 1;
+}
+
+/** 1.3 — the sticks that are Wayfinder's: their position, when it changed ("T" lines). A move is
+ *  sent at most every 8 ms (the app samples it for the mouse / wheel); a return to 0 at once. */
+static int app_last[2][2];
+/** The next [app_sticks] sends both positions again (after Wayfinder released everything). */
+static void app_resend(void) { app_last[0][0] = app_last[1][0] = -99999; }
+static long app_at[2];
+static int app_pending;
+static void app_sticks(long t_us) {
+    app_pending = 0;
+    for (int side = 0; side < 2; side++) {
+        int x, y; wf_app_stick(&S, &M, side, &x, &y);
+        if (x == app_last[side][0] && y == app_last[side][1]) continue;
+        if ((x || y) && t_us - app_at[side] < 8000) { app_pending = 1; continue; }
+        app_last[side][0] = x; app_last[side][1] = y; app_at[side] = t_us;
+        out("T %d %d %d", side, x, y);
+    }
 }
 
 int main(int argc, char **argv) {
@@ -374,7 +430,7 @@ int main(int argc, char **argv) {
     for (;;) {
         struct pollfd pf[3] = { { .fd = 0, .events = POLLIN }, { .fd = ino, .events = POLLIN }, { .fd = src, .events = POLLIN } };
         int turbo = src >= 0 && (wf_turbo_active(&S, &M) || S.shift_tap_until);   // a shift tap needs its release on time
-        int tmo = turbo ? 10 : src < 0 || mismatch_since || both_since ? 250 : 1000;
+        int tmo = turbo ? 10 : app_pending ? 8 : src < 0 || mismatch_since || both_since ? 250 : 1000;
         int r = poll(pf, src >= 0 ? 3 : 2, tmo);
         if (r < 0) { if (errno == EINTR) continue; break; }
         if (pf[0].revents & (POLLIN | POLLHUP | POLLERR)) {
@@ -413,8 +469,13 @@ int main(int argc, char **argv) {
                     if (dropped || (e->type != EV_KEY && e->type != EV_ABS)) continue;
                     int p;
                     if (e->type == EV_KEY) S.now_ms = now_us() / 1000;   // before: the shift tap is timed from it
+                    int hat_old = e->type == EV_ABS && (e->code == WF_HX || e->code == WF_HY) ? S.abs[e->code] : 0;
                     if (wf_event(&S, e->type, e->code, e->value, &p)) out("J %d %d %d", e->type, p, e->value);
                     if (e->type == EV_KEY && wf_ext_event(&S, &M, p, e->value)) out("X %d %d", p, e->value);
+                    if (e->type == EV_ABS && (e->code == WF_HX || e->code == WF_HY)) {   // 1.3: D-pad directions Wayfinder plays
+                        int dc[4], dv[4], dn = wf_dir_ext(&S, &M, e->code, hat_old, e->value, dc, dv);
+                        for (int j = 0; j < dn; j++) out("X %d %d", dc[j], dv[j]);
+                    }
                     if ((e->type == EV_KEY && p >= 0 && p < 0x300 && watch_key[p] && e->value != 2) ||
                         (e->type == EV_ABS && e->code < 0x40 && watch_abs[e->code])) out("V %d %d %d", e->type, p, e->value);
                     if (e->type == EV_KEY) { S.now_ms = now_us() / 1000; wf_fire_edge(&S, &M, p, e->value); }
@@ -423,6 +484,7 @@ int main(int argc, char **argv) {
         }
         long t = now_us();
         if (turbo) { S.now_ms = t / 1000; emit(); }       // turbo: the output flips with time
+        app_sticks(t);                                    // 1.3: sticks that are Wayfinder's
         if (S.shift_tap_until && S.now_ms >= S.shift_tap_until) S.shift_tap_until = 0;   // the tap is over (released above)
         // Emergency exit: Home + Back held together for 5 s → the layer turns itself off.
         if (src >= 0 && S.key[WF_HOME] && S.key[WF_BACK]) {

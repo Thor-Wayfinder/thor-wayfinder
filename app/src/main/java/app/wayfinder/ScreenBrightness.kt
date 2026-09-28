@@ -3,7 +3,7 @@ package app.wayfinder
 import android.util.Log
 
 /**
- * #11 Per-screen brightness, done the way AYN's drawer does it: DisplayManager's
+ * Per-screen brightness, done the way AYN's drawer does it: DisplayManager's
  * per-display `setBrightness(displayId, 0..1)` (the bottom screen has no settings key of
  * its own). That API needs a system permission, so it runs as root: in the input helper
  * ("L <display> <value>", fast, for sliders) or as a one-shot tool

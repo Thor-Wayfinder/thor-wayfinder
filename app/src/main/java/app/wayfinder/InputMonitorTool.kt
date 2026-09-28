@@ -10,13 +10,13 @@ import java.io.FileInputStream
  * devices and streams events to the app over an abstract LocalSocket. This is
  * the ONLY way to see the D-pad/stick (MotionEvents), multi-finger touch, and
  * per-screen touch globally — the accessibility service can't. Powers global
- * controller chords (#17/#26), touch gestures (#8), and per-screen touch-idle (#9).
+ * controller chords, touch gestures, and per-screen touch-idle.
  *
  * Launched (backgrounded) by [InputMonitor] via pservice:
  *   CLASSPATH=<apk> app_process /system/bin app.wayfinder.InputMonitorTool \
  *       <socketName> uid:<appUid> <matcher0> <matcher1> ...   (exact device name, or "@controller")
  * Both ends check the other's uid (SO_PEERCRED): the app accepts only uid 0, the helper
- * only the app's uid. See docs/RELEASE_CHECKLIST.md §1.
+ * only the app's uid.
  * Each line sent: "<devIndex> <type> <code> <value>\n". Exits when the socket dies.
  */
 object InputMonitorTool {
@@ -57,7 +57,7 @@ object InputMonitorTool {
             if (first == "H") break
         }
 
-        // #20 FPS counter replies ride the same stream as the input events.
+        // FPS counter replies ride the same stream as the input events.
         FpsSampler.send = { l -> try { synchronized(lock) { out.write(l.toByteArray()); out.flush() } } catch (_: Exception) {} }
         AmbientSampler.send = FpsSampler.send
         // Input layer (phase 0): a previous helper may have died with AYN's pad disabled, its
@@ -171,10 +171,13 @@ object InputMonitorTool {
     private fun resolve(matcher: String): String? {
         val nodes = java.io.File("/sys/class/input").listFiles { f -> f.name.startsWith("event") } ?: return null
         var first: String? = null
+        val foreign = if (matcher == "@controller") AynPad.foreignNames() else emptySet()
         for (n in nodes.sortedBy { it.name.removePrefix("event").toIntOrNull() ?: 0 }) {
             val name = runCatching { java.io.File(n, "device/name").readText().trim() }.getOrNull() ?: continue
+            // the Thor's pad (or the layer's copy of it) — not an external pad's copy (GitHub #4)
             val hit = if (matcher == "@controller")
-                CONTROLLER.containsMatchIn(name) && !name.contains("Mouse", ignoreCase = true)
+                CONTROLLER.containsMatchIn(name) && !name.contains("Mouse", ignoreCase = true) &&
+                    (runCatching { java.io.File(n, "device/phys").readText().trim() }.getOrDefault("") == PadLayer.CLONE_PHYS || AynPad.isAyn(n, foreign))
             else name == matcher
             if (!hit) continue
             if (matcher != "@controller") return "/dev/input/${n.name}"

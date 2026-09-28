@@ -8,7 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * #26 — the Steam-controller-style button configurator: data model + storage.
+ * The Steam-controller-style button configurator: data model + storage.
  *
  * A [Binding] maps a [Trigger] to a [ThorAction]. Two trigger shapes:
  *  - SYSTEM-BUTTON presses — [ThorButton.HOME] / [ThorButton.BACK] with tap, double,
@@ -18,9 +18,9 @@ import org.json.JSONObject
  *    modifier is Home/Back it is swallowed too (games never see the chord — the
  *    Steam-button model); a gamepad modifier (R3…) still reaches the game with no
  *    added latency, but the second button is swallowed. The D-pad can't be
- *    swallowed (it's a HAT axis, not a key — see docs/THOR_INPUT_MAP.md).
+ *    swallowed (it's a HAT axis, not a key).
  */
-enum class ThorButton(val label: String, val keyCode: Int, val hatAxis: Int = -1, val hatValue: Int = 0) {
+enum class ThorButton(val printed: String, val keyCode: Int, val hatAxis: Int = -1, val hatValue: Int = 0) {
     A("A", KeyEvent.KEYCODE_BUTTON_A), B("B", KeyEvent.KEYCODE_BUTTON_B),
     X("X", KeyEvent.KEYCODE_BUTTON_X), Y("Y", KeyEvent.KEYCODE_BUTTON_Y),
     L1("L1", KeyEvent.KEYCODE_BUTTON_L1), R1("R1", KeyEvent.KEYCODE_BUTTON_R1),
@@ -34,6 +34,9 @@ enum class ThorButton(val label: String, val keyCode: Int, val hatAxis: Int = -1
     // 40 %. Only as the 2nd button of a Home/Back combo — "Home + right stick ↑".
     RS_UP("Right stick ↑", -1), RS_DOWN("Right stick ↓", -1), RS_LEFT("Right stick ←", -1), RS_RIGHT("Right stick →", -1),
     LS_UP("Left stick ↑", -1), LS_DOWN("Left stick ↓", -1), LS_LEFT("Left stick ←", -1), LS_RIGHT("Left stick →", -1);
+
+    /** 1.3 (GitHub #27): the name on screen — the face buttons can be named the Xbox way ([ButtonNames]). */
+    val label: String get() = ButtonNames.of(this)
 
     /** The button in words, for hints ("D-pad up", "Right stick left"): the arrow glyphs were
      *  hard to read in the on-screen hints (2026-09-24). */
@@ -101,7 +104,7 @@ object ControlsStore {
         Binding(Trigger(ThorButton.R1, modifier = ThorButton.HOME), ThorAction.SCREENSHOT),
         // Rev 3 — the input deck (keys / trackpad / pads for the game) on Home + Y.
         Binding(Trigger(ThorButton.Y, modifier = ThorButton.HOME), ThorAction.KEYBOARD),
-        // Rev 4 — brightness of the screen with the controller (#11).
+        // Rev 4 — brightness of the screen with the controller.
         Binding(Trigger(ThorButton.R2, modifier = ThorButton.HOME), ThorAction.BRIGHTER),
         Binding(Trigger(ThorButton.L2, modifier = ThorButton.HOME), ThorAction.DIMMER),
         // Rev 6 — the game's controls (remap, gyro, macros) while playing (plan §6h).
@@ -181,11 +184,26 @@ object ControlsStore {
     fun triggerFor(action: ThorAction): Trigger? = bindings.firstOrNull { it.action == action }?.trigger
 
     /**
-     * #18 — the bindings in force while [pkg] has the controller: global, unless the
+     * The bindings in force while [pkg] has the controller: global, unless the
      * app is OFF (nothing) or CUSTOM (its overrides replace global bindings with the
      * same trigger or action; its freed triggers are dropped).
      */
     fun effective(pkg: String?): List<Binding> {
+        val all = effectiveAll(pkg)
+        // 1.3: where Back goes to the game, no combo uses Back (its press, hold, taps, or as a modifier)
+        return if (pkg != null && backToGame(pkg)) all.filter { it.trigger.button != ThorButton.BACK && it.trigger.modifier != ThorButton.BACK }
+        else all
+    }
+
+    /** 1.3 — the controller's own Back goes straight to [pkg] (an app, or a game profile's key):
+     *  the app's own choice, else automatic — on for RetroArch when RetroArch itself uses Back (its menu
+     *  or a hotkey on Back, GitHub #1 / Reddit); else Wayfinder's Back (hold = move / swap) as usual. */
+    fun backToGame(pkg: String): Boolean {
+        val app = pkg.substringBefore('#')
+        return AppConfigStore.get(app).backToGame ?: (app.startsWith("com.retroarch") && RetroArchBack.usesBack(app))
+    }
+
+    private fun effectiveAll(pkg: String?): List<Binding> {
         val cfg = pkg?.let { AppConfigStore.get(it) } ?: return active()
         return when (cfg.buttonsMode) {
             ButtonsMode.NORMAL -> active()

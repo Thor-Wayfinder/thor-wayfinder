@@ -6,7 +6,7 @@ import android.util.Log
 import android.view.KeyEvent
 
 /**
- * #26 — runs the user's [ControlsStore] bindings.
+ * Runs the user's [ControlsStore] bindings.
  *
  * Inputs:
  *  - [onKey]: every key from the accessibility key filter (main thread). Gamepad
@@ -30,7 +30,7 @@ class ButtonEngine(private val host: Host) {
         fun combosOffApp(): String?
         fun showCombosOff(app: String)
         fun hideChordHint()
-        /** Package of the app that has the controller right now (#18 per-app buttons). */
+        /** Package of the app that has the controller right now (per-app buttons). */
         fun currentApp(): String?
         /** Hold the triggers' ANALOG signal back from the app (see [AnalogShield]). */
         fun shieldAnalog(on: Boolean) {}
@@ -54,12 +54,15 @@ class ButtonEngine(private val host: Host) {
             // The AYN button is ALSO a Home key (gpio-keys: 194 → HOME) and must stay AYN's
             // (its menu). Home/Back are only ours when they come from the controller itself.
             if ((raw == ThorButton.HOME || raw == ThorButton.BACK) && !isController(dev)) return null
-            val identityXbox = dev != null && (dev.productId == 0x0112 || dev.name.contains("Xbox", ignoreCase = true))
+            // AYN's Xbox mode = its pad as 2020:0112 (by id, not by name: an external "Xbox Wireless Controller"
+            // is re-emitted by AYN as 2020:0111 under that name, and its buttons are already where they're printed)
+            val identityXbox = dev != null && dev.vendorId == 0x2020 && dev.productId == 0x0112
             // The input layer may force a face layout for the current app (its copy then sends
             // swapped codes under the same identity): read the button through that layout.
             val xbox = when (if (PadLayerCtl.active) PadLayerCtl.layoutOverride else null) {
                 'x' -> true; 'n' -> false; else -> identityXbox
             }
+            if (isController(dev) && raw in FACE) padXbox = xbox && dev?.vendorId == 0x2020
             if (!xbox) return raw
             return when (raw) {
                 ThorButton.A -> ThorButton.B; ThorButton.B -> ThorButton.A
@@ -67,6 +70,20 @@ class ButtonEngine(private val host: Host) {
                 else -> raw
             }
         }
+
+        private val FACE = setOf(ThorButton.A, ThorButton.B, ThorButton.X, ThorButton.Y)
+
+        /** The pad was in Xbox style at its last face-button press (AYN's style or the game's layout). */
+        @Volatile var padXbox: Boolean? = null
+            private set
+
+        /** 1.3 (GitHub #8): what a face button MEANS in a menu (keyboard, Recents). Combos use the
+         *  printed label ([printedButton]); menus follow the style, like the Hub and every app:
+         *  in Xbox style the bottom button confirms (A) and the right one goes back (B). */
+        fun menuButton(event: KeyEvent): ThorButton? = printedButton(event)?.let { ThorButton.fromKeyCode(event.keyCode) ?: it }
+
+        /** Menu meaning ↔ printed button (the same swap both ways) — for the button badges. */
+        fun menuSwap(b: ThorButton): ThorButton = if (!(padXbox ?: ButtonNames.aynXbox)) b else ButtonNames.faceSwap(b)
 
         private const val TAG = "ThorButtons"
         private const val HOLD_MS = 1000L
@@ -130,7 +147,7 @@ class ButtonEngine(private val host: Host) {
             held.add(b)
             if (b.isSystem) systemHeld = true
             // Home / Back stop the game's macros and release what the app holds for it
-            if (b.isSystem) ExtEngine.releaseAll()
+            if (b.isSystem && !(b == ThorButton.BACK && host.currentApp()?.let { ControlsStore.backToGame(it) } == true)) ExtEngine.releaseAll()
             // 1) Second button of a chord whose modifier is held → fire, swallow.
             val chord = bindings.firstOrNull { it.trigger.isChord && it.trigger.button == b && it.trigger.modifier != b && it.trigger.modifier in held }
             if (chord != null) { fireChord(chord); swallowed.add(b); return true }

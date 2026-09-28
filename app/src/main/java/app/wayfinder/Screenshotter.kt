@@ -20,11 +20,11 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executor
 
-/** #19 — what a screenshot captures. */
+/** What a screenshot captures. */
 enum class ShotTarget(val label: String) { TOP("Top"), BOTTOM("Bottom"), BOTH("Both") }
 
 /**
- * #19 — screenshots of either screen or both (stacked like the device: top above
+ * Screenshots of either screen or both (stacked like the device: top above
  * bottom), saved to Pictures/Screenshots. Uses the accessibility screenshot API
  * (no root; `canTakeScreenshot`), falling back to root `screencap` if it fails.
  * The a11y API allows one capture per ~333 ms, so "both" captures sequentially.

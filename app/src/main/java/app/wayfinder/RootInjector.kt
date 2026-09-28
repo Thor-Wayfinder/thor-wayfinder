@@ -9,7 +9,7 @@ import android.view.KeyEvent
 import java.io.OutputStream
 
 /**
- * #27 input deck — runs INSIDE the root input helper ([InputMonitorTool], uid 0), fed
+ * Input deck — runs INSIDE the root input helper ([InputMonitorTool], uid 0), fed
  * one command per line by the app over the helper's socket:
  *
  *   K <keyCode> <1=down|0=up> <metaState> <displayId>   inject a key (no fake hardware:
@@ -56,6 +56,7 @@ object RootInjector {
             "F" -> FpsSampler.watch(p.getOrNull(1), p.getOrNull(2))      // F <top pkg|-> <bottom pkg|->  (FPS counter)
             "A" -> AmbientSampler.watch(p.getOrNull(1))                  // A <physical display id> | A -  (screen colour)
             "G" -> PadLayer.command(p)                                   // G on <wfpad path> | G off  (input layer)
+            "S" -> PadLayer.setScreen(p.getOrNull(1) == "1")             // S 1 | S 0  (screens on / off: GitHub #40)
             // D <pkg> → "D <pkg> [<game-id> <title>]": which game it runs (per-game profiles);
             // off the command thread (it may copy a database), one at a time
             "D" -> p.getOrNull(1)?.let { pkg -> detector.execute { FpsSampler.send?.invoke(GameDetector.answer(pkg) + "\n") } }

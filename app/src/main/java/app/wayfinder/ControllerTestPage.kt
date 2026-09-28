@@ -1,5 +1,7 @@
 package app.wayfinder
 
+import androidx.compose.foundation.verticalScroll
+
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.foundation.Canvas
@@ -38,7 +40,7 @@ import kotlin.math.ceil
 import kotlin.math.sqrt
 
 /**
- * Round 8 (2026-09-25, INPUT_LAYER_PLAN §6k.2) — "Test the controller": what the pad really sends
+ * Round 8 (2026-09-25) — "Test the controller": what the pad really sends
  * (Wayfinder's own screens get the raw copy, no profile), each stick's drift at rest in %, a
  * suggested deadzone applied to every game in one press, the triggers' travel and every button.
  * While it's open the pad feeds this page ([PadTest.active]): A / B / the D-pad don't navigate.
@@ -127,7 +129,9 @@ fun ControllerTestPage(myDisplayId: Int, onBack: () -> Unit) {
     PadTest.onSelect = if (canRemove) ::remove else null
 
     app.wayfinder.ui.GlassScreen(span = if (myDisplayId == 0) app.wayfinder.ui.AuroraSpan.TOP else app.wayfinder.ui.AuroraSpan.BOTTOM) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        // scrolls: its last line was cut off at the bottom of the Thor's top screen (1.3 pass)
+        Column(Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 FocusableGlass(onClick = onBack, radius = 16.dp) {
                     Text("‹ Back", color = g.textPrimary, style = MaterialTheme.typography.labelLarge,
@@ -171,7 +175,7 @@ fun ControllerTestPage(myDisplayId: Int, onBack: () -> Unit) {
                     }
                 }
             }
-            Text("This page shows the raw controller. What a game gets (deadzone, remaps…) is set per game in Game controls (Home + X).",
+            Text("This page shows the raw controller. What a game gets (deadzone, remaps…) is set per game in Game controls (Home + ${ThorButton.X.label}).",
                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
         }
     }

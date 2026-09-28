@@ -7,7 +7,7 @@ import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Per-game profiles (docs/INPUT_LAYER_PLAN.md §6i): Mario Kart and Zelda in the same Dolphin,
+ * Per-game profiles: Mario Kart and Zelda in the same Dolphin,
  * each with its own controls. A game profile holds what the controls page edits — face buttons
  * and the remap (buttons, gyro, macros, chords); everything else stays per app. It's stored under
  * `<pkg>#<game-id>` (the id from [GameDetector]); a game without one uses its app's profile.
@@ -18,12 +18,17 @@ data class GameProfile(
     // lights (null = its app's, else the user's) — edited in Game controls, or kept from the panel
     val perf: PerfMode? = null, val fan: FanMode? = null, val hz: Int? = null,
     val lights: app.wayfinder.lights.LightProfile? = null,
+    /** 1.3 (GitHub #25): the bottom screen while this game is on top, and its frame-rate counter
+     *  (null = its app's, else the usual). */
+    val second: SecondScreenPolicy? = null,
+    val fps: Boolean? = null,
 ) {
     fun toJson(): String = JSONObject().put("title", title)
         .apply { face?.let { put("face", it.name) } }
         .apply { remap?.takeIf { !it.isEmpty }?.let { put("remap", it.toJson()) } }
         .apply { perf?.let { put("perf", it.name) }; fan?.let { put("fan", it.name) }; hz?.let { put("hz", it) } }
-        .apply { lights?.let { put("lights", it.toJson()) } }.toString()
+        .apply { lights?.let { put("lights", it.toJson()) } }
+        .apply { second?.let { put("second", it.name) }; fps?.let { put("fps", it) } }.toString()
     companion object {
         fun fromJson(s: String): GameProfile? = runCatching {
             val o = JSONObject(s)
@@ -32,7 +37,9 @@ data class GameProfile(
                 runCatching { PerfMode.valueOf(o.optString("perf")) }.getOrNull(),
                 runCatching { FanMode.valueOf(o.optString("fan")) }.getOrNull(),
                 o.optInt("hz", 0).takeIf { it == 60 || it == 120 },
-                app.wayfinder.lights.LightProfile.fromJson(o.optJSONObject("lights")))
+                app.wayfinder.lights.LightProfile.fromJson(o.optJSONObject("lights")),
+                runCatching { SecondScreenPolicy.valueOf(o.optString("second")) }.getOrNull()?.takeIf { it != SecondScreenPolicy.DEFAULT },
+                if (o.has("fps")) o.optBoolean("fps") else null)
         }.getOrNull()
     }
 }
@@ -65,6 +72,14 @@ object GameProfiles {
     fun remove(key: String) {
         cache.remove(key); prefs?.edit()?.remove(key)?.apply()
         AppConfigStore.version.intValue++
+    }
+    /** 1.3: [key]'s profile has nothing of its own left (its app's controls, no settings): removed. */
+    fun removeIfPlain(key: String) {
+        val p = cache[key] ?: return
+        val a = AppConfigStore.get(pkgOf(key))
+        fun r(x: PadRemap?) = x?.takeIf { !it.isEmpty }
+        if (p.perf == null && p.fan == null && p.hz == null && p.lights == null && p.second == null && p.fps == null &&
+            p.face == a.face && r(p.remap) == r(a.remap)) remove(key)
     }
     /** A new game profile: starts as a copy of its app's controls. */
     fun create(pkg: String, game: String, title: String): String {
@@ -109,7 +124,8 @@ object GameProfiles {
     fun effective(pkg: String): AppConfig {
         val app = AppConfigStore.get(pkg)
         val g = runningIn(pkg)?.let { cache[key(pkg, it.game)] } ?: return app
-        return app.copy(perf = g.perf ?: app.perf, fan = g.fan ?: app.fan, hz = g.hz ?: app.hz, lights = g.lights ?: app.lights)
+        return app.copy(perf = g.perf ?: app.perf, fan = g.fan ?: app.fan, hz = g.hz ?: app.hz, lights = g.lights ?: app.lights,
+            second = g.second ?: app.second, fps = g.fps ?: app.fps)
     }
 }
 
@@ -117,13 +133,15 @@ object GameProfiles {
 object Profiles {
     fun get(key: String): AppConfig =
         if (GameProfiles.isGame(key)) GameProfiles.get(key)?.let {
-            AppConfig(face = it.face, remap = it.remap, perf = it.perf, fan = it.fan, hz = it.hz, lights = it.lights)
+            AppConfig(face = it.face, remap = it.remap, perf = it.perf, fan = it.fan, hz = it.hz, lights = it.lights,
+                second = it.second ?: SecondScreenPolicy.DEFAULT, fps = it.fps)
         } ?: AppConfig()
         else AppConfigStore.get(key)
     fun update(key: String, change: (AppConfig) -> AppConfig) {
         if (!GameProfiles.isGame(key)) { AppConfigStore.update(key, change); return }
         val p = GameProfiles.get(key) ?: return
         val c = change(get(key))
-        GameProfiles.set(key, p.copy(face = c.face, remap = c.remap, perf = c.perf, fan = c.fan, hz = c.hz, lights = c.lights))
+        GameProfiles.set(key, p.copy(face = c.face, remap = c.remap, perf = c.perf, fan = c.fan, hz = c.hz, lights = c.lights,
+            second = c.second.takeIf { it != SecondScreenPolicy.DEFAULT }, fps = c.fps))
     }
 }

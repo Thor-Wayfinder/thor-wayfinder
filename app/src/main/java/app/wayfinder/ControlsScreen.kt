@@ -48,7 +48,7 @@ import app.wayfinder.ui.VSpace
 import kotlinx.coroutines.delay
 
 /**
- * #26 — Controls: every action and the button trigger bound to it. Pick an action,
+ * Controls: every action and the button trigger bound to it. Pick an action,
  * press the combination, save. Controller-navigable; while capturing, every press
  * goes to the capture (so the combination can include B, D-pad…), and capture
  * stops as soon as one combination is complete so the controller works again.
@@ -70,7 +70,7 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
         if (openEdit != null || picking != null) openWasUp = true
         else if (openWasUp) { openWasUp = false; delay(80); runCatching { openFocus.requestFocus() } }
     }
-    // #18 — scoped to one app: shows that app's effective combos; saves only to it.
+    // Scoped to one app: shows that app's effective combos; saves only to it.
     val appLabel = remember(pkg) {
         pkg?.let { runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(it, 0)).toString() }.getOrDefault(it) }
     }
@@ -268,7 +268,7 @@ private fun TriggerChip(trigger: Trigger?, highlight: Boolean = true) {
     }
 }
 
-/** #18 — save [t] for [action] into [pkg]'s overrides (or globally when pkg is null). */
+/** Save [t] for [action] into [pkg]'s overrides (or globally when pkg is null). */
 private fun saveBinding(pkg: String?, action: ThorAction, t: Trigger) {
     if (pkg == null) { ControlsStore.bind(action, t); return }
     AppConfigStore.update(pkg) { c ->
@@ -280,7 +280,7 @@ private fun saveBinding(pkg: String?, action: ThorAction, t: Trigger) {
     }
 }
 
-/** #18 — no trigger for [action] (globally, or in [pkg] only). */
+/** No trigger for [action] (globally, or in [pkg] only). */
 private fun removeBinding(pkg: String?, action: ThorAction) {
     if (pkg == null) { ControlsStore.unbind(action); return }
     val global = ControlsStore.triggerFor(action)
@@ -293,7 +293,7 @@ private fun removeBinding(pkg: String?, action: ThorAction) {
     }
 }
 
-/** #18 — drop [pkg]'s override for [action]: back to the global combo. */
+/** Drop [pkg]'s override for [action]: back to the global combo. */
 private fun useGlobal(pkg: String, action: ThorAction) {
     val global = ControlsStore.triggerFor(action)
     AppConfigStore.update(pkg) { c ->

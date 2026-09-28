@@ -1,6 +1,11 @@
 package app.wayfinder
 
 import android.content.Context
+import android.database.ContentObserver
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
 import java.util.concurrent.Executors
@@ -9,14 +14,16 @@ import java.util.concurrent.Executors
 enum class PerfMode(val value: Int, val label: String) { STANDARD(0, "Standard"), MEDIUM(1, "Medium"), HIGH(2, "High") }
 
 /** AYN's fan modes (`Settings.System fan_mode`). */
-enum class FanMode(val value: Int, val label: String) { OFF(0, "Off"), QUIET(1, "Quiet"), SMART(4, "Smart"), SPORTS(5, "Sports") }
+enum class FanMode(val value: Int, val label: String) { OFF(0, "Off"), QUIET(1, "Quiet"), SMART(4, "Smart"), SPORTS(5, "Sports"),
+    /** 1.3: AYN's own curve (Settings → fan speed control curve; opened by the "Fan curve" tile). */
+    CUSTOM(6, "Custom") }
 
 /**
- * #21 Per-app performance and fan. The apps on screen can ask for their own performance /
+ * Per-app performance and fan. The apps on screen can ask for their own performance /
  * fan mode (two apps: the most demanding request wins); leaving puts back the user's own AYN
  * settings ([baseline], remembered in prefs in case we die mid-game).
  *
- * How AYN applies them (verified 2026-09-23, docs/THOR_PLATFORM_NOTES.md):
+ * How AYN applies them (verified on a Thor, 2026-09-23):
  *  - performance: prop `persist.vendor.debug.mode` 0/1/2 (CPU / GPU minimum clocks).
  *    AYN's game assistant re-sets it from `performance_mode` on every app change, so
  *    we write both (and again shortly after, to win that race).
@@ -28,6 +35,48 @@ object PerfProfiles {
     @Volatile private var active: Triple<Int?, Int?, Int?> = Triple(null, null, null)   // what we applied (perf, fan, Hz)
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("thor_perf", Context.MODE_PRIVATE)
+
+    /** A fan value we're writing ourselves (profiles, the fan tile), and until when — [keepCustomFan]
+     *  leaves exactly that change alone (AYN's own Smart / Quiet after a performance change is not it). */
+    @Volatile private var ownFan = -1
+    @Volatile private var ownUntil = 0L
+    fun markOwn(fan: Int) { ownFan = fan; ownUntil = SystemClock.uptimeMillis() + 4000 }
+
+    @Volatile private var watching = false
+    private var lastFan = -1; private var lastPerf = -1; private var perfAt = 0L
+
+    /**
+     * 1.3 (GitHub #10): AYN's "quick set performance and fan" link drops a Custom fan (its curve) to
+     * Smart / Quiet whenever performance changes — from any tile, ours or AYN's. Custom is put
+     * back: set again after the change it holds (verified 2026-09-27: High → fan 4; 6 again → kept,
+     * the fan follows the curve). Once per process.
+     */
+    fun keepCustomFan(ctx: Context) {
+        if (watching) return
+        watching = true
+        val cr = ctx.applicationContext.contentResolver
+        fun read(k: String) = runCatching { Settings.System.getInt(cr, k) }.getOrDefault(-1)
+        lastFan = read("fan_mode"); lastPerf = read("performance_mode")
+        val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
+            override fun onChange(selfChange: Boolean, uri: Uri?) {
+                val now = SystemClock.uptimeMillis()
+                val perf = read("performance_mode"); val fan = read("fan_mode")
+                if (perf != lastPerf) { lastPerf = perf; perfAt = now }
+                if (fan == lastFan) return
+                val was = lastFan; lastFan = fan
+                val ours = fan == ownFan && now < ownUntil
+                if (was == FanMode.CUSTOM.value && fan != FanMode.CUSTOM.value && now - perfAt < 3000 && !ours) {
+                    Log.i(TAG, "performance change dropped the Custom fan ($fan) → Custom again")
+                    worker.execute { Thread.sleep(300); PServiceBridge.exec("settings put system fan_mode ${FanMode.CUSTOM.value}") }
+                }
+            }
+        }
+        runCatching {
+            cr.registerContentObserver(Settings.System.getUriFor("fan_mode"), false, obs)
+            cr.registerContentObserver(Settings.System.getUriFor("performance_mode"), false, obs)
+            Log.i(TAG, "keeping a Custom fan (fan=$lastFan perf=$lastPerf)")
+        }.onFailure { Log.w(TAG, "can't watch the fan: $it") }
+    }
 
     /** Something else changed the mode behind our back (the lid heat guard): apply again next time. */
     fun forget() { active = Triple(-1, -1, -1) }
@@ -74,6 +123,7 @@ object PerfProfiles {
                 if (perfChanges) Thread.sleep(1200)
                 repeat(3) {
                     if (Settings.System.getInt(cr, "fan_mode", -1) == fanV) return@repeat
+                    markOwn(fanV)   // ours: not "AYN dropped the Custom fan"
                     PServiceBridge.exec("settings put system fan_mode $fanV")
                     Thread.sleep(700)
                 }

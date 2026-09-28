@@ -60,7 +60,7 @@ import app.wayfinder.ui.TriggerGlyphs
 import kotlinx.coroutines.delay
 
 /**
- * #29 The welcome tour: first launch (and Help → "Take the tour" any time). Setup first, then
+ * The welcome tour: first launch (and Help → "Take the tour" any time). Setup first, then
  * four steps the user DOES (hold Home, hold Back, Home + right stick, the AYN button), each ticked
  * when done — with the user's REAL combos, so it stays right after rebinding. The rest is told
  * when it's useful (first game, first keyboard: [ForegroundAppService], ThorKeyboardService).

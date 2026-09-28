@@ -49,6 +49,15 @@ object SpeakerTune {
     /** What's happening right now, for the UI. */
     var status by mutableStateOf("Off")
         private set
+    /** 1.3 — the volume booster: extra dB (0 = off) before a limiter, on every output. */
+    var boost by mutableStateOf(0)
+        private set
+    /** The boost [dp] was built with (a new boost rebuilds it). */
+    private var dpBoost = -1
+    /** Boost only (the speaker fix isn't playing): a limiter-only effect. */
+    private var boostFx: DynamicsProcessing? = null
+    private var boostFxDb = -1
+    val BOOST_STEPS = listOf(0, 3, 6, 9, 12)
 
     private lateinit var app: Context
     private var dp: DynamicsProcessing? = null
@@ -68,6 +77,13 @@ object SpeakerTune {
         enabled = prefs.getBoolean("speaker_tune", false)
         width = prefs.getFloat("stereo_width", 2f)
         eqOn = prefs.getBoolean("speaker_eq", true)
+        boost = prefs.getInt("volume_boost", 0).coerceIn(0, 12)
+    }
+
+    fun setVolumeBoost(db: Int) {
+        boost = db.coerceIn(0, 12)
+        prefs.edit().putInt("volume_boost", boost).apply()
+        apply()
     }
 
     fun start(ctx: Context) {
@@ -119,6 +135,8 @@ object SpeakerTune {
     @Synchronized fun apply() {
         if (!started) return
         val want = enabled && onSpeaker()
+        syncBoost(boost > 0 && !(want && eqOn))    // the fix's own effect carries the boost when it plays
+        if (dp != null && dpBoost != boost) { runCatching { dp!!.enabled = false; dp!!.release() }; dp = null }
         // The widener (a native effect, see AudioFx): neutral unless the fix is playing.
         AudioFx.setWidth(if (want && AudioFx.installed) width else 0f)
         syncWide(want && AudioFx.installed)
@@ -169,10 +187,10 @@ object SpeakerTune {
             }
             cfg.setPreEqAllChannelsTo(eq)
             cfg.setLimiterAllChannelsTo(DynamicsProcessing.Limiter(true, true, 0, 1f, 500f, 10f, LIMIT_DB, 0f))
-            cfg.setInputGainAllChannelsTo(OUTPUT_GAIN_DB)   // linear stages: order-independent before the limiter
+            cfg.setInputGainAllChannelsTo(OUTPUT_GAIN_DB + boost)   // linear stages: order-independent before the limiter
             val fx = DynamicsProcessing(Int.MAX_VALUE, 0, cfg)
             fx.enabled = true
-            dp = fx
+            dp = fx; dpBoost = boost
             Log.i(TAG, "speaker tune ON (enabled=${fx.enabled}, hasControl=${fx.hasControl()})")
             onStatus(fx)
         }.getOrElse { Log.w(TAG, "speaker tune failed: $it"); "Couldn't start the audio effect: ${it.message}" }
@@ -200,11 +218,39 @@ object SpeakerTune {
         Log.i(TAG, "widener ${if (wide != null) "attached to the output mix" else "NOT attached"}")
     }
 
+    /** 1.3 — the booster alone: input gain + a limiter (no EQ), on the output mix. */
+    private fun syncBoost(want: Boolean) {
+        if (!want) { boostFx?.let { runCatching { it.enabled = false; it.release() } }; boostFx = null; boostFxDb = -1; return }
+        val alive = boostFx?.let { runCatching { it.enabled && it.hasControl() }.getOrDefault(false) } == true
+        if (alive && boostFxDb == boost) return
+        boostFx?.let { runCatching { it.release() } }
+        boostFx = runCatching {
+            val cfg = DynamicsProcessing.Config.Builder(DynamicsProcessing.VARIANT_FAVOR_FREQUENCY_RESOLUTION, 2,
+                false, 0, false, 0, false, 0, true).setPreferredFrameDuration(10f).build()
+            cfg.setLimiterAllChannelsTo(DynamicsProcessing.Limiter(true, true, 0, 1f, 500f, 10f, LIMIT_DB, 0f))
+            cfg.setInputGainAllChannelsTo(boost.toFloat())
+            DynamicsProcessing(Int.MAX_VALUE, 0, cfg).also { it.enabled = true }
+        }.onFailure { Log.w(TAG, "volume boost: $it") }.getOrNull()
+        boostFxDb = if (boostFx != null) boost else -1
+        Log.i(TAG, "volume boost +$boost dB ${if (boostFx != null) "on" else "FAILED"}")
+    }
+
+    /** For the UI: what the booster is doing. */
+    fun boostStatus(): String = when {
+        boost == 0 -> "Off"
+        dp != null && dpBoost == boost -> "+$boost dB, with the speaker fix"
+        boostFx != null && runCatching { boostFx!!.hasControl() }.getOrDefault(false) -> "+$boost dB"
+        boostFx != null -> "+$boost dB (another app has priority on the audio effect)"
+        else -> "+$boost dB — couldn't start"
+    }
+
     // Effects die with the audio server (a crash, an update, a config reload) and nothing
     // tells us: check now and then, and rebuild what's dead.
     private const val WATCH_MS = 20_000L
     private val watchdog: Runnable = object : Runnable {
         override fun run() {
+            // the booster alone: rebuilt when the audio server dropped it
+            if (boostFx != null && !runCatching { boostFx!!.enabled && boostFx!!.hasControl() }.getOrDefault(false)) { boostFxDb = -1; apply() }
             if (enabled && !installing) {
                 val dpDead = dp != null && !runCatching { dp!!.enabled && dp!!.hasControl() }.getOrDefault(false)
                 val wideDead = wide != null && !runCatching { wide!!.enabled }.getOrDefault(false)

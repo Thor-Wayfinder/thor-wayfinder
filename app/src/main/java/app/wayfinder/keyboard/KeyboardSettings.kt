@@ -23,6 +23,9 @@ object KeyboardSettings {
         private set
     var placement by mutableStateOf(KeyboardPlacement.OTHER_SCREEN)
         private set
+    /** 1.3 (GitHub #11): the D-pad picks the keys and the left stick moves the text cursor (default: the other way). */
+    var dpadKeys by mutableStateOf(false)
+        private set
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -35,6 +38,12 @@ object KeyboardSettings {
         currentId = prefs.getString("current", null)
         placement = runCatching { KeyboardPlacement.valueOf(prefs.getString("placement", null) ?: "") }
             .getOrDefault(KeyboardPlacement.OTHER_SCREEN)
+        dpadKeys = prefs.getBoolean("dpad_keys", false)
+    }
+
+    fun chooseDpadKeys(on: Boolean) {
+        dpadKeys = on
+        prefs.edit().putBoolean("dpad_keys", on).apply()
     }
 
     fun setLayouts(ids: List<String>) {

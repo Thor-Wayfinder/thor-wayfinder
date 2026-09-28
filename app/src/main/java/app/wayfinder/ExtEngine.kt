@@ -6,7 +6,7 @@ import android.os.Looper
 import android.util.Log
 
 /**
- * Input layer, phase 3 — the buttons the app plays (docs/INPUT_LAYER_PLAN.md §6g). wfpad sends
+ * Input layer, phase 3 — the buttons the app plays. wfpad sends
  * their presses as "X" lines ([PadRemap.byApp]); here they become keyboard keys, mouse buttons,
  * Wayfinder actions, several pad buttons at once, typed key sequences, macros, long / double
  * presses and chords. Pad outputs go back to the game's pad as wfpad VIRTUAL presses
@@ -203,7 +203,7 @@ object ExtEngine {
     private fun altOf(b: ThorButton, r: PadRemap) = r.alt[b] ?: RemapTarget.None
 
     private fun start(b: ThorButton, s: Src, r: PadRemap) {
-        val who = PadRemap.CODE[b] ?: 0
+        val who = PadRemap.outCode(b) ?: 0
         val t = mainOf(b, r)
         when (r.fire[b] ?: Fire.NORMAL) {
             Fire.NORMAL -> { s.active = t; out(t, true, who) }
@@ -227,7 +227,7 @@ object ExtEngine {
     }
 
     private fun stop(b: ThorButton, s: Src, r: PadRemap) {
-        val who = PadRemap.CODE[b] ?: 0
+        val who = PadRemap.outCode(b) ?: 0
         cancel(s.turbo); s.turbo = null
         s.active?.let { out(it, false, who); s.active = null }
         when (r.fire[b] ?: Fire.NORMAL) {
@@ -243,8 +243,96 @@ object ExtEngine {
         }
     }
 
+    // ── 1.3: a stick that is Wayfinder's — mouse, wheel or 4 keys. wfpad sends its shaped position
+    // ("T" lines, −1000..1000, a deadzone of at least 10 % already applied: at rest it's exactly 0) ──
+    private const val TICK_MS = 10L
+    private val stickPos = Array(2) { FloatArray(2) }
+    private val stickKeys = Array(2) { HashSet<Int>() }
+    private val scrollAcc = Array(2) { FloatArray(2) }
+    private val scrolling = Array(2) { BooleanArray(2) }
+    private val mouseAcc = FloatArray(2)
+    private var ticking = false
+
+    fun onStick(side: Int, x: Int, y: Int) { h.post { stick(side, x / 1000f, y / 1000f) } }
+
+    private fun job(side: Int): StickJob = remap?.let { if (side == 0) it.jobL else it.jobR } ?: StickJob()
+
+    private fun stick(side: Int, x: Float, y: Float) {
+        if (side !in 0..1) return
+        stickPos[side][0] = x.coerceIn(-1f, 1f); stickPos[side][1] = y.coerceIn(-1f, 1f)
+        val j = job(side)
+        if (j.use == StickUse.KEYS || stickKeys[side].isNotEmpty()) stickKeysUpdate(side, j)
+        if (!ticking && (x != 0f || y != 0f) && (j.use == StickUse.MOUSE || j.use == StickUse.SCROLL)) {
+            ticking = true; h.postDelayed(tick, TOK, TICK_MS)
+        }
+    }
+
+    /** 4 keys: a direction presses its key past 50 %, lets go below 35 % (no flicker at the edge);
+     *  diagonals press two. Arrow keys, or W A S D. */
+    private fun stickKeysUpdate(side: Int, j: StickJob) {
+        val (x, y) = stickPos[side][0] to stickPos[side][1]
+        val codes = if (j.wasd) intArrayOf(android.view.KeyEvent.KEYCODE_W, android.view.KeyEvent.KEYCODE_S, android.view.KeyEvent.KEYCODE_A, android.view.KeyEvent.KEYCODE_D)
+            else intArrayOf(android.view.KeyEvent.KEYCODE_DPAD_UP, android.view.KeyEvent.KEYCODE_DPAD_DOWN, android.view.KeyEvent.KEYCODE_DPAD_LEFT, android.view.KeyEvent.KEYCODE_DPAD_RIGHT)
+        val amount = floatArrayOf(-y, y, -x, x)
+        val keysJob = j.use == StickUse.KEYS
+        for (i in 0..3) {
+            val c = codes[i]; val held = c in stickKeys[side]
+            val on = keysJob && if (held) amount[i] > .35f else amount[i] > .5f
+            if (on != held) { key(c, on); if (on) stickKeys[side].add(c) else stickKeys[side].remove(c) }
+        }
+        // the job changed from 4 keys (or W A S D ↔ arrows): whatever it still holds goes
+        for (c in stickKeys[side].toList()) if (c !in codes || !keysJob) { key(c, false); stickKeys[side].remove(c) }
+    }
+
+    private val tick: Runnable = object : Runnable {
+        override fun run() {
+            var any = false
+            for (side in 0..1) {
+                val x = stickPos[side][0]; val y = stickPos[side][1]
+                val j = job(side)
+                if (x == 0f && y == 0f) { scrolling[side][0] = false; scrolling[side][1] = false; scrollAcc[side].fill(0f); continue }
+                when (j.use) {
+                    StickUse.MOUSE -> {
+                        any = true
+                        // px / s at full deflection; slower near the centre (x · √r) for fine aiming
+                        val pps = 300f + j.speed * 170f
+                        val r = kotlin.math.sqrt(kotlin.math.hypot(x, y).coerceAtMost(1f))
+                        mouseAcc[0] += x * r * pps * TICK_MS / 1000f; mouseAcc[1] += y * r * pps * TICK_MS / 1000f
+                    }
+                    StickUse.SCROLL -> { any = true; scroll(side, x, y, j) }
+                    else -> {}
+                }
+            }
+            val ix = mouseAcc[0].toInt(); val iy = mouseAcc[1].toInt()
+            if (ix != 0 || iy != 0) { InputMonitor.send("M $ix $iy"); mouseAcc[0] -= ix.toFloat(); mouseAcc[1] -= iy.toFloat() }
+            if (any) h.postDelayed(this, TOK, TICK_MS) else { ticking = false; mouseAcc.fill(0f) }
+        }
+    }
+
+    /** The wheel: starts past 25 % (after the deadzone), stops below 15 %; notches per second grow
+     *  with the push. Up = wheel up, right = wheel right. */
+    private fun scroll(side: Int, x: Float, y: Float, j: StickJob) {
+        val comp = floatArrayOf(y, x)
+        for (a in 0..1) {
+            val v = comp[a]; val m = kotlin.math.abs(v)
+            val on = if (scrolling[side][a]) m > .15f else m > .25f
+            scrolling[side][a] = on
+            if (!on) { scrollAcc[side][a] = 0f; continue }
+            val rate = (2f + j.speed * 2f) * ((m - .15f) / .85f).coerceIn(0f, 1f).let { it * kotlin.math.sqrt(it) }   // notches / s
+            // the first notch at once: a push should answer immediately
+            scrollAcc[side][a] += if (scrollAcc[side][a] == 0f) 1f else rate * TICK_MS / 1000f
+            while (scrollAcc[side][a] >= 1f) {
+                scrollAcc[side][a] -= 1f
+                if (a == 0) InputMonitor.send("W ${if (v < 0) 1 else -1} 0") else InputMonitor.send("W 0 ${if (v > 0) 1 else -1}")
+            }
+            if (scrollAcc[side][a] == 0f) scrollAcc[side][a] = 1e-4f     // "started" (not the first notch again)
+        }
+    }
+
     private fun reset() {
         h.removeCallbacksAndMessages(TOK)
+        ticking = false; mouseAcc.fill(0f)
+        for (s in 0..1) { stickPos[s].fill(0f); stickKeys[s].clear(); scrollAcc[s].fill(0f); scrolling[s].fill(false) }
         shiftHeld = false; shiftActive.clear(); h.removeCallbacks(shiftHint)
         plays.clear(); srcs.clear()
         if (padDown.isNotEmpty()) InputMonitor.send("G p 0 0")

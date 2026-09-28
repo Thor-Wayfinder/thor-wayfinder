@@ -20,6 +20,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -95,6 +96,18 @@ fun VolumeSliders(compact: Boolean = false, collapsible: Boolean = compact) {
         if (open) LevelRow(null, name(false, compact), compact = compact, value = if (compact) "$bottom" else "$bottom / 15", pos = bottom / 15f, step = 1f / 15f,
             trailing = if (collapsible) ({ ExpandSpace() }) else null) { p ->
             val b = Math.round(p * 15); LinkedVolume.setBottomOnly(b); bottom = b
+        }
+        // 1.3 (GitHub #7): say when the bottom screen's apps play quieter / louder than the top's
+        if (!compact && bottom != top) {
+            val g = LocalGlass.current
+            Row(Modifier.fillMaxWidth().padding(top = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Apps on the bottom screen play ${if (bottom < top) "quieter" else "louder"} (${bottom} / 15 against ${top} / 15)",
+                    color = g.textSecondary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                app.wayfinder.ui.FocusableGlass(onClick = { LinkedVolume.setBalance(0); LinkedVolume.setBoth(top); bottom = top }, radius = 12.dp) {
+                    Text("Same on both", color = g.accent, style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                }
+            }
         }
     }
 }

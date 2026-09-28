@@ -59,7 +59,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The Thor Keyboard (#27), shared by both hosts:
+ * The Thor Keyboard, shared by both hosts:
  *  - [overlay] = true: it owns a whole screen (the text field is on the OTHER screen),
  *    so the top bar shows a live preview of what you're typing;
  *  - false: a normal keyboard at the bottom of the same screen.
@@ -153,7 +153,7 @@ private fun TopBar(kb: KeyboardController, overlay: Boolean, preview: Preview, o
         } else Spacer(Modifier.weight(1f))
         BarButton(null, "?", { kb.toggleHelp() }, badge = if (kb.padActive) ThorButton.L3 else null)
         if (moveLabel != null) BarButton(Icons.Rounded.SwapVert, moveLabel, onMove)
-        BarButton(Icons.Rounded.KeyboardHide, null, onHide, badge = if (kb.padActive) ThorButton.B else null)
+        BarButton(Icons.Rounded.KeyboardHide, null, onHide, badge = if (kb.padActive) app.wayfinder.ButtonEngine.menuSwap(ThorButton.B) else null)
     }
 }
 
@@ -221,6 +221,34 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
                         // kept deleting every 55 ms (review 2026-09-25)
                         try { waitForUpOrCancellation() } finally { repeat.cancel(); pressed = false }
                     }
+                } else if (key.kind == KeyKind.SPACE) {
+                    // 1.3 (Reddit): hold Space and slide = move the text cursor, like Gboard. A tap types a
+                    // space; a long press without sliding still switches the language.
+                    val step = 14.dp.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        pressed = true
+                        var moved = 0; var sliding = false; var longDone = false
+                        val t0 = down.uptimeMillis
+                        try {
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val c = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!c.pressed) break
+                                val dx = c.position.x - down.position.x
+                                if (!sliding && kotlin.math.abs(dx) > step) sliding = true
+                                if (sliding) {
+                                    val want = (dx / step).toInt()
+                                    if (want != moved) { kb.slideCursor(want - moved); moved = want }
+                                    c.consume()
+                                } else if (!longDone && c.uptimeMillis - t0 > 500) {
+                                    longDone = true
+                                    if (kb.openPopup(key)) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS) else kb.nextLayout()
+                                }
+                            }
+                        } finally { pressed = false }
+                        if (!sliding && !longDone) tap()
+                    }
                 } else detectTapGestures(
                     onPress = { pressed = true; tryAwaitRelease(); pressed = false },
                     onLongPress = {
@@ -268,7 +296,7 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
             KeyKind.TO_LETTERS -> Text("ABC", color = fg, fontSize = if (big) 20.sp else 16.sp)
         }
         // With the controller in use, each special key shows the button that does it.
-        if (kb.padActive) padButtonFor(key.kind)?.let { b ->
+        if (kb.padActive) padButtonFor(key.kind)?.let { app.wayfinder.ButtonEngine.menuSwap(it) }?.let { b ->
             Box(Modifier.align(Alignment.BottomStart).padding(start = 4.dp, bottom = 4.dp)) {
                 ButtonGlyph(b, size = if (big) 22.dp else 16.dp)
             }
@@ -290,10 +318,11 @@ private fun padButtonFor(kind: KeyKind): ThorButton? = when (kind) {
  *  Kotlin compiler's type inference explode — builds hung for minutes.) */
 private class LegendItem(val buttons: List<ThorButton>, val text: String)
 
-private val LEGEND: List<LegendItem> = listOf(
-    LegendItem(listOf(ThorButton.L3), "Left stick: pick a key · click it: this help"),
+private val LEGEND: List<LegendItem> get() = listOf(
+    LegendItem(listOf(ThorButton.L3), if (KeyboardSettings.dpadKeys) "Left stick: move the text cursor · click it: this help"
+        else "Left stick: pick a key · click it: this help"),
     LegendItem(listOf(ThorButton.A), "Type the key · hold for accents"),
-    LegendItem(listOf(ThorButton.LEFT, ThorButton.RIGHT), "D-pad: move the text cursor"),
+    LegendItem(listOf(ThorButton.LEFT, ThorButton.RIGHT), if (KeyboardSettings.dpadKeys) "D-pad: pick a key" else "D-pad: move the text cursor"),
     LegendItem(listOf(ThorButton.B), "Close the keyboard (Back too)"),
     LegendItem(listOf(ThorButton.X), "Delete"),
     LegendItem(listOf(ThorButton.Y), "Space"),
@@ -328,7 +357,7 @@ private fun LegendColumn(items: List<LegendItem>, big: Boolean, modifier: Modifi
 private fun LegendLine(item: LegendItem, big: Boolean) {
     val g = LocalGlass.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        for (b in item.buttons) ButtonGlyph(b, size = if (big) 30.dp else 24.dp)
+        for (b in item.buttons) ButtonGlyph(app.wayfinder.ButtonEngine.menuSwap(b), size = if (big) 30.dp else 24.dp)
         Text(item.text, color = g.textPrimary, fontSize = if (big) 17.sp else 14.sp, maxLines = 2)
     }
 }

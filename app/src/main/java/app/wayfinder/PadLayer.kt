@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
  * Supervises `wfpad` (fx/wfpad.c): it grabs AYN's pad and forwards everything to an identical
  * copy (phys "wayfinder-clone").
  *
- * Controller number (docs/INPUT_LAYER_PLAN.md, blocker): emulators key saved mappings on it
+ * Controller number (a blocker): emulators key saved mappings on it
  * (Dolphin "Android/1/Odin Controller"), so the copy must TAKE AYN's number, not sit next to
  * it as #2. Takeover: wfpad arms the copy ("A"), we make AYN rebuild its pad by switching its
  * layout away and straight back, and wfpad creates the copy in the instant AYN's pad is gone
@@ -33,6 +33,15 @@ object PadLayer {
     private const val MODE = "temp_abxy_layout_mode"
     private const val FLIP = "flip_button_layout"
     @Volatile private var wanted = false
+    /** wfpad's last message (not a known status line): said with a failure (GitHub #39). */
+    @Volatile private var lastWfpad = ""
+    /** 1.3 (GitHub #40): the screens are on (the app says so: "S 1" / "S 0"). Off = the sweeper rests. */
+    @Volatile private var screenOn = true
+    @Volatile private var wokeAt = 0L
+    fun setScreen(on: Boolean) {
+        if (on && !screenOn) wokeAt = System.currentTimeMillis()
+        screenOn = on
+    }
     /** The Wayfinder app's uid (from the helper's launch arguments). */
     @Volatile var appUid: Int = -1
     private var thread: Thread? = null
@@ -152,14 +161,15 @@ object PadLayer {
         thread = Thread { loop() }.apply { isDaemon = true; start() }
     }
 
-    /** AYN's pad node (never our clone). */
+    /** AYN's pad node (never our clone, never an external pad's copy — [AynPad], GitHub #4). */
     private fun resolveOriginal(): Pair<String, String>? {
         val nodes = File("/sys/class/input").listFiles { f -> f.name.startsWith("event") } ?: return null
+        val foreign = AynPad.foreignNames()
         for (n in nodes.sortedBy { it.name.removePrefix("event").toIntOrNull() ?: 0 }) {
             val name = runCatching { File(n, "device/name").readText().trim() }.getOrNull() ?: continue
             val phys = runCatching { File(n, "device/phys").readText().trim() }.getOrDefault("")
             if (phys == CLONE_PHYS || name.contains("Mouse", true)) continue
-            if (CONTROLLER.containsMatchIn(name)) return "/dev/input/${n.name}" to name
+            if (AynPad.isAyn(n, foreign)) return "/dev/input/${n.name}" to name
         }
         return null
     }
@@ -299,7 +309,8 @@ object PadLayer {
     fun normalize() {
         val pads = snapshot().filter { it.gamepad }
         if (pads.isEmpty() || pads.any { it.number == 1 }) return
-        if (pads.none { !it.isClone && CONTROLLER.containsMatchIn(it.name) && it.number > 1 }) return
+        val foreign = AynPad.foreignNames()
+        if (pads.none { !it.isClone && AynPad.isAyn(File(it.path), foreign) && it.number > 1 }) return
         status("renumber: giving AYN's pad #1 back")
         rebuildAynPad(null)
     }
@@ -313,8 +324,14 @@ object PadLayer {
     private fun hideOthers(cloneNode: String, snap: List<Dev> = snapshot()) {
         val clone = snap.firstOrNull { it.isClone && it.path == cloneNode } ?: return
         if (!clone.enabled && clone.reader >= 0) { setEnabled(clone.reader, true); Log.w(TAG, "our copy was disabled (#${clone.reader}) — enabled again") }
+        // an external pad's copy that an older Wayfinder disabled (GitHub #4): enabled again
+        val foreign = AynPad.foreignNames()
+        for (d in snap) if (!d.isClone && d.gamepad && !d.enabled && d.reader >= 0 && d.vendor == clone.vendor &&
+            !AynPad.isAyn(File(d.path), foreign)) { setEnabled(d.reader, true); Log.i(TAG, "external pad enabled again: ${d.name}") }
         for (d in snap) {
             if (d.isClone || !d.gamepad || !d.enabled || d.reader < 0 || d.vendor != clone.vendor) continue
+            // an external pad's copy (AYN re-emits it under its own ids): it's the player's controller — leave it
+            if (!AynPad.isAyn(File(d.path), foreign)) { Log.i(TAG, "external pad left alone: ${d.name}"); continue }
             setEnabled(d.reader, false); Log.i(TAG, "hid ${d.name} (#${d.reader})")
         }
     }
@@ -350,11 +367,14 @@ object PadLayer {
             var lost = false
             val sweeping = java.util.concurrent.atomic.AtomicBoolean(true)
             // While running: keep AYN's (re-created) pads hidden — they register asynchronously.
-            // Every 0.5 s around a (re)start or AYN re-creating its pad, every 3 s otherwise.
+            // Every 0.5 s around a (re)start, AYN re-creating its pad or a wake-up, every 3 s otherwise —
+            // and not at all while the screens are off (each pass runs `dumpsys input`: GitHub #40).
             val sweeper = Thread {
                 try { while (sweeping.get()) {
-                    Thread.sleep(if (System.currentTimeMillis() < busyUntil.get()) 500 else 3000)
+                    val now = System.currentTimeMillis()
+                    Thread.sleep(if (screenOn && (now < busyUntil.get() || now - wokeAt < 15_000)) 500 else 3000)
                     if (!sweeping.get()) break
+                    if (!screenOn) continue
                     // copy created but not identified yet: the newest device at our location
                     val node = cloneNode.get() ?: if (created.count == 0L)
                         runCatching { snapshot().filter { it.isClone }.maxByOrNull { it.hub }?.path }.getOrNull()?.also { cloneNode.set(it) } else null
@@ -416,10 +436,11 @@ object PadLayer {
                     "W" -> status("waiting for AYN's pad")
                     "L" -> status("latency $line")      // L n p50 p99 max (µs)
                     // withheld from the game (Home/Back held): to the app, for its shortcuts
-                    // X = a button mapped to a key / action; V = a watched control (gyro on / off)
-                    "J", "X", "V" -> send?.invoke("$line\n")
+                    // X = a button mapped to a key / action; V = a watched control (gyro on / off);
+                    // T = a stick that is Wayfinder's (1.3: mouse / scroll / keys)
+                    "J", "X", "V", "T" -> send?.invoke("$line\n")
                     "M" -> if (f.getOrNull(1) != "ok") status("error profile-refused")
-                    else -> status("wfpad $line")
+                    else -> { lastWfpad = line.take(80); status("wfpad $line") }
                 }
             }
             val code = runCatching { p.waitFor() }.getOrDefault(-1)
@@ -432,12 +453,13 @@ object PadLayer {
             if (code == 5) {                                   // Home + Back held 5 s
                 status("emergency-off"); wanted = false; break
             }
+            val why = "exit $code" + if (lastWfpad.isNotEmpty()) ": $lastWfpad" else ""
             if (lost) {
-                if (++lostRaces >= 3) { status("error lost-race-3x — layer off"); wanted = false; break }
+                if (++lostRaces >= 3) { status("error lost-race-3x ($why) — layer off"); wanted = false; break }
             } else if (code != 2) {                            // 2 = no AYN pad for 10 s: just retry
                 val now = System.currentTimeMillis()
                 failures.addLast(now); while (failures.isNotEmpty() && now - failures.first() > 60_000) failures.removeFirst()
-                if (failures.size >= 5) { status("error keeps-crashing — layer off"); wanted = false; break }
+                if (failures.size >= 5) { status("error keeps-crashing ($why) — layer off"); wanted = false; break }
             }
             Thread.sleep(500)
         }

@@ -74,6 +74,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ButtonNames.init(this)   // 1.3 (GitHub #27)
         Shizuku.addRequestPermissionResultListener(shizukuPermissionListener)
 
         // First run: asked in the tour's setup step, with the reason. After the tour: granted
@@ -115,15 +116,15 @@ class MainActivity : ComponentActivity() {
         val myDisplayId = windowManager.defaultDisplay.displayId
         setContent {
             val dark = when (AppSettings.themeMode) {
-                ThemeMode.DARK -> true
+                ThemeMode.DARK, ThemeMode.BLACK -> true
                 ThemeMode.LIGHT -> false
                 ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
-            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides realGlass.value) {
+            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && AppSettings.themeMode != ThemeMode.BLACK)) {
             ThorGlassTheme(dark = dark) {
                 // Deep link: `page` extra opens a sub-page directly (e.g. "controls", "apps"),
                 // on first launch or when the Hub is already open (onNewIntent).
-                // First launch → the welcome tour (#29).
+                // First launch → the welcome tour.
                 var page by androidx.compose.runtime.saveable.rememberSaveable {
                     mutableStateOf(HubPage.safe(intent?.getStringExtra("page")) ?: if (!Tour.done(this@MainActivity)) HubPage.TOUR else "hub")
                 }
@@ -272,7 +273,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showCompanion() {
-        if (companion != null || QuickPanelActivity.current != null || gameControls === this) return
+        if (companion != null || QuickPanelWindow.isOpen || gameControls === this) return
         @Suppress("DEPRECATION")
         val myId = windowManager.defaultDisplay.displayId
         val dm = getSystemService(DisplayManager::class.java)

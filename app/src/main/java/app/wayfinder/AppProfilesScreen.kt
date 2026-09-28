@@ -7,6 +7,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import app.wayfinder.ui.glassSurface
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -82,7 +83,7 @@ private fun SecondScreenPolicy.label() = when (this) {
 }
 
 /**
- * #12 (and the future home of #14/#21): per-app profiles. One row per launchable
+ * Per-app profiles. One row per launchable
  * app; A / tap opens its options inline. Fully D-pad / stick navigable; B = back.
  */
 @Composable
@@ -306,7 +307,7 @@ private fun ImportDialog(inc: ProfileShare.Incoming?, error: String?, onUse: (Pr
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                         }
                         FocusableGlass(onClick = onClose, radius = 14.dp) {
-                            Text("Cancel  ·  B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                            Text("Cancel  ·  ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                         }
                     }
@@ -334,7 +335,9 @@ private fun AppOptionsDialog(
                 .background(g.base.copy(alpha = 0.97f), shape)
                 .glassSurface(g, shape, raised = true),
         ) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            // 1.3: scrolls — taller than the screen since the frame-rate row (its bottom was unreachable)
+            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (app.icon != null) Image(app.icon, null, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)))
                     Column(Modifier.weight(1f)) {
@@ -344,7 +347,7 @@ private fun AppOptionsDialog(
                             color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
                     }
                     FocusableGlass(onClick = onClose, radius = 14.dp, focusRequester = doneFocus) {
-                        Text("Done  ·  B", color = g.accent, style = MaterialTheme.typography.labelLarge,
+                        Text("Done  ·  ${ButtonNames.m("B")}", color = g.accent, style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                     }
                 }
@@ -375,6 +378,12 @@ private fun AppOptionsDialog(
                             AppConfigStore.update(app.pkg) { it.copy(hz = when (i) { 1 -> 60; 2 -> 120; else -> null }) }
                             ForegroundAppService.reapplyPerf()
                         }
+                        // 1.3 (GitHub #22)
+                        OptionLabel("Frame-rate counter")
+                        GlassSegmentedControl(listOf("Usual", "Shown", "Hidden"), when (cfg.fps) { true -> 1; false -> 2; null -> 0 }, Modifier.fillMaxWidth()) { i ->
+                            AppConfigStore.update(app.pkg) { it.copy(fps = when (i) { 1 -> true; 2 -> false; else -> null }) }
+                            ForegroundAppService.reapplyFps()
+                        }
                     }
                     // Right: the controller, and the bottom-screen guide
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -391,6 +400,15 @@ private fun AppOptionsDialog(
                             val mode = ButtonsMode.values()[i]
                             AppConfigStore.update(app.pkg) { it.copy(buttonsMode = mode) }
                             if (mode == ButtonsMode.CUSTOM) { reopenAfterEdit = app.pkg; onEditButtons(app.pkg) }
+                        }
+                        // 1.3: Back as the game's own button (RetroArch's menu / hotkeys) — automatic for RetroArch
+                        val backFree = ControlsStore.backToGame(app.pkg)
+                        OptionLabel(if (backFree) "Back button: goes to ${app.label} (held too) — no Back combos here"
+                            else "Back button: Wayfinder's (its taps, hold and combos)" +
+                                if (app.pkg.startsWith("com.retroarch") && cfg.backToGame == null) " — RetroArch's own hotkeys don't use Back" else "")
+                        GlassSegmentedControl(listOf("Automatic", "Wayfinder", "The game"),
+                            when (cfg.backToGame) { null -> 0; false -> 1; true -> 2 }, Modifier.fillMaxWidth()) { i ->
+                            AppConfigStore.update(app.pkg) { it.copy(backToGame = when (i) { 1 -> false; 2 -> true; else -> null }) }
                         }
                         // the layer off = these do nothing: said FIRST (the line is cut when long)
                         OptionLabel((if ((cfg.face != null || cfg.remap != null) && !PadLayerCtl.wanted) "Input layer off — these do nothing · " else "") +

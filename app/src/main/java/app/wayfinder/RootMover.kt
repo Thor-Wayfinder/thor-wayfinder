@@ -17,6 +17,9 @@ import android.os.IBinder
  *   su -c "CLASSPATH=<apk> app_process /system/bin \
  *       app.wayfinder.RootMover <pkg> <displayId> [fromDisplayId]"
  *
+ * Or `<pkg> front <displayId>` (1.3): bring [pkg]'s task to the front of its screen the way
+ * Recents does (startActivityFromRecents) — the task as it was, no new intent, no relaunch.
+ *
  * Contract with the caller (parsed from stdout / exit code):
  *   stdout "OK <taskId>"  + exit 0  → moved
  *   stdout "ERR <reason>" + exit ≠0 → caller falls back to am / trampoline
@@ -44,6 +47,7 @@ object RootMover {
             return
         }
         val pkg = args[0]
+        if (args[1] == "front") { front(pkg, args.getOrNull(2)?.toIntOrNull()); return }
         val displayId = args[1].toIntOrNull()
         if (displayId == null) {
             fail(2, "bad displayId '${args[1]}'")
@@ -118,6 +122,38 @@ object RootMover {
             val sb = StringBuilder()
             while (c != null) { sb.append(c.javaClass.name).append(": ").append(c.message).append(" | "); c = c.cause }
             fail(1, sb.toString())
+        }
+    }
+
+    /** 1.3: [pkg]'s task (the one on [display], if given) to the front, as Recents would. */
+    private fun front(pkg: String, display: Int?) {
+        try {
+            val binder = Class.forName("android.os.ServiceManager")
+                .getMethod("getService", String::class.java).invoke(null, "activity_task") as? IBinder
+                ?: return fail(3, "activity_task service unavailable")
+            val atm = Class.forName("android.app.IActivityTaskManager\$Stub")
+                .getMethod("asInterface", IBinder::class.java).invoke(null, binder)!!
+            val getTasks = atm.javaClass.methods.firstOrNull { it.name == "getTasks" } ?: return fail(5, "getTasks not found")
+            val gArgs = getTasks.parameterTypes.mapIndexed { i, t ->
+                when {
+                    t == Int::class.javaPrimitiveType && i == 0 -> MAX_TASKS
+                    t == Int::class.javaPrimitiveType -> -1
+                    t == Boolean::class.javaPrimitiveType -> false
+                    else -> null
+                }
+            }.toTypedArray()
+            val mine = (getTasks.invoke(atm, *gArgs) as? List<*>).orEmpty().filterIsInstance<ActivityManager.RunningTaskInfo>()
+                .filter { it.baseActivity?.packageName == pkg || it.topActivity?.packageName == pkg }
+            val task = mine.firstOrNull { display != null && displayOf(it) == display } ?: mine.firstOrNull()
+                ?: return fail(4, "no running task for $pkg")
+            val fromRecents = atm.javaClass.methods.firstOrNull { it.name == "startActivityFromRecents" && it.parameterTypes.size == 2 }
+                ?: return fail(6, "startActivityFromRecents not found; candidates=" + signaturesOf(atm, "Recents"))
+            val opts = display?.let { android.app.ActivityOptions.makeBasic().setLaunchDisplayId(it).toBundle() }
+            fromRecents.invoke(atm, task.taskId, opts)
+            println("OK ${task.taskId}")
+            halt(0)
+        } catch (t: Throwable) {
+            fail(1, "${t.javaClass.name}: ${t.message} | ${t.cause?.javaClass?.name}: ${t.cause?.message}")
         }
     }
 

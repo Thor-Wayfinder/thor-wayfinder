@@ -1,5 +1,6 @@
 package app.wayfinder
 
+import app.wayfinder.keyboard.ThorKeyboardService
 import app.wayfinder.lights.StickLights
 import app.wayfinder.lights.LightSettings
 import android.accessibilityservice.AccessibilityService
@@ -88,20 +89,20 @@ class ForegroundAppService : AccessibilityService() {
             s.handler.post { s.focusCue?.show(displayId, text, holdMs) }
         }
 
-        /** "Stay awake" (#10) on? For the switches. */
+        /** "Stay awake" on? For the switches. */
         fun isSecondKeptAwake(): Boolean = instance?.stayAwake?.isHeld == true
 
-        /** #26 — route every button press to [cb] (and swallow it) until [stopCapture]. */
+        /** Route every button press to [cb] (and swallow it) until [stopCapture]. */
         fun startCapture(cb: (ThorButton, Boolean) -> Unit): Boolean {
             val e = instance?.buttonEngine ?: return false
             e.capture = cb; return true
         }
         fun stopCapture() { instance?.buttonEngine?.capture = null }
 
-        /** #17 — apply the controller-lock settings now (with the on-screen cue). */
+        /** Apply the controller-lock settings now (with the on-screen cue). */
         fun reapplyFocusLock() { instance?.let { s -> s.handler.post { s.applyFocusLock(announce = true) } } }
 
-        /** #12 — re-apply the top app's 2nd-screen policy (after the user edits it). */
+        /** Re-apply the top app's 2nd-screen policy (after the user edits it). */
         fun quickPanelClosed() { instance?.let { it.handler.post { it.onQuickPanelClosed() } } }
         /** "Game controls" closed (Back to game): the controller goes back to the game. */
         fun gameControlsClosed() { instance?.let { it.handler.post { it.onGameControlsClosed() } } }
@@ -114,6 +115,8 @@ class ForegroundAppService : AccessibilityService() {
         fun later(ms: Long, block: () -> Unit) { instance?.handler?.postDelayed(block, ms) ?: block() }
 
         fun reapplyFps() { instance?.let { it.handler.post { it.applyFps() } } }
+        /** The pad profile of the app with the controller, again (a setting it depends on changed). */
+        fun reapplyPadProfile() { PadLayerCtl.forgetProfile() }
 
         fun reapplyPolicy() { instance?.let { it.reapplyTopAppPolicy(); it.handler.post { it.applyPerf() } } }
 
@@ -134,7 +137,7 @@ class ForegroundAppService : AccessibilityService() {
             }.getOrNull()
         }
 
-        /** #25 — open a game's companion on the bottom screen now. */
+        /** Open a game's companion on the bottom screen now. */
         fun openCompanionNow(pkg: String): Boolean {
             val s = instance ?: return false
             val d = s.secondDisplayId() ?: return false
@@ -142,7 +145,7 @@ class ForegroundAppService : AccessibilityService() {
             s.openCompanion(pkg, if (s.coveredByPresentation(d)) PRIMARY_DISPLAY else d); return true
         }
 
-        /** #15 — open a saved pair. */
+        /** Open a saved pair. */
         fun openPair(p: AppPair): Boolean = instance?.openLayout(p.top, p.bottom, "pair") ?: false
 
         /** What's on the top / bottom screens right now (null = home or nothing). */
@@ -179,7 +182,7 @@ class ForegroundAppService : AccessibilityService() {
         /** Performance / fan / refresh rate changed: apply them — and ONLY them (re-running the
          *  bottom-screen policy blanked the screen the quick panel was open on — review 2026-09-25). */
         fun reapplyPerf() { instance?.let { s -> s.handler.post { s.applyPerf() } } }
-        /** #28 — re-apply the stick lights for the app that has the controller (after an edit). */
+        /** Re-apply the stick lights for the app that has the controller (after an edit). */
         fun reapplyLights() { instance?.let { s -> s.handler.post { s.applyLights(force = true) } } }
         /** The running game changed: its own performance / fan / Hz / lights (or back to the app's). */
         /** The "Do not disturb while playing" switch changed: apply it now. */
@@ -187,10 +190,15 @@ class ForegroundAppService : AccessibilityService() {
         fun gameChanged() { instance?.let { s -> s.handler.post { s.applyPerf(); s.applyLights(force = true) } } }
         /** The app the quick panel was opened over (for "Now playing" and "Keep for this game"). */
         fun panelApp(): String? = instance?.let { s ->
-            displayApps[s.panelReturnTo ?: PRIMARY_DISPLAY]?.takeIf { it !in s.launcherPackages && it != s.packageName }
+            fun ok(p: String?) = p?.takeIf { it !in s.launcherPackages && it != s.packageName }
+            val d = s.panelReturnTo ?: PRIMARY_DISPLAY
+            // 1.3: that screen is covered by another app's second screen (a dual-screen game): the game,
+            // not the frontend underneath ("Now playing: iiSU" over WatermelonDS)
+            val covered = d != PRIMARY_DISPLAY && runCatching { s.coveredByPresentation(d) }.getOrDefault(false)
+            (if (covered) null else ok(displayApps[d])) ?: ok(displayApps[PRIMARY_DISPLAY]).takeIf { covered }
         }
 
-        /** #27 — the bottom-screen keyboard host (needs this service's overlay rights). */
+        /** The bottom-screen keyboard host (needs this service's overlay rights). */
         fun keyboardOverlay(): app.wayfinder.keyboard.KeyboardOverlay? = instance?.keyboardOverlay
 
         /** The display that has key/controller focus, as far as we know (null = service off). */
@@ -217,6 +225,10 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.BACK -> { svc.handler.post { svc.performGlobalAction(GLOBAL_ACTION_BACK) }; true }
                 ThorAction.TOGGLE_SECOND_SCREEN -> svc.toggleSecondScreen()
                 ThorAction.TOGGLE_KEEP_AWAKE -> svc.toggleKeepAwakeSecond()
+                ThorAction.SLEEP -> { svc.sleepNow(); true }
+                ThorAction.AYN_MOUSE -> { svc.toggleAynMouse(); true }
+                ThorAction.GYRO_TOGGLE -> { svc.handler.post { svc.toggleGyro() }; true }
+                ThorAction.GUIDE -> { svc.handler.post { svc.openGuide() }; true }
                 ThorAction.FOCUS_LOCK_TOGGLE -> { svc.handler.post { svc.toggleFocusLock() }; true }
                 ThorAction.SCREENSHOT -> { svc.handler.post { svc.takeScreenshot() }; true }
                 ThorAction.KEYBOARD -> { svc.handler.post { svc.toggleInputDeck() }; true }
@@ -235,7 +247,7 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // #26 — all button handling (Back taps/hold, chords…) runs through the user's bindings.
+    // All button handling (Back taps/hold, chords…) runs through the user's bindings.
     private var buttonEngine: ButtonEngine? = null
     /** One move / swap / layout / route at a time — claimed atomically by whoever starts one. */
     private val swapBusy = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -245,7 +257,7 @@ class ForegroundAppService : AccessibilityService() {
     private var overlayAnimator: OverlayAnimator? = null
     private var blanker: DisplayBlanker? = null
 
-    // ── #9 auto-off idle timer ───────────────────────────────────────────
+    // ── Auto-off idle timer ───────────────────────────────────────────
     private val idleCheckMs = 2000L
     // True only while the SECOND screen is blanked BY the idle timer (so we never
     // auto-wake a screen the user blanked manually, and know when to auto-wake).
@@ -260,7 +272,7 @@ class ForegroundAppService : AccessibilityService() {
     private fun secondDisplayId(): Int? =
         availableDisplayIds.firstOrNull { it != PRIMARY_DISPLAY }
 
-    // ── #8 on-the-fly blank: 3-finger TAP or SWIPE on the bottom screen ─────
+    // ── On-the-fly blank: 3-finger TAP or SWIPE on the bottom screen ─────
     // Raw evdev, multi-touch protocol B: ABS_MT_SLOT (47) selects a slot,
     // ABS_MT_TRACKING_ID (57) = -1 lifts that slot's finger / ≥0 starts one,
     // ABS_MT_POSITION_X/Y (53/54) move it, SYN_REPORT closes a consistent frame.
@@ -330,7 +342,7 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // ── #17 controller focus between screens ─────────────────────────────
+    // ── Controller focus between screens ─────────────────────────────
     // Chord: hold R3, then D-pad Up = top screen, Down = bottom screen (haptic +
     // glass pill on the screen that now has the controller). Holding R3 alone for
     // a moment shows which screen has it right now.
@@ -341,13 +353,13 @@ class ForegroundAppService : AccessibilityService() {
     // accessibility gesture, then remove it — focus falls to that screen's app,
     // which is never touched. (Off-screen `input tap` tricks only work by
     // accident; AYN's setFocusedMode(int) changes nothing — both verified.)
-    // The chord itself (default R3 + ↑/↓) is a #26 binding run by [ButtonEngine].
+    // The chord itself (default R3 + ↑/↓) is a binding run by [ButtonEngine].
     private var focusCue: FocusCue? = null
     private var keyboardOverlay: app.wayfinder.keyboard.KeyboardOverlay? = null
     private var inputDeck: app.wayfinder.deck.InputDeckOverlay? = null
 
     /**
-     * #27 — the input deck: keys, trackpad and pads for the game, drawn on the OTHER
+     * The input deck: keys, trackpad and pads for the game, drawn on the OTHER
      * screen from the one that has the controller (the game's). Home + Y by default.
      */
     fun toggleInputDeck() {
@@ -359,30 +371,49 @@ class ForegroundAppService : AccessibilityService() {
         val deckDisplay = (if (game == PRIMARY_DISPLAY) secondDisplayId() else PRIMARY_DISPLAY) ?: run {
             focusCue?.show(game, "Keyboard & mouse needs the second screen"); return
         }
-        // Read the screen's real top app now: the event-tracked map can lag (e.g. an app
-        // opened from a launcher alias arrives with no display id).
-        val pkg = appOnDisplay(game) ?: displayApps[game]
-        val label = pkg?.let { p -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString() }.getOrNull() }
-        val dark = when (AppSettings.themeMode) {
-            ThemeMode.DARK -> true
-            ThemeMode.LIGHT -> false
-            ThemeMode.SYSTEM -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
-                android.content.res.Configuration.UI_MODE_NIGHT_YES
-        }
+        val (pkg, label, dark) = deckContext(game)
         InputMonitor.start(this)   // the root helper carries the keys; make sure it's up
         deck.show(deckDisplay, game, pkg, label, dark,
             onOpenHub = {
                 deck.hide()
                 startActivity(Intent(this, MainActivity::class.java).putExtra("page", HubPage.KEYBOARD)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION))
             },
             onFocusGame = { focusAction(top = game == PRIMARY_DISPLAY) },
         )
     }
 
+    /** 1.3 (GitHub #12): the game's Guide & notes — on the other screen (over a dual-screen game's second
+     *  screen too: an overlay draws above it), else a panel beside the game on its own screen (single-screen
+     *  devices). The same action closes it. */
+    fun openGuide() {
+        val deck = inputDeck ?: return
+        if (deck.isShowing) { deck.hide(); return }
+        val game = if (AppSettings.focusLockEnabled) lockTarget() else focusedDisplayId()
+        val other = if (game == PRIMARY_DISPLAY) secondDisplayId() else PRIMARY_DISPLAY
+        val (pkg, label, dark) = deckContext(game)
+        deck.show(other ?: game, game, pkg, label, dark, onOpenHub = { deck.hide() },
+            onFocusGame = { focusAction(top = game == PRIMARY_DISPLAY) }, guideOnly = true, beside = other == null)
+    }
+
+    /** For the deck: the app on [display], its name, and whether the deck is dark (the Hub's theme). */
+    private fun deckContext(display: Int): Triple<String?, String?, Boolean> {
+        // Read the screen's real top app now: the event-tracked map can lag (e.g. an app
+        // opened from a launcher alias arrives with no display id).
+        val pkg = appOnDisplay(display) ?: displayApps[display]
+        val label = pkg?.let { p -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString() }.getOrNull() }
+        val dark = when (AppSettings.themeMode) {
+            ThemeMode.DARK, ThemeMode.BLACK -> true
+            ThemeMode.LIGHT -> false
+            ThemeMode.SYSTEM -> (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        return Triple(pkg, label, dark)
+    }
+
     private fun screenName(displayId: Int) = if (displayId == PRIMARY_DISPLAY) "top screen" else "bottom screen"
 
-    // ── #17 lock: the controller stays on one screen; touches elsewhere don't move it ──
+    // ── Lock: the controller stays on one screen; touches elsewhere don't move it ──
     // TOP target → AYN's native lock (Settings.System screen_focus_lock=1): it pins the
     //   controller to the top screen at the input-routing level while touch + keyboard
     //   keep working normally on the bottom (verified: buttons reach the top screen
@@ -411,8 +442,12 @@ class ForegroundAppService : AccessibilityService() {
             // do the same: move focus to the top first, then arm it.
             // Verified against the real input state, with retries: arming it from the
             // bottom is exactly the broken case.
+            // 1.3: said as soon as the controller is on the top screen — the check and the arming
+            // below cost ~140 ms more than a move to the bottom, felt as lag (Reddit)
+            var announced = false
             fun armWhenOnTop(attempt: Int) {
-                focusDisplay(PRIMARY_DISPLAY) {
+                focusDisplay(PRIMARY_DISPLAY) { ok ->
+                    if (ok && !announced) { announced = true; focusModel = PRIMARY_DISPLAY; done() }
                     Thread {
                         val real = rootFocusedDisplay()
                         if (real != null && real != PRIMARY_DISPLAY && attempt < 4) {
@@ -421,12 +456,12 @@ class ForegroundAppService : AccessibilityService() {
                             return@Thread
                         }
                         if (!(AppSettings.focusLockEnabled && AppSettings.focusLockTop) ||
-                            QuickPanelActivity.current != null || MainActivity.gameControls != null) {
-                            Log.v(TAG, "top lock: no longer wanted — not arming"); handler.post { done() }; return@Thread
+                            QuickPanelWindow.isOpen || MainActivity.gameControls != null) {
+                            Log.v(TAG, "top lock: no longer wanted — not arming"); handler.post { if (!announced) { announced = true; done() } }; return@Thread
                         }
                         PServiceBridge.exec("settings put system screen_focus_lock 1")
                         Log.v(TAG, "top lock armed (input focus was $real, attempt $attempt)")
-                        handler.post { focusModel = PRIMARY_DISPLAY; done() }
+                        handler.post { focusModel = PRIMARY_DISPLAY; if (!announced) { announced = true; done() } }
                     }.apply { isDaemon = true }.start()
                 }
             }
@@ -499,12 +534,29 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // ── #19 screenshot ────────────────────────────────────────────────────
+    // ── Screenshot ────────────────────────────────────────────────────
     private var screenshotter: Screenshotter? = null
 
     fun takeScreenshot() {
         val s = screenshotter ?: return
-        val target = AppSettings.shotTarget
+        val ours = currentScreenMode()                          // Wayfinder's own blank (1 bottom off, 2 top off)
+        Thread {
+            // 1.3 (GitHub #18): "both screens" leaves out a screen that's off — Wayfinder's blank, AYN's own
+            // (holding the AYN button: dual_screen_display_mode), or a display that's really off
+            var target = AppSettings.shotTarget
+            if (target == ShotTarget.BOTH) {
+                val second = secondDisplayId()
+                val mode = if (ours != 0) ours else if (PServiceBridge.cachedAvailable()) aynScreenMode() else 0
+                fun off(id: Int) = getSystemService(DisplayManager::class.java).getDisplay(id)?.state == android.view.Display.STATE_OFF
+                val bottomOff = second == null || mode == 1 || off(second)
+                val topOff = mode == 2 || off(PRIMARY_DISPLAY)
+                target = when { bottomOff && !topOff -> ShotTarget.TOP; topOff && !bottomOff -> ShotTarget.BOTTOM; else -> ShotTarget.BOTH }
+            }
+            handler.post { shoot(s, target) }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun shoot(s: Screenshotter, target: ShotTarget) {
         s.capture(PRIMARY_DISPLAY, secondDisplayId(), target) { name ->
             val where = if (target == ShotTarget.BOTTOM) (secondDisplayId() ?: PRIMARY_DISPLAY) else PRIMARY_DISPLAY
             if (name != null) { vibrateShort(); focusCue?.show(where, "Screenshot saved in Pictures / Screenshots") }
@@ -552,7 +604,9 @@ class ForegroundAppService : AccessibilityService() {
             r.copy(stickL = merge(r.stickL, d.stickL), stickR = merge(r.stickR, d.stickR),
                 trigStart = if (r.trigRanged) r.trigStart else d.trigStart, trigFull = if (r.trigRanged) r.trigFull else d.trigFull)
         }
-        return listOf(face, r.engineTokens()).filter { it.isNotEmpty() }.joinToString(" ")
+        // 1.3: Back goes to the game here → holding Back doesn't withhold the other buttons
+        val bg = if (ControlsStore.backToGame(pkg)) "bg=1" else ""
+        return listOf(face, r.engineTokens(), bg).filter { it.isNotEmpty() }.joinToString(" ")
     }
 
     /** The app that really has the controller (its top window), null for Wayfinder itself. */
@@ -583,9 +637,13 @@ class ForegroundAppService : AccessibilityService() {
             val key = app?.let { GameProfiles.activeKey(it) }
             // the app's own buttons (keys, macros, long press…): nothing held survives a switch — of
             // the profile itself, not only of the engine's tokens (two profiles can share tokens)
-            val switched = PadLayerCtl.wanted && PadLayerCtl.setProfile(padProfileFor(key))
-            if (switched || key != lastProfileKey) { lastProfileKey = key; ExtEngine.releaseAll() }
-            ExtEngine.remap = key?.let { Profiles.get(it).remap }
+            // 1.3: the Wayfinder keyboard open = the controller is the keyboard's (A types, the D-pad moves
+            // the cursor): the app's Game controls pause until it closes (web preset: A = click)
+            val kbOpen = ThorKeyboardService.isOpen()
+            val switched = PadLayerCtl.wanted && PadLayerCtl.setProfile(if (kbOpen) "" else padProfileFor(key))
+            val profKey = if (kbOpen) "keyboard" else key
+            if (switched || profKey != lastProfileKey) { lastProfileKey = profKey; ExtEngine.releaseAll() }
+            ExtEngine.remap = if (kbOpen) null else key?.let { Profiles.get(it).remap }
             // gyro: needs the layer (its stick goes through our copy of the pad, its on/off button too)
             GyroEngine.follow(key, key?.takeIf { PadLayerCtl.wanted }?.let { Profiles.get(it).remap?.gyro })
             handler.postDelayed(this, 500)
@@ -641,9 +699,17 @@ class ForegroundAppService : AccessibilityService() {
         browseBusy = false; browseQueued = 0
         recentsDisplay = displayId
         // A few seconds is enough (it covers the card's app icon).
-        focusCue?.showTable(displayId, listOf("Recent apps"), listOf(
-            "D-pad left / right" to "browse", "A" to "open", "Y" to "close the app",
-            "Select" to "close all", "Start" to "home", "B" to "back"), 5000)
+        fun m(b: ThorButton) = ButtonEngine.menuSwap(b).label   // the printed button for that meaning
+        // 1.3 (GitHub #13): full, compact (one slim line of symbols, no title) or off; top centre or a corner
+        when (AppSettings.recentsHint) {
+            2 -> {}
+            1 -> focusCue?.showTable(displayId, emptyList(), listOf(
+                "◀ ▶" to "", m(ThorButton.A) to "↗", m(ThorButton.Y) to "✕", "Select" to "✕✕", "Start" to "⌂", m(ThorButton.B) to "↩"),
+                5000, at = AppSettings.recentsHintAt, compact = true)
+            else -> focusCue?.showTable(displayId, listOf("Recent apps"), listOf(
+                "D-pad left / right" to "browse", m(ThorButton.A) to "open", m(ThorButton.Y) to "close the app",
+                "Select" to "close all", "Start" to "home", m(ThorButton.B) to "back"), 5000, at = AppSettings.recentsHintAt)
+        }
     }
 
     private fun exitRecents() {
@@ -802,7 +868,7 @@ class ForegroundAppService : AccessibilityService() {
      *  the button engine then thought Back was still held (a phantom swap 1 s later, Home dead
      *  — review 2026-09-25). */
     private fun recentsKey(event: KeyEvent): Boolean {
-        val b0 = ButtonEngine.printedButton(event)
+        val b0 = ButtonEngine.menuButton(event)   // Xbox style: the bottom button opens (GitHub #8)
         if (event.action == KeyEvent.ACTION_UP && b0 != null && recentsDowns.remove(b0)) return true
         val d = recentsDisplay ?: return false
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !recentsStillOpen(d)) { exitRecents(); return false }
@@ -980,7 +1046,7 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // ── #12 per-app 2nd-screen policy ────────────────────────────────────
+    // ── Per-app 2nd-screen policy ────────────────────────────────────
     // Applied when the app on the TOP screen changes (an app on the bottom screen
     // never blanks itself). Manual toggles and the blank gesture still override at
     // any time; the policy only re-applies on the next top-app change.
@@ -988,9 +1054,9 @@ class ForegroundAppService : AccessibilityService() {
     @Volatile private var policyBlanked = false   // 2nd screen blanked BY a policy
 
     private fun topAppPolicy(): SecondScreenPolicy =
-        displayApps[PRIMARY_DISPLAY]?.let { AppConfigStore.get(it).second } ?: SecondScreenPolicy.DEFAULT
+        displayApps[PRIMARY_DISPLAY]?.let { GameProfiles.effective(it).second } ?: SecondScreenPolicy.DEFAULT   // 1.3: per game too
 
-    // ── #28 stick lights: follow the app that has the controller ─────────────
+    // ── Stick lights: follow the app that has the controller ─────────────
     private var lightsApp: String? = "(unset)"  // never a package name: forces the first apply
 
     fun applyLights(force: Boolean = false) {
@@ -1004,12 +1070,14 @@ class ForegroundAppService : AccessibilityService() {
 
     @Volatile private var screenOn = true
 
-    /** #28 — no stick-light animation while the Thor sleeps. */
+    /** No stick-light animation while the Thor sleeps. */
     private val screenPowerReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(c: android.content.Context, i: Intent) {
             when (i.action) {
                 Intent.ACTION_SCREEN_OFF -> {
                     screenOn = false
+                    InputMonitor.send("S 0")   // the root helper rests too (GitHub #40)
+                    QuickPanelWindow.close()
                     app.wayfinder.lights.StickLights.pause(); SleepEngine.onScreenOff(); GyroEngine.setScreenOn(false)
                     // the root helper's samplers (screen colour ~12/s, frame rate) sleep too
                     if (ambientPhys != null) { InputMonitor.send("A -"); ambientPhys = null }
@@ -1018,6 +1086,8 @@ class ForegroundAppService : AccessibilityService() {
                 }
                 Intent.ACTION_SCREEN_ON -> {
                     screenOn = true
+                    InputMonitor.send("S 1")
+                    NavBarGuard.poke()   // 1.3 (GitHub #23)
                     app.wayfinder.lights.StickLights.resume(this@ForegroundAppService); SleepEngine.onScreenOn(); GyroEngine.setScreenOn(true)
                     applyFps()     // the lights ask for the screen colour again themselves
                     handler.removeCallbacks(padProfileTick); handler.post(padProfileTick)
@@ -1026,7 +1096,8 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    @Volatile private var screenColor: Int? = null
+    /** (whole screen, left half, right half) — 1.3: each stick its side (GitHub #15). */
+    @Volatile private var screenColor: IntArray? = null
     @Volatile private var sampling = false
 
     /**
@@ -1035,14 +1106,21 @@ class ForegroundAppService : AccessibilityService() {
      * frame late — the rings lagged).
      */
     @Volatile private var ambientPhys: String? = null
-    @Volatile private var ambientColor: Int? = null
+    @Volatile private var ambientColor: IntArray? = null
     @Volatile private var ambientAt = 0L
-    private fun requestScreenColor(): Int? {
+    /** The screen the stick lights take their colour from (1.3, GitHub #33: can be fixed to one screen). */
+    private fun screenColorDisplay(): Int = when (app.wayfinder.lights.StickLights.screenFrom) {
+        1 -> PRIMARY_DISPLAY
+        2 -> secondDisplayId() ?: focusedDisplayId()
+        else -> focusedDisplayId()
+    }
+
+    private fun requestScreenColor(): IntArray? {
         val phys = getSystemService(android.hardware.display.DisplayManager::class.java)
-            .getDisplay(focusedDisplayId())?.let { ScreenCapture.physicalId(it) }
+            .getDisplay(screenColorDisplay())?.let { ScreenCapture.physicalId(it) }
         if (Shell.isPhysId(phys) && phys != ambientPhys && InputMonitor.send("A $phys")) {
             ambientPhys = phys
-            InputMonitor.ambientListener = { c -> ambientColor = c; ambientAt = android.os.SystemClock.uptimeMillis() }
+            InputMonitor.ambientListener = { c, l, r -> ambientColor = intArrayOf(c, l, r); ambientAt = android.os.SystemClock.uptimeMillis() }
         }
         if (android.os.SystemClock.uptimeMillis() - ambientAt < 1000) return ambientColor
         if (!sampling) { sampling = true; handler.post { sampleScreenColor() } }
@@ -1051,7 +1129,7 @@ class ForegroundAppService : AccessibilityService() {
 
     private fun sampleScreenColor() {
         try {
-            takeScreenshot(focusedDisplayId(), mainExecutor, object : TakeScreenshotCallback {
+            takeScreenshot(screenColorDisplay(), mainExecutor, object : TakeScreenshotCallback {
                 override fun onSuccess(r: ScreenshotResult) {
                     try {
                         val hw = android.graphics.Bitmap.wrapHardwareBuffer(r.hardwareBuffer, r.colorSpace)
@@ -1059,13 +1137,16 @@ class ForegroundAppService : AccessibilityService() {
                         val small = hw?.let { android.graphics.Bitmap.createScaledBitmap(it, 32, 18, true) }
                             ?.copy(android.graphics.Bitmap.Config.ARGB_8888, false)
                         if (small != null) {
-                            var rr = 0L; var gg = 0L; var bb = 0L
-                            for (y in 0 until small.height) for (x in 0 until small.width) {
-                                val c = small.getPixel(x, y)
-                                rr += android.graphics.Color.red(c); gg += android.graphics.Color.green(c); bb += android.graphics.Color.blue(c)
+                            fun avg(x0: Int, x1: Int): Int {
+                                var rr = 0L; var gg = 0L; var bb = 0L
+                                for (y in 0 until small.height) for (x in x0 until x1) {
+                                    val c = small.getPixel(x, y)
+                                    rr += android.graphics.Color.red(c); gg += android.graphics.Color.green(c); bb += android.graphics.Color.blue(c)
+                                }
+                                val n = (x1 - x0) * small.height
+                                return android.graphics.Color.rgb((rr / n).toInt(), (gg / n).toInt(), (bb / n).toInt())
                             }
-                            val n = small.width * small.height
-                            screenColor = android.graphics.Color.rgb((rr / n).toInt(), (gg / n).toInt(), (bb / n).toInt())
+                            screenColor = intArrayOf(avg(0, small.width), avg(0, small.width / 2), avg(small.width / 2, small.width))
                         }
                     } catch (e: Exception) { Log.w(TAG, "screen colour: ${e.message}") }
                     finally { r.hardwareBuffer.close(); sampling = false }
@@ -1077,13 +1158,16 @@ class ForegroundAppService : AccessibilityService() {
 
     private fun onTopAppMaybeChanged() {
         if (swapInProgress) return   // displayApps churns mid-swap; the watcher catches up
+        QuickPanelWindow.displayId?.let { d -> if (displayApps[d] != panelOver && displayApps[d] != null) QuickPanelWindow.close() }
+        NavBarGuard.poke()           // 1.3 (GitHub #23): a navigation bar that came back although hidden
         if (!restoringLayout) Layouts.recordLast(displayApps[PRIMARY_DISPLAY], secondDisplayId()?.let { displayApps[it] })
         maybeOpenCompanion()
         applyPerf()
         applyDnd()
         applyFps()
         applyLights()
-        val top = displayApps[PRIMARY_DISPLAY]
+        // 1.3 (GitHub #25): the game inside an emulator counts — detected a moment later, it re-applies
+        val top = displayApps[PRIMARY_DISPLAY]?.let { GameProfiles.activeKey(it) }
         if (top == policyTopApp) return
         policyTopApp = top
         val second = secondDisplayId() ?: return
@@ -1142,6 +1226,35 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
+    /** 1.3 (GitHub #17): AYN's virtual mouse on / off — its own setting (the Keyboard & mouse deck has the
+     *  same switch); once on, clicking a stick makes it the pointer. */
+    /** 1.3: the game's gyro paused / back on — the deck's chip, as an action. */
+    private fun toggleGyro() {
+        val where = controllerDisplay()
+        if (GyroEngine.configuredForCurrent == null) {
+            focusCue?.show(where, "No gyro for this game — set it up in Game controls (Home + X), then Gyro", 3000); return
+        }
+        val off = !GyroEngine.pausedByUser
+        GyroEngine.setPausedByUser(off)
+        focusCue?.show(where, if (off) "Gyro off" else "Gyro on", 1500)
+    }
+
+    private fun toggleAynMouse() = Thread {
+        val on = runCatching { android.provider.Settings.System.getInt(contentResolver, "global_gamepad_to_mouse_mode", 0) == 1 }.getOrDefault(false)
+        PServiceBridge.exec("settings put system global_gamepad_to_mouse_mode ${if (on) 0 else 1}")
+        handler.post {
+            vibrateShort()
+            focusCue?.show(controllerDisplay(), if (on) "Mouse mode off" else "Mouse mode on — click L3 or R3: that stick is the pointer", 2500)
+        }
+    }.apply { isDaemon = true }.start()
+
+    /** 1.3: sleep like the power button — through the root bridge, else Android's lock action
+     *  (which also turns the screens off; for devices without AYN's bridge). */
+    private fun sleepNow() = Thread {
+        if (PServiceBridge.isAvailable()) PServiceBridge.exec("input keyevent KEYCODE_SLEEP")
+        else handler.post { performGlobalAction(GLOBAL_ACTION_LOCK_SCREEN) }
+    }.apply { isDaemon = true }.start()
+
     // ── AYN's native screen mode ─────────────────────────────────────────
     // Long-press on the AYN button makes AYN's assistant blank a screen with its
     // own touch-swallowing overlay ("primaryScreenTopLayout"), recorded in
@@ -1172,7 +1285,7 @@ class ForegroundAppService : AccessibilityService() {
 
     /** Keep the second screen awake / allow it to sleep again. */
     /**
-     * #10 "Stay awake": the screens don't time out. Both screens share ONE power state, so
+     * "Stay awake": the screens don't time out. Both screens share ONE power state, so
      * this is the whole Thor. A screen wake lock — the old 1-px FLAG_KEEP_SCREEN_ON overlay
      * was ignored by Android (measured 2026-09-23: asleep after the timeout anyway; it only
      * looked fine on the charger with "Stay awake while charging" on).
@@ -1277,7 +1390,7 @@ class ForegroundAppService : AccessibilityService() {
         }.getOrNull()
         return imeCache.second
     }
-    private val ignoredPackages = mutableSetOf(
+    private val ignoredPackages: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet<String>().apply { addAll(listOf(
         "com.android.systemui",
         "com.odin.gameassistant",
         "com.odin.dualscreen.assistant",
@@ -1286,9 +1399,9 @@ class ForegroundAppService : AccessibilityService() {
         "com.android.permissioncontroller",
         "com.google.android.permissioncontroller",
         "android",
-    )
+    )) }
     private val DIALOG_PACKAGES = setOf("com.android.permissioncontroller", "com.google.android.permissioncontroller", "android")
-    private val launcherPackages = mutableSetOf<String>()
+    private val launcherPackages: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     // ── lifecycle ────────────────────────────────────────────────────────
 
@@ -1316,6 +1429,12 @@ class ForegroundAppService : AccessibilityService() {
         app.wayfinder.lights.LightSettings.init(this)
         app.wayfinder.lights.StickLights.screenSampler = { requestScreenColor() }
         app.wayfinder.lights.StickLights.screenStop = { if (ambientPhys != null) { InputMonitor.send("A -"); ambientPhys = null } }
+        // 1.3: a launcher / frontend installed while Wayfinder runs is known at once
+        runCatching {
+            registerReceiver(packagesReceiver, android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED); addAction(Intent.ACTION_PACKAGE_REPLACED); addDataScheme("package")
+            })
+        }
         registerReceiver(screenPowerReceiver, android.content.IntentFilter().apply {
             addAction(Intent.ACTION_SCREEN_OFF); addAction(Intent.ACTION_SCREEN_ON)
         })
@@ -1325,10 +1444,12 @@ class ForegroundAppService : AccessibilityService() {
         ControlsStore.init(this)
         buttonEngine = ButtonEngine(buttonHost)  // settings available even if the UI was never opened
         AppConfigStore.init(this)
-        LinkedVolume.start(this)                        // #13 volume keys move both screens
-        Layouts.init(this)                              // #15/#16 — BEFORE anything records a layout
-        PerfProfiles.restoreIfLeftOver(this)            // #21 undo an override left by a crash
-        SleepEngine.start(this)                         // #22 sleep & standby
+        LinkedVolume.start(this)                        // Volume keys move both screens
+        Layouts.init(this)                              // BEFORE anything records a layout
+        PerfProfiles.restoreIfLeftOver(this)            // Undo an override left by a crash
+        PerfProfiles.keepCustomFan(this)                // 1.3: a Custom fan survives performance changes
+        ButtonNames.init(this)                          // 1.3 (GitHub #27)
+        SleepEngine.start(this)                         // Sleep & standby
         SpeakerTune.start(this)                         // speaker fix (replaces the external DSP)
         // "Keep the bottom screen on" survives restarts (the holder overlay doesn't).
         if (AppSettings.keepBottomOn) setStayAwake(true)
@@ -1341,11 +1462,12 @@ class ForegroundAppService : AccessibilityService() {
         PadLayerCtl.onEmergencyOff = {
             handler.post { focusCue?.show(focusedDisplayId(), "Input layer off (Home + Back) — turn it back on in Wayfinder, then Controller") }
         }
-        PadLayerCtl.onLayerFailed = {
-            handler.post { focusCue?.show(focusedDisplayId(), "Input layer couldn't start — your controller works as usual. Try again in Wayfinder, then Controller") }
+        PadLayerCtl.onLayerFailed = { why ->
+            handler.post { focusCue?.show(focusedDisplayId(), "Input layer couldn't start ($why) — your controller works as usual. Try again in Wayfinder, then Controller", 6000) }
         }
         InputMonitor.gatedListener = { t, c, v -> onGatedEvent(t, c, v) }
         InputMonitor.extListener = { c, v -> ExtEngine.onExt(c, v) }
+        InputMonitor.stickListener = { s, x, y -> ExtEngine.onStick(s, x, y) }
         ExtEngine.display = { controllerDisplay() }
         ExtEngine.perform = { a -> Companion.perform(a) }
         GyroEngine.init(this)
@@ -1357,6 +1479,7 @@ class ForegroundAppService : AccessibilityService() {
         }, 1500)
         InputMonitor.onHelperConnected = {
             handler.post { fpsWatching = null; ambientPhys = null; applyFps(); applyLights(force = true) }
+            InputMonitor.send(if (screenOn) "S 1" else "S 0")
             if (PadLayerCtl.wanted) PadLayerCtl.apply(this)
         }
         // The helper may ALREADY be connected (the app was opened before this service — a fresh
@@ -1365,10 +1488,10 @@ class ForegroundAppService : AccessibilityService() {
         if (InputMonitor.connected) InputMonitor.onHelperConnected?.invoke()
         handler.post(padProfileTick)
         InputMonitor.start(this)
-        installGestureListener()                        // #8 blank gesture, #17 focus chord
+        installGestureListener()                        // Blank gesture, focus chord
         syncFocusModel()
-        applyFocusLock()                                // #17 re-apply a saved lock
-        handler.postDelayed(idleWatcher, idleCheckMs)  // #9 auto-off idle timer
+        applyFocusLock()                                // Re-apply a saved lock
+        handler.postDelayed(idleWatcher, idleCheckMs)  // Auto-off idle timer
         refreshDisplays()
         detectLaunchers()
         postPersistentNotification()
@@ -1385,7 +1508,9 @@ class ForegroundAppService : AccessibilityService() {
         runCatching { stayAwake?.release() }; stayAwake = null
         keyboardOverlay?.hide()
         inputDeck?.hide()
+        QuickPanelWindow.close()
         runCatching { unregisterReceiver(screenPowerReceiver) }
+        runCatching { unregisterReceiver(packagesReceiver) }
         // every timer of this instance (the 500 ms profile tick, idle watcher, reconcilers…) and every
         // listener pointing at it: a rebound service must never run beside a dead one
         handler.removeCallbacksAndMessages(null)
@@ -1399,7 +1524,7 @@ class ForegroundAppService : AccessibilityService() {
             LinkedVolume.stop()
             // Leave the sticks as AYN's own settings say, not on our last effect.
             app.wayfinder.lights.StickLights.apply(this, app.wayfinder.lights.LightProfile())
-            InputMonitor.listener = null; InputMonitor.gatedListener = null; InputMonitor.extListener = null
+            InputMonitor.listener = null; InputMonitor.gatedListener = null; InputMonitor.extListener = null; InputMonitor.stickListener = null
             InputMonitor.onHelperConnected = null; InputMonitor.fpsListener = null; InputMonitor.ambientListener = null
             app.wayfinder.lights.StickLights.screenSampler = null; app.wayfinder.lights.StickLights.screenStop = null
             PadLayerCtl.onEmergencyOff = null
@@ -1540,7 +1665,7 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // ── #11 Per-screen brightness ───────────────────────────────────────
+    // ── Per-screen brightness ───────────────────────────────────────
     private val brightnessWorker = java.util.concurrent.Executors.newSingleThreadExecutor()
 
     /** Brighter / dimmer on BOTH screens, keeping the difference between them. */
@@ -1557,46 +1682,102 @@ class ForegroundAppService : AccessibilityService() {
         }
     }
 
-    // ── #20 The AYN button ──────────────────────────────────────────────
+    // ── The AYN button ──────────────────────────────────────────────
     // AYN's drawer is opened from PhoneWindowManager.interceptKeyBeforeDispatching, on
     // scan code 194 (KEY_F24, gpio-keys) — which runs AFTER the accessibility key filter.
     // So consuming the key here keeps AYN's drawer shut: nothing of AYN's is disabled or
     // changed, and turning the option off gives the button straight back.
+    // 1.3: a tap and a hold can each do a chosen action (Controller → Quick panel). The hold fires
+    // while the button is still down; its release then does nothing more.
+    private var aynHoldFired = false
+    private val aynHold = Runnable {
+        val a = AppSettings.aynHold ?: return@Runnable
+        aynHoldFired = true
+        Log.d(TAG, "AYN button held → $a")
+        vibrateShort()
+        Companion.perform(a)
+    }
+
     private fun aynButtonKey(event: KeyEvent): Boolean {
         if (!AppSettings.aynButtonOurs || event.scanCode != 194) return false
-        if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) handler.post { onAynButton() }
+        when (event.action) {
+            KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
+                aynHoldFired = false
+                handler.removeCallbacks(aynHold)
+                if (AppSettings.aynHold != null) handler.postDelayed(aynHold, AYN_HOLD_MS)
+            }
+            KeyEvent.ACTION_UP -> {
+                handler.removeCallbacks(aynHold)
+                if (!event.isCanceled && !aynHoldFired) handler.post { onAynButton() }
+            }
+        }
         return true
     }
 
     private fun onAynButton() {
-        Log.d(TAG, "AYN button → quick panel")
+        val a = AppSettings.aynTap
+        Log.d(TAG, "AYN button → $a")
+        if (a != ThorAction.QUICK_MENU) { Companion.perform(a); return }
         if (TourPractice.intercept(ThorAction.QUICK_MENU)) return
         toggleQuickPanel()
     }
 
-    // ── #20 Quick panel (our drawer) ────────────────────────────────────
+    private val AYN_HOLD_MS = 600L
+
+    // ── Quick panel (our drawer) ────────────────────────────────────
     private var panelReturnTo: Int? = null
+    /** Between the AYN press and the panel's window (main thread only). */
+    private var panelOpening = false
+    /** The panel took the controller when it opened (GitHub #31: off = touch only, nothing to give back). */
+    private var panelTook = true
+    /** The app under the panel when it opened: another app there = the user left, the panel closes. */
+    private var panelOver: String? = null
     /** Open it on the bottom screen, or close it if it's open. While it's open it has the
      *  controller: AYN's top lock would otherwise keep sending buttons to the top. */
     fun toggleQuickPanel(onDisplay: Int? = null) {
         inputDeck?.hide()   // the panel goes on top of everything — the deck included
-        QuickPanelActivity.current?.let { it.finish(); return }
+        if (QuickPanelWindow.isOpen) { QuickPanelWindow.close(); return }
+        // pressed again while it was still opening (the lock is released first, a root round-trip): cancelled
+        if (panelOpening) { panelOpening = false; onQuickPanelClosed(); return }
         val bottom = secondDisplayId()
-        // a dual-screen game's second screen covers the bottom one: the panel opens as the top
-        // screen's side sheet instead, over the (dimmed) game — it would open invisible underneath
-        val d = onDisplay ?: bottom?.takeIf { !coveredByPresentation(it) } ?: PRIMARY_DISPLAY
+        // The bottom screen — over a dual-screen game's second screen too (1.3): the panel is an
+        // accessibility overlay, drawn above its Presentation window (1.1's activity opened invisible
+        // underneath, hence a side sheet on the top screen, still the fallback below)
+        val d = onDisplay ?: bottom ?: PRIMARY_DISPLAY
         panelReturnTo = focusedDisplayId()
-        panelApp()?.let { a -> GameProfiles.ask(a); handler.postDelayed({ if (QuickPanelActivity.current != null) GameProfiles.ask(a) }, 1500) }
+        panelApp()?.let { a -> GameProfiles.ask(a); handler.postDelayed({ if (QuickPanelWindow.isOpen) GameProfiles.ask(a) }, 1500) }
         if (blanker?.isBlanked(d) == true) blanker?.wake(d)   // else it'd open under the black cover
+        val takes = AppSettings.panelTakesController
+        panelTook = takes
+        panelOver = displayApps[d]
+        panelOpening = true
         Thread {
-            if (AppSettings.focusLockEnabled && AppSettings.focusLockTop) PServiceBridge.exec("settings put system screen_focus_lock 0")
+            if (takes && panelOpening && AppSettings.focusLockEnabled && AppSettings.focusLockTop) PServiceBridge.exec("settings put system screen_focus_lock 0")
             handler.post {
-                runCatching {
-                    startActivity(QuickPanelActivity.intent(this),
-                        android.app.ActivityOptions.makeBasic().setLaunchDisplayId(d).toBundle())
-                }.onFailure { Log.w(TAG, "quick panel: ${it.message}") }
+                if (!panelOpening) return@post   // cancelled by a second press
+                panelOpening = false
+                // an overlay window (1.3, GitHub #30 / #32): the app under it is neither paused nor resumed
+                val shown = QuickPanelWindow.show(this, d) ||
+                    (d != PRIMARY_DISPLAY && QuickPanelWindow.show(this, PRIMARY_DISPLAY).also { if (it) panelOver = displayApps[PRIMARY_DISPLAY] })
+                if (!shown) { Log.w(TAG, "quick panel: couldn't open on $d"); onQuickPanelClosed(); return@post }
+                if (takes) focusPanel(QuickPanelWindow.displayId ?: d, 0)   // the controller follows the panel
             }
         }.apply { isDaemon = true }.start()
+    }
+
+    /** The controller onto the panel's screen, checked: the focus tap can land before the new window takes
+     *  input — over a dual-screen game on its second screen (a Presentation, never focused), so focus stayed on
+     *  the game and B went to it (1.3). Retried while the panel is open. */
+    private fun focusPanel(d: Int, attempt: Int) {
+        focusDisplay(d) {
+            Thread {
+                val real = rootFocusedDisplay()
+                if (real != null && real != d && attempt < 4 && QuickPanelWindow.isOpen && QuickPanelWindow.displayId == d) {
+                    Log.w(TAG, "quick panel: focus still on $real (attempt $attempt) — again")
+                    handler.postDelayed({ focusPanel(d, attempt + 1) }, 200)
+                } else { if (real != null) focusModel = real }
+            }.apply { isDaemon = true }.start()
+        }
     }
 
     // ── Game controls while playing (plan §6h) ──
@@ -1632,7 +1813,7 @@ class ForegroundAppService : AccessibilityService() {
                 runCatching {
                     startActivity(Intent(this, MainActivity::class.java)
                         .putExtra("page", if (pkg != null) HubPage.playFor(GameProfiles.activeKey(pkg)) else HubPage.APPS)
-                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
                         android.app.ActivityOptions.makeBasic().setLaunchDisplayId(hubDisplay).toBundle())
                 }.onFailure { Log.w(TAG, "game controls: ${it.message}") }
                 if (hubDisplay != game) handler.postDelayed({ focusDisplay(hubDisplay) { syncFocusModel() } }, 250)
@@ -1644,7 +1825,8 @@ class ForegroundAppService : AccessibilityService() {
     private fun openHubPage(page: String) {
         val d = if (AppSettings.hubOnTop) PRIMARY_DISPLAY else secondDisplayId() ?: PRIMARY_DISPLAY
         runCatching {
-            startActivity(Intent(this, MainActivity::class.java).putExtra("page", page).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            startActivity(Intent(this, MainActivity::class.java).putExtra("page", page)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
                 android.app.ActivityOptions.makeBasic().setLaunchDisplayId(d).toBundle())
         }.onFailure { Log.w(TAG, "open page: ${it.message}"); return }
         // the page is driven with the controller: send it there, exactly as Home + right stick does
@@ -1696,7 +1878,8 @@ class ForegroundAppService : AccessibilityService() {
     /** The panel closed: the controller (and its lock) go back where they were. */
     private fun onQuickPanelClosed() {
         val back = panelReturnTo ?: PRIMARY_DISPLAY
-        panelReturnTo = null
+        panelReturnTo = null; panelOver = null
+        if (!panelTook) return   // touch-only (#31): the game never lost the controller
         handler.postDelayed({
             val hub = hubOn
             if (hub != null && hubReturnTo != null) focusDisplay(hub) { syncFocusModel() }
@@ -1720,12 +1903,12 @@ class ForegroundAppService : AccessibilityService() {
         when (mode) { 1 -> b.blank(second); 2 -> b.blank(PRIMARY_DISPLAY) }
     }
 
-    // ── #20 FPS counter ─────────────────────────────────────────────────
+    // ── FPS counter ─────────────────────────────────────────────────
     private var fpsOverlay: FpsOverlay? = null
     private var fpsWatching: String? = null
 
     /** Watch the top-screen app while the counter is on (sampled by the root helper). */
-    /** #20 FPS counter on the chosen screen(s), in the chosen corner. */
+    /** FPS counter on the chosen screen(s), in the chosen corner. */
     fun applyFps() {
         // the idle watcher (every 2 s) and a helper reconnect both land here: with the screen off
         // they restarted the frame-rate sampler all night (review 2026-09-25)
@@ -1735,8 +1918,10 @@ class ForegroundAppService : AccessibilityService() {
         fun appOn(d: Int?) = d?.takeIf { it != hubOn }?.let { displayApps[it] ?: appOnDisplay(it) }?.takeIf { Shell.isPkg(it) && it !in ignoredPackages && it !in launcherPackages }
         val second = secondDisplayId()
         val on = AppSettings.fpsCounter
-        val top = if (on && AppSettings.fpsScreens != 1) appOn(PRIMARY_DISPLAY) else null
-        val bottom = if (on && AppSettings.fpsScreens != 0) appOn(second) else null
+        // 1.3 (GitHub #22): an app / game can turn the counter on or off for itself
+        fun wants(app: String?, screenOk: Boolean) = app != null && (GameProfiles.effective(app).fps ?: (on && screenOk))
+        val top = appOn(PRIMARY_DISPLAY)?.takeIf { wants(it, AppSettings.fpsScreens != 1) }
+        val bottom = appOn(second)?.takeIf { wants(it, AppSettings.fpsScreens != 0) }
         val key = "$top|$bottom|${AppSettings.fpsCorner}"
         if (key == fpsWatching) return
         fpsWatching = key
@@ -1753,7 +1938,7 @@ class ForegroundAppService : AccessibilityService() {
     }
     private var fpsOverlayBottom: FpsOverlay? = null
 
-    // ── #21 Per-app performance / fan ───────────────────────────────────
+    // ── Per-app performance / fan ───────────────────────────────────
     /** Two apps on screen with different wishes: the chip can only run one mode, so the
      *  most demanding request wins (a game on top asking for High isn't slowed down by a
      *  browser below asking for Standard). "Default" is not a request. Buttons and stick
@@ -1799,7 +1984,7 @@ class ForegroundAppService : AccessibilityService() {
         }.apply { isDaemon = true }.start()
     }
 
-    // ── #25 Game companion ──────────────────────────────────────────────
+    // ── Game companion ──────────────────────────────────────────────
     private var companionFor: String? = null
 
     /** A game with a companion just came to the top screen, and the bottom one is free
@@ -1818,11 +2003,12 @@ class ForegroundAppService : AccessibilityService() {
     private fun openCompanion(pkg: String, display: Int) = Thread {
         if (!Shell.isPkg(pkg)) return@Thread
         val cmp = "$packageName/${CompanionActivity::class.java.name}"
-        val out = PServiceBridge.exec("am start --display $display -n $cmp --es ${CompanionActivity.EXTRA_PKG} ${Shell.q(pkg)}")
+        // -f NEW_TASK | NO_USER_ACTION: the game isn't told the user left it (video apps → picture-in-picture)
+        val out = PServiceBridge.exec("am start --display $display -f 0x10040000 -n $cmp --es ${CompanionActivity.EXTRA_PKG} ${Shell.q(pkg)}")
         Log.i(TAG, "Companion for $pkg on display $display: ${out?.trim()}")
     }.start()
 
-    // ── #15 App pairs / #16 restore after a restart ─────────────────────
+    // ── App pairs / restore after a restart ─────────────────────
     @Volatile private var restoringLayout = false
 
     /** Open [top] on the top screen and [bottom] on the bottom one (null = leave as is).
@@ -1873,7 +2059,7 @@ class ForegroundAppService : AccessibilityService() {
         }, 20_000)
     }
 
-    // ── #14 Per-app screen routing ──────────────────────────────────────
+    // ── Per-app screen routing ──────────────────────────────────────
     // An app set to "opens on Top/Bottom" that just OPENED on the other screen is moved
     // (its live task — no relaunch). Only on a fresh open: an app you moved yourself
     // (swap/send, or dragged there) is left alone.
@@ -2017,8 +2203,12 @@ class ForegroundAppService : AccessibilityService() {
      *  display — our quick panel or Guide opened there would sit underneath, invisible. Accessibility
      *  reports it as a (nearly) full-screen window of no known type above the apps. Our own
      *  companion screen doesn't count (the Hub's; it steps aside by itself). */
-    private fun coveredByPresentation(displayId: Int): Boolean = try {
-        if (MainActivity.companionShowing()) false
+    private fun coveredByPresentation(displayId: Int): Boolean = presentationOwner(displayId) != null
+
+    /** The app whose second screen covers [displayId] (see [coveredByPresentation]), "" if it can't be
+     *  read, or null. */
+    private fun presentationOwner(displayId: Int): String? = try {
+        if (MainActivity.companionShowing()) null
         else {
             val known = setOf(AccessibilityWindowInfo.TYPE_APPLICATION, AccessibilityWindowInfo.TYPE_INPUT_METHOD,
                 AccessibilityWindowInfo.TYPE_SYSTEM, AccessibilityWindowInfo.TYPE_ACCESSIBILITY_OVERLAY,
@@ -2026,14 +2216,15 @@ class ForegroundAppService : AccessibilityService() {
             val full = getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(displayId)
                 ?.let { d -> android.util.DisplayMetrics().also { @Suppress("DEPRECATION") d.getRealMetrics(it) } }
             val area = full?.let { it.widthPixels.toLong() * it.heightPixels } ?: 0L
-            getWindowsOnAllDisplays().get(displayId).orEmpty().any { w ->
-                if (w.type in known) return@any false
+            getWindowsOnAllDisplays().get(displayId).orEmpty().firstNotNullOfOrNull { w ->
+                if (w.type in known) return@firstNotNullOfOrNull null
                 val r = android.graphics.Rect().also { w.getBoundsInScreen(it) }
                 val pkg = w.root?.let { n -> n.packageName?.toString().also { n.recycle() } }
-                pkg != packageName && area > 0 && r.width().toLong() * r.height() >= area * 8 / 10
+                // unreadable (a busy game's Presentation) = covered too, owner unknown ("")
+                (pkg ?: "").takeIf { it != packageName && area > 0 && r.width().toLong() * r.height() >= area * 8 / 10 }
             }
         }
-    } catch (e: Exception) { false }
+    } catch (e: Exception) { null }
 
     private fun appOnDisplay(displayId: Int): String? = try {
         val wins = getWindowsOnAllDisplays().get(displayId)
@@ -2131,11 +2322,11 @@ class ForegroundAppService : AccessibilityService() {
         for ((id, pkg) in found) if (displayApps[id] != pkg) displayApps[id] = pkg
     }
 
-    // ── keys: everything runs through the user's bindings (#26) ───────────
+    // ── keys: everything runs through the user's bindings ───────────
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (aynButtonKey(event)) return true
-        // #27 — an open Thor Keyboard owns the whole pad (nothing leaks to the app).
+        // An open Thor Keyboard owns the whole pad (nothing leaks to the app).
         if (app.wayfinder.keyboard.ThorKeyboardService.instance?.captureKey(event) == true) return true
         if (recentsKey(event)) return true
         return buttonEngine?.onKey(event) ?: false
@@ -2149,6 +2340,8 @@ class ForegroundAppService : AccessibilityService() {
 
         override fun nativePress(button: ThorButton) {
             if (button == ThorButton.BACK) { performGlobalAction(GLOBAL_ACTION_BACK); return }
+            QuickPanelWindow.close()   // Home leaves the panel too (it's a drawer)
+            swapWatchGen++             // and the user's Home wins over a post-swap watch
             // Android's Home only knows the TOP screen: with the controller on the bottom one,
             // Home left that screen alone and sent the top one home (2026-09-24). Home
             // goes home on the screen that HAS the controller. Only the controller's Home comes
@@ -2232,12 +2425,13 @@ class ForegroundAppService : AccessibilityService() {
      * (N64 core, threaded renderer): the move makes it rebuild its video driver; paused at
      * that moment (a swap's incoming app covering it first), its main thread waits for the
      * core, which waits for the main thread — ANR, black screen (Conker, 2026-09-24;
-     * reproduced on the first swap, traces in THOR_PLATFORM_NOTES). A plain move never
+     * reproduced on the first swap). A plain move never
      * pauses it, so these just leave first.
      */
     private val PAUSE_FRAGILE = setOf("com.retroarch", "com.retroarch.aarch64", "com.retroarch.ra32")
 
     private fun performSwapOrSend() {
+        swapWatchGen++
         refreshDisplays()
         scanAllDisplayApps() // fresh scan from all displays before acting
         val ids = availableDisplayIds
@@ -2293,6 +2487,17 @@ class ForegroundAppService : AccessibilityService() {
                 Log.w(TAG, "No tracked apps on any display")
                 return
             }
+        }
+
+        // 1.3 (GitHub #29): another app's second screen (NeoStation's, a dual-screen game's) covers the
+        // target screen — Android keeps it above every app there: the moved app would be hidden under it
+        // (the screen looks frozen). Say so instead. (An app's OWN second screen is its business.)
+        for (move in moves) {
+            val owner = presentationOwner(move.toDisplay)?.takeIf { it.isNotEmpty() && it != move.pkg } ?: continue
+            val name = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(owner, 0)).toString() }.getOrDefault(owner)
+            Log.w(TAG, "swap: ${move.toDisplay} is $owner's second screen — not moving ${move.pkg} under it")
+            handler.post { focusCue?.show(move.fromDisplay, "The ${screenName(move.toDisplay)} shows $name's second screen — an app can't go under it. Turn it off in $name to swap.", 4500) }
+            return
         }
 
         // ── Phase 1: gentle launches ──
@@ -2402,6 +2607,21 @@ class ForegroundAppService : AccessibilityService() {
             }
         }
 
+        // 1.3 (GitHub #28): on its screen but covered — a frontend (iiSU, NeoStation…) brought its main
+        // screen forward when Wayfinder returned the other screen to it. To the front, as it was.
+        if (failed.isNotEmpty() && PServiceBridge.isAvailable()) {
+            val covered = failed.filter { taskDisplayOf(it.pkg) == it.toDisplay }
+            for (move in covered) {
+                Log.i(TAG, "covered after the move: ${move.pkg} on ${move.toDisplay} (found ${displayApps[move.toDisplay]}) — to the front")
+                PServiceBridge.frontTask(this, move.pkg, move.toDisplay)
+            }
+            if (covered.isNotEmpty()) {
+                Thread.sleep(500)
+                scanAllDisplayApps()
+                covered.filter { isOn(it.pkg, it.toDisplay) }.forEach { failed.remove(it); clean.add(it) }
+            }
+        }
+
         // ── Phase 3: gentle retry for moves that haven't landed yet ──
         // Some apps (RetroArch) are slow to appear on the target display.
         // Re-attempt with gentle launch to preserve app state before force-stopping.
@@ -2441,6 +2661,16 @@ class ForegroundAppService : AccessibilityService() {
                     "companion didn't cover it — skipping aggressive")
                 continue
             }
+            // 1.3 (GitHub #28): never kill an app that is still running — a game in progress (RetroArch came
+            // back at its main menu). Its task goes to the front of its target screen instead.
+            val liveOn = if (move in needsAggressive) null else taskDisplayOf(move.pkg)   // duplicates: cleaned up as before
+            if (liveOn != null) {
+                Log.w(TAG, "${move.pkg} is running (task on $liveOn) — not force-stopping it; to the front of ${move.toDisplay}")
+                if (liveOn != move.toDisplay) launchOnDisplay(move.pkg, move.toDisplay, aggressive = false, fromDisplay = liveOn)
+                PServiceBridge.frontTask(this, move.pkg, move.toDisplay)
+                clean.add(move)
+                continue
+            }
             if (i > 0) Thread.sleep(300)
             Log.d(TAG, "Aggressive retry: ${move.pkg} → display ${move.toDisplay} " +
                 "(send=$isSend, companionCovers=$companionCoversSource)")
@@ -2459,7 +2689,30 @@ class ForegroundAppService : AccessibilityService() {
             if (Shell.isPkg(pkg)) displayApps[displayId] = pkg!!
             else displayApps.remove(displayId)
         }
+
+        // 1.3 (GitHub #28, #29): a frontend (iiSU…) answers its screen coming back by bringing its main
+        // screen forward — over the app that just moved there. Back to the front (the game as it was).
+        // Its own thread (the swap is over), ~3 s; a new swap or the user's Home stops it.
+        if (PServiceBridge.isAvailable() && clean.isNotEmpty()) {
+            val gen = ++swapWatchGen
+            val watched = clean.toList()
+            Thread {
+                for (wait in longArrayOf(600, 900, 1500)) {
+                    Thread.sleep(wait)
+                    for (move in watched) {
+                        if (gen != swapWatchGen) return@Thread
+                        val now = appOnDisplay(move.toDisplay) ?: continue
+                        if (now == move.pkg || now !in launcherPackages || taskDisplayOf(move.pkg) != move.toDisplay) continue
+                        Log.w(TAG, "$now covered ${move.pkg} after the move — bringing it back to the front")
+                        PServiceBridge.frontTask(this, move.pkg, move.toDisplay)
+                    }
+                }
+            }.apply { isDaemon = true }.start()
+        }
     }
+
+    /** Bumped by every swap and the user's Home: a running post-swap watch stops. */
+    @Volatile private var swapWatchGen = 0
 
     private fun launchOnDisplay(pkg: String, targetDisplayId: Int, aggressive: Boolean, fromDisplay: Int? = null) {
         val shizukuReady = ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()
@@ -2568,7 +2821,9 @@ class ForegroundAppService : AccessibilityService() {
      *  like swiping it away in Recents) and that screen goes home. Never Wayfinder, a launcher or
      *  the system UI; a note says what was closed. */
     fun closeCurrentApp() {
-        val d = focusedDisplayId()
+        // 1.3: from the quick panel, the app it's about (the controller is on the panel's own screen)
+        val d = if (QuickPanelWindow.isOpen) (panelReturnTo ?: PRIMARY_DISPLAY).also { QuickPanelWindow.close() }
+            else focusedDisplayId()
         val pkg = (appOnDisplay(d) ?: displayApps[d])
             ?.takeIf { Shell.isPkg(it) && it != packageName && it !in ignoredPackages && it !in launcherPackages }
         if (pkg == null) { focusCue?.show(d, "Nothing to close on this screen"); return }
@@ -2642,6 +2897,10 @@ class ForegroundAppService : AccessibilityService() {
     private fun refreshDisplays() {
         val dm = getSystemService(DisplayManager::class.java)
         availableDisplayIds = dm.displays.map { it.displayId }
+    }
+
+    private val packagesReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(c: Context?, i: Intent?) { handler.post { detectLaunchers() } }
     }
 
     private fun detectLaunchers() {

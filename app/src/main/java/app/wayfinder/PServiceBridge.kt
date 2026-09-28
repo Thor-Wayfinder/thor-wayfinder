@@ -147,6 +147,13 @@ object PServiceBridge {
         return out?.contains("OK") == true
     }
 
+    /** 1.3: [pkg]'s task to the front of [displayId], as Recents does (no relaunch) — see [RootMover]. */
+    fun frontTask(context: Context, pkg: String, displayId: Int): Boolean {
+        val out = runEntryPoint(context, "RootMover", pkg, "front", displayId.toString())
+        Log.d(TAG, "RootMover front $pkg on $displayId via pservice: $out")
+        return out?.contains("OK") == true
+    }
+
     /** `am start --display <id> -n <component>` as root via pservice. */
     fun startOnDisplay(context: Context, pkg: String, displayId: Int): Boolean {
         val component = context.packageManager.getLaunchIntentForPackage(pkg)?.component

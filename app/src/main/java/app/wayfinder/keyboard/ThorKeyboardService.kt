@@ -29,7 +29,7 @@ import app.wayfinder.ThorButton
 import app.wayfinder.ui.ThorGlassTheme
 
 /**
- * #27 — the Thor Keyboard, an input method.
+ * The Thor Keyboard, an input method.
  *
  * On a dual-screen Thor the IME is also the conduit: when the text field is on the
  * TOP screen the IME's own window collapses to nothing (the game/app keeps the whole
@@ -47,6 +47,11 @@ class ThorKeyboardService : InputMethodService() {
         private const val TAG = "ThorKeyboard"
         @Volatile var instance: ThorKeyboardService? = null
             private set
+        /** 1.3: the keyboard is open (the controller is its own — the app's Game controls pause). */
+        fun isOpen(): Boolean = instance?.keyboardVisible == true
+        /** 1.3: a key Wayfinder injected itself (a remapped control → a keyboard key): the app's input,
+         *  not the keyboard's controller (its release was taken → a stuck ↑, found testing). */
+        private fun injected(e: KeyEvent) = e.deviceId == android.view.KeyCharacterMap.VIRTUAL_KEYBOARD
     }
 
     val kb = KeyboardController { if (currentInputConnection != null) sink else null }
@@ -89,7 +94,7 @@ class ThorKeyboardService : InputMethodService() {
      * "EXECUTE" over the app) whenever getResources() says LANDSCAPE, unless the keyboard
      * is on its hard-coded whitelist. The bottom screen (1240×1080) is landscape. So the
      * keyboard's own resources report portrait — same sizes, only the orientation flag.
-     * (Verified in AYN's framework.jar, 2026-09-23 — see docs/THOR_PLATFORM_NOTES.md.)
+     * (Verified in AYN's framework.jar, 2026-09-23.)
      */
     private var portraitRes: android.content.res.Resources? = null
     private var portraitFor: Configuration? = null
@@ -105,7 +110,7 @@ class ThorKeyboardService : InputMethodService() {
     }
 
     fun isDark(): Boolean = when (AppSettings.themeMode) {
-        ThemeMode.DARK -> true
+        ThemeMode.DARK, ThemeMode.BLACK -> true
         ThemeMode.LIGHT -> false
         ThemeMode.SYSTEM -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
     }
@@ -364,6 +369,7 @@ class ThorKeyboardService : InputMethodService() {
      */
     fun captureKey(event: KeyEvent): Boolean {
         val code = event.keyCode
+        if (injected(event)) return false
         // A release whose press we took is ours too — even if that press CLOSED the
         // keyboard (B / Back). Otherwise the lone release leaks to the app, which
         // reads it as "back" and leaves the page.
@@ -393,11 +399,13 @@ class ThorKeyboardService : InputMethodService() {
     private val swallowUps = HashSet<Int>()
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        if (injected(event)) return super.onKeyDown(keyCode, event)
         if (keyboardVisible && controllerDown(event)) { swallowUps.add(keyCode); return true }
         return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean {
+        if (injected(event)) return super.onKeyUp(keyCode, event)
         if (swallowUps.remove(keyCode)) { if (keyboardVisible) controllerUp(event); return true }
         return (keyboardVisible && controllerUp(event)) || super.onKeyUp(keyCode, event)
     }
@@ -408,8 +416,9 @@ class ThorKeyboardService : InputMethodService() {
         if (keyCode != KeyEvent.KEYCODE_BACK) kb.notePad()
         if (keyCode == KeyEvent.KEYCODE_BACK) return true                  // closes on release
         // D-pad = the text cursor; the left stick picks keys (onGenericMotionEvent).
-        if (dpadDir(keyCode) != null) { sendDownUpKeyEvents(keyCode); return true }
-        val b = ButtonEngine.printedButton(event) ?: return KeyEvent.isGamepadButton(keyCode)
+        // (1.3, GitHub #11: or the D-pad picks keys — then the left stick is the cursor)
+        dpadDir(keyCode)?.let { (dx, dy) -> if (KeyboardSettings.dpadKeys) kb.moveFocus(dx, dy) else sendDownUpKeyEvents(keyCode); return true }
+        val b = ButtonEngine.menuButton(event) ?: return KeyEvent.isGamepadButton(keyCode)   // Xbox style: bottom = A
         if (event.repeatCount > 0) return true
         when (b) {
             ThorButton.A -> { aLongFired = false; main.postDelayed(longPressA, 450) }
@@ -433,7 +442,7 @@ class ThorKeyboardService : InputMethodService() {
         val keyCode = event.keyCode
         if (keyCode == KeyEvent.KEYCODE_BACK) { close(); return true }
         if (dpadDir(keyCode) != null) return true
-        val b = ButtonEngine.printedButton(event) ?: return KeyEvent.isGamepadButton(keyCode)
+        val b = ButtonEngine.menuButton(event) ?: return KeyEvent.isGamepadButton(keyCode)
         if (b == ThorButton.HOME) return false
         if (b == ThorButton.A) { main.removeCallbacks(longPressA); if (!aLongFired) kb.controllerPress() }
         return true
@@ -465,17 +474,21 @@ class ThorKeyboardService : InputMethodService() {
             return super.onGenericMotionEvent(event)
         val hx = event.getAxisValue(MotionEvent.AXIS_HAT_X).let { if (it > 0.5f) 1 else if (it < -0.5f) -1 else 0 }
         val hy = event.getAxisValue(MotionEvent.AXIS_HAT_Y).let { if (it > 0.5f) 1 else if (it < -0.5f) -1 else 0 }
+        val swap = KeyboardSettings.dpadKeys        // 1.3 (GitHub #11): D-pad = keys, stick = cursor
+        fun cursor(dx: Int, dy: Int) = sendDownUpKeyEvents(when {
+            dx < 0 -> KeyEvent.KEYCODE_DPAD_LEFT; dx > 0 -> KeyEvent.KEYCODE_DPAD_RIGHT
+            dy < 0 -> KeyEvent.KEYCODE_DPAD_UP; else -> KeyEvent.KEYCODE_DPAD_DOWN })
         if (hx != hatX || hy != hatY) {
-            if (hx != 0 && hx != hatX) sendDownUpKeyEvents(if (hx < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
-            if (hy != 0 && hy != hatY) sendDownUpKeyEvents(if (hy < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
+            if (hx != 0 && hx != hatX) { if (swap) kb.moveFocus(hx, 0) else cursor(hx, 0) }
+            if (hy != 0 && hy != hatY) { if (swap) kb.moveFocus(0, hy) else cursor(0, hy) }
             hatX = hx; hatY = hy
         }
         val x = event.getAxisValue(MotionEvent.AXIS_X); val y = event.getAxisValue(MotionEvent.AXIS_Y)
         val mag = maxOf(kotlin.math.abs(x), kotlin.math.abs(y))
         if (mag > 0.6f && !stickLatched) {
             stickLatched = true
-            if (kotlin.math.abs(x) > kotlin.math.abs(y)) kb.moveFocus(if (x > 0) 1 else -1, 0)
-            else kb.moveFocus(0, if (y > 0) 1 else -1)
+            val (dx, dy) = if (kotlin.math.abs(x) > kotlin.math.abs(y)) (if (x > 0) 1 else -1) to 0 else 0 to (if (y > 0) 1 else -1)
+            if (swap) cursor(dx, dy) else kb.moveFocus(dx, dy)
         } else if (mag < 0.3f) stickLatched = false
         return true
     }

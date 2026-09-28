@@ -16,7 +16,7 @@ import androidx.compose.runtime.setValue
 import java.util.concurrent.Executors
 
 /**
- * #13 Linked volume. The Thor has two volumes: the normal media volume (what the volume
+ * Linked volume. The Thor has two volumes: the normal media volume (what the volume
  * keys move) and AYN's "bottom screen" volume — `Settings.System
  * secondary_screen_volume_level` 0..15, which AYN's settings app turns into the gain
  * `persist.sys.audio.value` that AYN's AudioFlinger applies to apps on the bottom screen
@@ -86,7 +86,9 @@ object LinkedVolume {
         if (::ctx.isInitialized) return
         ctx = context.applicationContext
         enabled = prefs.getBoolean("enabled", true)
-        offset = if (prefs.contains("offset")) prefs.getInt("offset", 0) else bottom() - music()
+        // 1.3 (GitHub #7): a fresh start = the same level on both screens. Taking AYN's difference over kept
+        // its untouched default bottom level — the bottom screen's apps ~half as loud, for good.
+        offset = if (prefs.contains("offset")) prefs.getInt("offset", 0) else 0
     }
 
     fun start(context: Context) {
@@ -96,6 +98,7 @@ object LinkedVolume {
         ctx.contentResolver.registerContentObserver(Settings.System.getUriFor(KEY), false, observer)
         started = true
         Log.d(TAG, "linked=$enabled balance=$offset (top ${music()}, bottom ${bottom()})")
+        if (enabled && !prefs.contains("offset")) { learn(0); write(music()) }   // the fresh start, applied
     }
 
     fun stop() {

@@ -3,12 +3,11 @@ package app.wayfinder
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
-import android.os.Bundle
 import android.provider.Settings
 import androidx.compose.foundation.clickable
 import android.view.KeyEvent
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
+import android.util.Log
+import androidx.activity.setViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -57,87 +56,153 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.*
 
 /**
- * #20 Wayfinder's quick panel — our replacement for AYN's drawer. Opens on the bottom
- * screen from the AYN button (App settings → Controller) or the "Quick menu" action.
- * An activity (not an overlay) so it takes the controller like any app — the D-pad is a
- * HAT axis that an overlay could never keep from the game. B / Back or the AYN button
- * closes it; the service then puts the controller (and its lock) back.
+ * Wayfinder's quick panel — our replacement for AYN's drawer. Opens on the bottom screen from
+ * the AYN button (App settings → Controller) or the "Quick menu" action — over a dual-screen game's
+ * second screen too (1.3); a sheet on the right of the top screen only if the bottom one can't show it.
+ *
+ * 1.3 (GitHub #30, #32): an ACCESSIBILITY OVERLAY window, like AYN's own drawer — not an activity.
+ * An activity paused the game under it on the same screen (WatermelonDS paused, its audio drifted),
+ * and closing it resumed the app below, which some frontends (iiSU) answer by jumping to their home.
+ * The window takes the controller (focusable) unless "The panel takes the controller" is off (#31):
+ * then it's touch-only and the game keeps the controller. B / Back or the AYN button closes it;
+ * the service then puts the controller (and its lock) back.
  */
-class QuickPanelActivity : ComponentActivity() {
+object QuickPanelWindow {
+    private const val TAG = "ThorPanel"
+    @Volatile var displayId: Int? = null
+        private set
+    val isOpen get() = view != null
+    var startPerf = 0; var startFan = 4; var startMin = 60f; var startPeak = 60f
+    private var view: android.view.View? = null
+    private var wm: android.view.WindowManager? = null
+    private var owner: PanelOwner? = null
+    private var closing = false
+    private var shownAt = 0L
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        // Volume keys here = the media volume (else Android picks the ring volume when nothing plays).
-        volumeControlStream = android.media.AudioManager.STREAM_MUSIC
-        AppSettings.init(this)
-        // Every settings store the UI touches: the service may not be running yet (a fresh
-        // install, or the user turned it off) — opening a page must never depend on it.
-        LinkedVolume.init(this); SpeakerTune.init(this); SleepSettings.init(this); Layouts.init(this)
-        app.wayfinder.lights.LightSettings.init(this)
-        AppConfigStore.init(this); ControlsStore.init(this)
-        current = this
-        MainActivity.quickPanelShown(true)
+    /** Lifecycle + saved state for Compose, and a Back dispatcher for the panel's BackHandlers. */
+    private class PanelOwner : androidx.activity.OnBackPressedDispatcherOwner {
+        val base = app.wayfinder.keyboard.ComposeOwner()
+        override val lifecycle get() = base.lifecycle
+        override val onBackPressedDispatcher = androidx.activity.OnBackPressedDispatcher()
+    }
+
+    /** The window's root: B / Back go to the panel's Back handlers (edit mode…), else close it;
+     *  a touch outside the side sheet closes it (as the activity's "finish on touch outside" did). */
+    private class Root(ctx: Context, val back: () -> Unit, val outside: () -> Unit) : android.widget.FrameLayout(ctx) {
+        override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_BUTTON_B || event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
+                if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) back()
+                return true
+            }
+            return super.dispatchKeyEvent(event)
+        }
+        override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+            val out = ev.x < 0 || ev.y < 0 || ev.x > width || ev.y > height
+            if (out) { if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) outside(); return true }
+            return super.dispatchTouchEvent(ev)
+        }
+    }
+
+    /** Open the panel on [display] (main thread). False if the window couldn't be added. */
+    fun show(service: android.accessibilityservice.AccessibilityService, display: Int): Boolean {
+        if (view != null) return true
+        val d = service.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(display) ?: return false
+        val ctx = android.view.ContextThemeWrapper(service.createDisplayContext(d), R.style.Theme_Wayfinder_Glass)
+        val wm = ctx.getSystemService(android.view.WindowManager::class.java)
+        AppSettings.init(ctx)
+        // Every settings store the UI touches (the Hub may never have run since the app started).
+        LinkedVolume.init(ctx); SpeakerTune.init(ctx); SleepSettings.init(ctx); Layouts.init(ctx)
+        app.wayfinder.lights.LightSettings.init(ctx)
+        AppConfigStore.init(ctx); ControlsStore.init(ctx)
         // what performance / fan / Hz were before any change here: the user's usual ones for
         // "Keep for <game>" (unless an override already recorded them)
-        PanelShortcuts.touched.clear(); PanelShortcuts.touchCount = 0
-        PanelCards.load(this)
-        startPerf = runCatching { Settings.System.getInt(contentResolver, "performance_mode") }.getOrDefault(0)
-        startFan = runCatching { Settings.System.getInt(contentResolver, "fan_mode") }.getOrDefault(4)
-        startMin = runCatching { Settings.System.getFloat(contentResolver, "min_refresh_rate") }.getOrDefault(60f)
-        startPeak = runCatching { Settings.System.getFloat(contentResolver, "peak_refresh_rate") }.getOrDefault(60f)
-        // Wide screen (the top one): the window itself is a 540 dp sheet on the right, the
-        // game stays visible (dimmed) and a tap beside the sheet closes it. (A sheet drawn
-        // inside a full-screen window broke the glass: it samples its backdrop from the
-        // window's origin.) Narrow screen (the bottom one): full screen.
-        val m = resources.displayMetrics
-        if (m.widthPixels / m.density > 700) {
-            window.setLayout((540 * m.density).toInt(), android.view.WindowManager.LayoutParams.MATCH_PARENT)
-            window.setGravity(android.view.Gravity.END)
-            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-            window.setDimAmount(0.45f)
-            setFinishOnTouchOutside(true)
-        }
-        setContent {
-            val dark = when (AppSettings.themeMode) {
-                ThemeMode.DARK -> true
-                ThemeMode.LIGHT -> false
-                ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
+        PanelShortcuts.startPanel(ForegroundAppService.panelApp())
+        PanelCards.load(ctx)
+        val cr = ctx.contentResolver
+        startPerf = runCatching { Settings.System.getInt(cr, "performance_mode") }.getOrDefault(0)
+        startFan = runCatching { Settings.System.getInt(cr, "fan_mode") }.getOrDefault(4)
+        startMin = runCatching { Settings.System.getFloat(cr, "min_refresh_rate") }.getOrDefault(60f)
+        startPeak = runCatching { Settings.System.getFloat(cr, "peak_refresh_rate") }.getOrDefault(60f)
+        // Wide screen (the top one): a 540 dp sheet on the right, the game dimmed beside it.
+        // Narrow screen (the bottom one): full screen, the app under it frosted (live blur).
+        val m = ctx.resources.displayMetrics
+        val sheet = m.widthPixels / m.density > 700
+        val takes = AppSettings.panelTakesController
+        val blur = !sheet && android.os.Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
+        val owner = PanelOwner()
+        val root = Root(ctx, back = {
+            if (owner.onBackPressedDispatcher.hasEnabledCallbacks()) owner.onBackPressedDispatcher.onBackPressed() else close()
+        }, outside = { if (takes && android.os.SystemClock.uptimeMillis() - shownAt > 800) close() })
+        owner.base.attach(root)
+        root.setViewTreeOnBackPressedDispatcherOwner(owner)
+        val compose = androidx.compose.ui.platform.ComposeView(ctx).apply {
+            setContent {
+                val dark = when (AppSettings.themeMode) {
+                    ThemeMode.DARK, ThemeMode.BLACK -> true
+                    ThemeMode.LIGHT -> false
+                    ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
+                }
+                androidx.compose.runtime.CompositionLocalProvider(
+                    app.wayfinder.ui.LocalRealGlass provides (blur && AppSettings.themeMode != ThemeMode.BLACK),
+                    androidx.activity.compose.LocalOnBackPressedDispatcherOwner provides owner,
+                ) {
+                    ThorGlassTheme(dark = dark) { PanelContent(close = { close() }) }
+                }
             }
-            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides realGlass.value) {
-                ThorGlassTheme(dark = dark) { QuickPanel(close = { finish() }) }
-            }
         }
-        // A drawer over a game shows the game, frosted (live compositor blur) — whatever the
-        // Hub's backdrop setting. The aurora only when Android has blur off (battery saver…).
-        applyBlur()
-        if (android.os.Build.VERSION.SDK_INT >= 31)
-            windowManager.addCrossWindowBlurEnabledListener(mainExecutor, blurListener)
+        root.addView(compose)
+        // removed by the system (the service unbound): forget it, or it would count as open forever
+        root.addOnAttachStateChangeListener(object : android.view.View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(v: android.view.View) {}
+            override fun onViewDetachedFromWindow(v: android.view.View) { if (view === root && !closing) close() }
+        })
+        val W = android.view.WindowManager.LayoutParams.MATCH_PARENT
+        val lp = android.view.WindowManager.LayoutParams(
+            if (sheet) (540 * m.density).toInt() else W, W,
+            android.view.WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            android.view.WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or android.view.WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED or
+                (if (takes) 0 else android.view.WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE) or
+                // touch-only (#31): touches beside the sheet go to the game; else the sheet takes them (a tap
+                // beside it closes it — and isn't also a tap in the game)
+                (if (sheet && !takes) android.view.WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL else 0),
+            android.graphics.PixelFormat.TRANSLUCENT,
+        ).apply {
+            if (sheet) {
+                gravity = android.view.Gravity.END or android.view.Gravity.TOP
+                // touch-only (#31): the game stays in view, undimmed — you keep playing it
+                if (takes) { flags = flags or android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND; dimAmount = 0.45f }
+            }
+            if (blur) {
+                flags = flags or android.view.WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+                blurBehindRadius = AppSettings.glassBlurPx()
+            }
+            title = "WayfinderQuickPanel"
+        }
+        return try {
+            wm.addView(root, lp)
+            view = root; this.wm = wm; this.owner = owner; displayId = display; shownAt = android.os.SystemClock.uptimeMillis()
+            MainActivity.quickPanelShown(true)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "panel on display $display failed: ${e.message}"); owner.base.destroy(); false
+        }
     }
 
-    private val realGlass = androidx.compose.runtime.mutableStateOf(false)
-    private val blurListener = java.util.function.Consumer<Boolean> { applyBlur() }
-    private fun applyBlur() {
-        val on = android.os.Build.VERSION.SDK_INT >= 31 && windowManager.isCrossWindowBlurEnabled
-        if (android.os.Build.VERSION.SDK_INT >= 31) window.setBackgroundBlurRadius(if (on) AppSettings.glassBlurPx() else 0)
-        realGlass.value = on
-    }
-
-    override fun onDestroy() {
-        if (android.os.Build.VERSION.SDK_INT >= 31) runCatching { windowManager.removeCrossWindowBlurEnabledListener(blurListener) }
-        if (current === this) current = null
-        MainActivity.quickPanelShown(false)
-        ForegroundAppService.quickPanelClosed()
-        super.onDestroy()
-    }
-
-    // Leaving it (another app, Home, the other screen) closes it — it's a drawer.
-    override fun onStop() { super.onStop(); if (!isFinishing) finish() }
-
-    companion object {
-        @Volatile var current: QuickPanelActivity? = null
-        var startPerf = 0; var startFan = 4; var startMin = 60f; var startPeak = 60f
-        fun intent(ctx: Context) = Intent(ctx, QuickPanelActivity::class.java)
-            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+    /** Close it (any thread): the service gives the controller back. */
+    fun close() {
+        if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
+            android.os.Handler(android.os.Looper.getMainLooper()).post { close() }; return
+        }
+        val v = view ?: return
+        if (closing) return
+        closing = true
+        try {
+            runCatching { wm?.removeViewImmediate(v) }
+            owner?.base?.destroy()
+            view = null; wm = null; owner = null; displayId = null
+            MainActivity.quickPanelShown(false)
+            ForegroundAppService.quickPanelClosed()
+        } finally { closing = false }
     }
 }
 
@@ -146,7 +211,7 @@ class QuickPanelActivity : ComponentActivity() {
 private enum class ScreenMode(val label: String) { BOTH("Both screens on"), TOP("Top screen only"), BOTTOM("Bottom screen only") }
 
 @Composable
-private fun QuickPanel(close: () -> Unit) {
+private fun PanelContent(close: () -> Unit) {
     val first = remember { FocusRequester() }
     LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
     PanelBody(first, close)
@@ -154,7 +219,7 @@ private fun QuickPanel(close: () -> Unit) {
 
 @Composable
 private fun PanelBody(first: FocusRequester, close: () -> Unit) {
-    GlassScreen(span = app.wayfinder.ui.AuroraSpan.BOTTOM) {
+    GlassScreen(span = app.wayfinder.ui.AuroraSpan.BOTTOM) { Box(Modifier.fillMaxSize()) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(7.dp),
@@ -177,9 +242,9 @@ private fun PanelBody(first: FocusRequester, close: () -> Unit) {
                     "tiles" -> TilesGrid(close)
                 }
             }
-            if (PanelShortcuts.pairsOpen) PanelPairsDialog(close) { PanelShortcuts.pairsOpen = false }
         }
-    }
+        if (PanelShortcuts.pairsOpen) PanelPairsDialog(close) { PanelShortcuts.pairsOpen = false }
+    } }
 }
 
 /**
@@ -201,7 +266,8 @@ private fun NowPlaying() {
     val own = remember(v, key) { Profiles.get(key) }
     val eff = remember(v, pkg) { GameProfiles.effective(pkg) }       // what's applied: the game's, else the app's
     val title = game?.title ?: label
-    val ownText = listOfNotNull(own.perf?.label, own.fan?.let { "fan ${it.label.lowercase()}" }, own.hz?.let { "$it Hz" }).joinToString(" · ")
+    val ownText = listOfNotNull(own.perf?.label, own.fan?.let { "fan ${it.label.lowercase()}" }, own.hz?.let { "$it Hz" },
+        "bottom off".takeIf { own.second == SecondScreenPolicy.BLANK }).joinToString(" · ")
     val effText = listOfNotNull(eff.perf?.label, eff.fan?.let { "fan ${it.label.lowercase()}" }, eff.hz?.let { "$it Hz" }).joinToString(" · ")
     var keptAt by remember { mutableStateOf(-1) }
     val kept = keptAt == PanelShortcuts.touchCount
@@ -223,22 +289,27 @@ private fun NowPlaying() {
                 val fan = runCatching { Settings.System.getInt(cr, "fan_mode") }.getOrDefault(4)
                 val peak = runCatching { Settings.System.getFloat(cr, "peak_refresh_rate") }.getOrDefault(60f)
                 val k = game?.let { GameProfiles.create(pkg, it.game, it.title) } ?: pkg
-                PerfProfiles.setBaselineIfMissing(ctx, QuickPanelActivity.startPerf, QuickPanelActivity.startFan,
-                    QuickPanelActivity.startMin, QuickPanelActivity.startPeak)
+                PerfProfiles.setBaselineIfMissing(ctx, QuickPanelWindow.startPerf, QuickPanelWindow.startFan,
+                    QuickPanelWindow.startMin, QuickPanelWindow.startPeak)
                 val t = PanelShortcuts.touched
+                val bottomOff = ForegroundAppService.screenMode() == 1
                 Profiles.update(k) { c -> c.copy(
                     perf = if ("perf" in t) PerfMode.values().firstOrNull { it.value == perf } else c.perf,
                     fan = if ("fan" in t) FanMode.values().firstOrNull { it.value == fan } else c.fan,
-                    hz = if ("hz" in t) (if (peak > 90f) 120 else 60) else c.hz) }
-                ForegroundAppService.reapplyPerf()
-                keptAt = PanelShortcuts.touchCount
+                    hz = if ("hz" in t) (if (peak > 90f) 120 else 60) else c.hz,
+                    // 1.3 (GitHub #25): the bottom screen turned off here → off whenever this game is on top
+                    second = if ("bottomoff" in t) (if (bottomOff) SecondScreenPolicy.BLANK else SecondScreenPolicy.DEFAULT) else c.second) }
+                ForegroundAppService.reapplyPerf(); ForegroundAppService.reapplyPolicy()
+                keptAt = PanelShortcuts.touchCount; PanelShortcuts.bottomKept()
             }, radius = 14.dp) {
                 Text("Keep for $title", color = g.accent, style = MaterialTheme.typography.labelLarge, maxLines = 1,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
             else if (ownText.isNotEmpty()) FocusableGlass(onClick = {
-                Profiles.update(key) { it.copy(perf = null, fan = null, hz = null) }
-                ForegroundAppService.reapplyPerf(); PanelShortcuts.touched.clear(); keptAt = -1
+                Profiles.update(key) { it.copy(perf = null, fan = null, hz = null, second = SecondScreenPolicy.DEFAULT) }
+                if (GameProfiles.isGame(key)) GameProfiles.removeIfPlain(key)
+                ForegroundAppService.reapplyPerf(); ForegroundAppService.reapplyPolicy(); PanelShortcuts.touched.clear(); keptAt = -1
+                PanelShortcuts.bottomKept()
             }, radius = 14.dp) {
                 Text("Use my usual", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
@@ -342,7 +413,7 @@ private fun MediaCard() {
             }
             // its own controls always work (media keys don't reach playback on another device)
             if (n != null) FocusableGlass(onClick = {
-                ForegroundAppService.open(OpenTargets.app(n.app)); (ctx as? android.app.Activity)?.finish()
+                ForegroundAppService.open(OpenTargets.app(n.app)); QuickPanelWindow.close()
             }, radius = 14.dp) {
                 Text("Open", color = g.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             }
@@ -446,12 +517,17 @@ private fun Readout(label: String, value: String, scale: Float = 1f) {
 @Composable
 private fun ScreenModeCard(first: FocusRequester, close: () -> Unit) {
     var mode by remember { mutableStateOf(ForegroundAppService.screenMode()) }
+    // 1.3: follows the real mode (a profile or "Use my usual" can change it while the panel is open)
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        while (true) { kotlinx.coroutines.delay(500); mode = ForegroundAppService.screenMode() }
+    }
     GlassSegmentedControl(
         options = ScreenMode.values().map { it.label },
         selectedIndex = mode,
         modifier = Modifier.fillMaxWidth().focusRequesterSafe(first),
     ) { i ->
         mode = i
+        PanelShortcuts.touchBottom()   // 1.3 (GitHub #25): "Keep for <game>" can remember it
         // "Top only" blanks THIS screen: close first, or the panel would sit invisible
         // under the black cover still holding the controller.
         if (i == 1) { close(); ForegroundAppService.later(300) { ForegroundAppService.setScreenMode(1) } }

@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
  * power-off (SurfaceControl.setDisplayPowerMode is re-asserted by the display
  * controller). On the Thor's OLED screens black pixels are effectively off, so
  * this saves battery like a real blank — while the app underneath keeps running.
- * Tapping the blanked screen wakes it. Used by #8 (toggle), #9 (auto-off), #12.
+ * Tapping the blanked screen wakes it. Used by the blank toggle, the idle auto-off and the per-app bottom-screen rule.
  */
 class DisplayBlanker(private val service: AccessibilityService) {
 
@@ -33,7 +33,7 @@ class DisplayBlanker(private val service: AccessibilityService) {
 
     fun isBlanked(displayId: Int): Boolean = blanks.containsKey(displayId)
 
-    // ── keep-awake (#10): a tiny transparent overlay with FLAG_KEEP_SCREEN_ON ──
+    // ── keep-awake: a tiny transparent overlay with FLAG_KEEP_SCREEN_ON ──
     fun isKeptAwake(displayId: Int): Boolean = awake.containsKey(displayId)
 
     fun toggleKeepAwake(displayId: Int) {

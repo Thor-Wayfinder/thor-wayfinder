@@ -43,7 +43,7 @@ import app.wayfinder.ui.ThorGlassTheme
 import kotlinx.coroutines.delay
 
 /**
- * #25 Game companion: a page for the bottom screen while a game runs on top.
+ * Game companion: a page for the bottom screen while a game runs on top.
  *  - Guide: a browser that starts on a search for "<game> map guide"; 📌 keeps the page
  *    you land on for that game (it opens there next time).
  *  - Notes: a notepad per game, saved as you type.
@@ -62,7 +62,7 @@ class CompanionActivity : ComponentActivity() {
         pkg.value = intent?.getStringExtra(EXTRA_PKG).orEmpty()
         setContent {
             val dark = when (AppSettings.themeMode) {
-                ThemeMode.DARK -> true
+                ThemeMode.DARK, ThemeMode.BLACK -> true
                 ThemeMode.LIGHT -> false
                 ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
@@ -79,7 +79,7 @@ class CompanionActivity : ComponentActivity() {
         const val EXTRA_PKG = "pkg"
 
         fun intent(ctx: Context, pkg: String): Intent = Intent(ctx, CompanionActivity::class.java)
-            .putExtra(EXTRA_PKG, pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .putExtra(EXTRA_PKG, pkg).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
     }
 }
 

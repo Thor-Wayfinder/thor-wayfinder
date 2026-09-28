@@ -6,7 +6,7 @@ import android.util.Log
 import java.io.File
 
 /**
- * App side of the input layer (docs/INPUT_LAYER_PLAN.md). Ships `wfpad` (fx/wfpad.c, built by
+ * App side of the input layer. Ships `wfpad` (fx/wfpad.c, built by
  * tools/build_wfpad.sh) from the assets to the app's files, asks the root helper's [PadLayer]
  * to run it, and tells it the profile of the app that has the controller.
  *
@@ -32,7 +32,9 @@ object PadLayerCtl {
     @Volatile var onEmergencyOff: (() -> Unit)? = null
     /** The helper gave up on the layer by itself (it keeps failing): tell the user, don't just
      *  leave them without the layer's features. It retries at the next helper start. */
-    @Volatile var onLayerFailed: (() -> Unit)? = null
+    @Volatile var onLayerFailed: ((String) -> Unit)? = null
+    /** Why the layer last gave up ("" = it didn't), for Help & status (GitHub #39). */
+    @Volatile var failReason: String = ""
     @Volatile private var profile = ""
     /** The face-button layout forced for the current app: 'n' (as printed), 'x' (Xbox), or
      *  null = AYN's own setting. Keys from the copy are read through it ([ButtonEngine]). */
@@ -72,10 +74,15 @@ object PadLayerCtl {
         } else InputMonitor.send("G off")
     }
 
+    /** The next [setProfile] is sent even if unchanged (1.3). */
+    @Volatile private var forceNext = false
+    fun forgetProfile() { forceNext = true }
+
     /** The profile of the app that has the controller (tokens of fx/wfmap.h `wf_parse`;
      *  "" = no change to the pad). Sent only when it changes. */
     fun setProfile(spec: String): Boolean {
-        if (spec == profile) return false
+        if (spec == profile && !forceNext) return false
+        forceNext = false
         profile = spec
         layoutOverride = Regex("(^| )L=([nx])").find(spec)?.groupValues?.get(2)?.single()
         if (wanted) InputMonitor.send("G map $spec")
@@ -88,7 +95,7 @@ object PadLayerCtl {
         Log.i(TAG, line)
         when {
             line.startsWith("on ") -> {
-                active = true
+                active = true; failReason = ""
                 controllerNumber = Regex("controller #(\\d+)").find(line)?.groupValues?.get(1)?.toIntOrNull() ?: 0
             }
             line == "emergency-off" -> {
@@ -97,7 +104,9 @@ object PadLayerCtl {
                 onEmergencyOff?.invoke()
             }
             line.startsWith("error") && (line.endsWith("layer off") || line.contains("not-trusted")) -> {
-                active = false; onLayerFailed?.invoke()
+                active = false
+                failReason = line.removePrefix("error ").removeSuffix(" — layer off")
+                onLayerFailed?.invoke(failReason)
             }
             line == "off" || line.startsWith("stopped") || line.startsWith("error") -> active = false
         }

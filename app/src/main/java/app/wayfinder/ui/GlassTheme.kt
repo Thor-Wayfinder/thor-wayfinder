@@ -73,7 +73,26 @@ private val GlassType = Typography(
 
 @Composable
 fun ThorGlassTheme(dark: Boolean, content: @Composable () -> Unit) {
-    val colors = if (dark) {
+    val black = dark && app.wayfinder.AppSettings.themeMode == app.wayfinder.ThemeMode.BLACK
+    val colors = if (black) {
+        // 1.3: pure black (OLED) — no aurora, frost a touch lighter so the panels still read
+        GlassColors(
+            dark = true,
+            base = Color.Black,
+            blobs = listOf(Color.Black),
+            blobAlpha = 0f,
+            scrim = Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent)),
+            panelFill = Brush.verticalGradient(listOf(Color(0x24FFFFFF), Color(0x14FFFFFF))),
+            panelFillFocused = Brush.verticalGradient(listOf(Color(0x3DFFFFFF), Color(0x24FFFFFF))),
+            panel = Color(0x1FFFFFFF),
+            rimTop = Color(0x66FFFFFF),
+            rimBottom = Color(0x1FFFFFFF),
+            textPrimary = Color(0xFFFFFFFF),
+            textSecondary = Color(0xD1FFFFFF),
+            textTertiary = Color(0x94FFFFFF),
+            accent = Color(0xFF3D9BFF), accent2 = Color(0xFF8A7BFF),
+        )
+    } else if (dark) {
         GlassColors(
             dark = true,
             base = Color(0xFF06070F),

@@ -38,7 +38,7 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - "Opens on": each app opens on its own screen
 - App pairs: two apps, one press — from the quick panel or a combo; "Save what's on the screens now"
 - Screens restored after a restart (optional)
-- Recent apps (Back · double), driven by the controller: browse, open, close, clear all
+- Recent apps (Back · double), driven by the controller: browse, open, close, clear all — its hint full, compact or off
 - Close background apps (Back · triple) — the apps on both screens stay open
 - Close this app — close the game you're playing with a combo, no multitask view
 - Home goes home on the screen that has the controller
@@ -53,12 +53,13 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 ### Display & sound
 - Brightness per screen; Home + R2 / L2 = brighter / dimmer on both, keeping their difference
-- Volume per screen, and the volume buttons change both together
+- Volume per screen, and the volume buttons change both together; "Same on both" when they differ
 - Colour saturation (50–130 %)
 - Speaker fix: EQ, +15 dB with a limiter and a stereo widener — EQ on / off to compare, never on headphones.
   EQ curve: the community preset by **Joey (Retro Handhelds)** — thank you!
+- Volume boost: up to +12 dB with a limiter, on the speakers, headphones and Bluetooth
 - 60 / 120 Hz, per app or per game
-- FPS counter on either or both screens, in any corner, + battery and temperatures
+- FPS counter on either or both screens, in any corner, + battery and temperatures — per app or per game
 
 ### Controller
 - Combos on Home / Back: tap, double, triple, hold, + a button — 16 actions
@@ -69,11 +70,13 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - Per-app combos: normal / custom / off
 - Send the controller to the top or bottom screen, lock it; 4 modes (follows touch, stays where sent,
   always top, always bottom)
-- AYN button opens Wayfinder's quick panel (or AYN's drawer)
+- AYN button opens Wayfinder's quick panel (or AYN's drawer); a tap and a hold can each do an action
 - One-press fix for AYN's "press Home twice"
 - Face buttons Nintendo-style / Xbox-style, globally or per app / game
 - Test the controller: stick drift → a suggested deadzone for every game
 - Games see one clean controller that stays controller #1; Home + Back held 5 s = emergency off
+- Bluetooth and USB controllers work alongside — only the Thor's own controls are taken over
+- Button names on screen as printed or the Xbox way (or following AYN's controller style)
 
 ### Game controls (Home + X)
 - Remap per app, and per game inside emulators — "Which game?" switcher, "Find by pressing"
@@ -83,12 +86,14 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - Macros: record, edit, up to 20 steps
 - Chords: two buttons pressed together
 - Hold-to-shift layer (optional, off by default)
-- Stick deadzone / response curve, trigger ranges, swap / invert sticks, D-pad ↔ left stick
+- Each D-pad direction on its own; a stick as the mouse, the scroll wheel or four keys (arrows / W A S D), with dead
+  zones so a resting stick never moves anything; a Web browsing preset
+- Stick deadzone / response curve, trigger ranges, swap sticks, invert up / down and left / right, D-pad ↔ left stick
 - Gyro: mouse, right stick or steering — always, while holding, toggle or on trigger pull; smoothing,
-  calibration and auto-calibration
+  calibration and auto-calibration; "Gyro on / off" as an action (a combo, a long press, a tile)
 - Emulator presets: RetroArch hotkeys (hold Select + R1 / L1 / R2 / Start), emulator menu on hold Select + Start
 - Copy controls from another app
-- Per-game performance, fan, refresh rate and stick lights
+- Per-game performance, fan, refresh rate, stick lights, bottom screen and FPS counter
 - Share / import controls as a file — filtered, macros arrive switched off
 
 ### Keyboard & mouse
@@ -96,18 +101,22 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
   game's **Guide** (its guide page and your notes, even over dual-screen games)
 - Trackpad gestures (2-finger tap = right click, 2-finger drag = scroll, hold + move = drag), sticky
   Ctrl / Shift / Alt / Win
+- Touch mode: the trackpad moves a pointer on the game's screen and taps, drags and swipes there like a finger —
+  for games that ignore a mouse
 - The right pad picked automatically per app
 - Stick-as-mouse mode
-- My pad: your own keys and text snippets
+- My pad: your own keys and text snippets; a simpler keyboard page
 - Wayfinder Keyboard: type with the controller, 17 languages, accents, password-safe — opens on the other
-  screen so the game keeps its own
+  screen so the game keeps its own; pick keys with the D-pad (option); hold Space and slide to move the cursor
 
 ### Quick panel (AYN button)
-- A glass panel on the bottom screen, with the game blurred behind
+- A glass panel on the bottom screen, with the game blurred behind — over a dual-screen game's second screen too;
+  the game never pauses under it
+- The panel takes the controller, or leaves it to the game (touch only)
 - Brightness, volume, live stats, screen modes
-- 39 shortcut tiles: Wayfinder, Android and AYN switches (bypass charging, 80 % charge limit, L2 / R2 mode…)
+- 45 shortcut tiles: Wayfinder, Android and AYN switches (bypass charging, 80 % charge limit, L2 / R2 mode…)
 - Arrange tiles like a home screen; show, hide and reorder the cards
-- "Now playing": keep performance, fan and refresh rate for this game
+- "Now playing": keep performance, fan, refresh rate and the bottom screen for this game
 - Optional media and details cards
 
 ### Per app (App profiles)
@@ -117,11 +126,12 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 ### Guide & notes
 - A game guide (small browser, pin a page) and your notes — per game, even inside an emulator; on the bottom
-  screen, or in the Home + Y deck
+  screen, in the Home + Y deck, or beside the game when no screen is free (an action and a tile)
 
 ### Stick lights
 - AYN default, off, colour, breathing, strobe, spectrum, screen colour
-- Per app / per game, speed, brightness, a colour for each stick
+- Per app / per game, speed, brightness, a colour for each stick; screen colour split left / right, taken from
+  the top screen, the bottom screen or the controller's screen
 
 ### Capture
 - Screenshots: top, bottom or both stacked (Home + R1)
@@ -134,9 +144,10 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - Pause music and videos when the lid closes
 - Sleep when an external display is unplugged
 - Standby drain stats, battery health, an activity log
+- Sleep from a tile, a combo or the AYN button
 
 ### Look & setup
-- Light / dark / system theme, see-through glass, blur, your wallpaper or the aurora backdrop
+- Light / dark / black (OLED) / system theme, see-through glass, blur, your wallpaper or the aurora backdrop
 - The Hub on either screen — with the Hub on top, the bottom screen shows your combos
 - A status strip: where the controller is, the app on each screen, battery, brightness
 - Settings search
@@ -166,9 +177,9 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 Every release lists the APK's **SHA-256** and the **signing certificate's SHA-256**. Check them before installing:
 
 ```
-certutil -hashfile wayfinder-1.2.apk SHA256            (Windows)
-sha256sum wayfinder-1.2.apk                             (Linux / macOS)
-apksigner verify --print-certs wayfinder-1.2.apk        (the certificate)
+certutil -hashfile wayfinder-1.3.apk SHA256            (Windows)
+sha256sum wayfinder-1.3.apk                             (Linux / macOS)
+apksigner verify --print-certs wayfinder-1.3.apk        (the certificate)
 ```
 
 ## Privacy and security

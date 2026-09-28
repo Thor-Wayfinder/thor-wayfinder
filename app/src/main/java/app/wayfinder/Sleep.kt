@@ -23,12 +23,12 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * #22 Sleep & standby. While the screen is off, turn off what drains the battery for
+ * Sleep & standby. While the screen is off, turn off what drains the battery for
  * nothing (Wi-Fi, Bluetooth, a VPN, the audio DSP, file sync) and put back ONLY what we
  * turned off when it wakes; measure every sleep; keep the Thor asleep with its lid
  * closed. Everything goes through public commands (root `cmd wifi …`,
  * `cmd bluetooth_manager …`, `input keyevent KEYCODE_SLEEP`) or each app's own
- * documented automation intent. See docs/THOR_PLATFORM_NOTES.md §9b.
+ * documented automation intent.
  */
 object SleepSettings {
     private lateinit var prefs: android.content.SharedPreferences

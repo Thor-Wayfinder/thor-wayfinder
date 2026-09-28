@@ -9,7 +9,7 @@ import android.util.Log
 /**
  * App-side receiver for [InputMonitorTool]. Hosts an abstract LocalServerSocket,
  * launches the root helper (via pservice), and receives raw evdev events. Tracks
- * last-event time per device (for #9 touch-idle) and forwards events to a
+ * last-event time per device (for touch-idle) and forwards events to a
  * listener (for gestures / controller chords in the InputEngine).
  *
  * Device index order = [ThorInput.DEVICE_MATCHERS] (resolved + re-resolved by the helper):
@@ -89,7 +89,7 @@ object InputMonitor {
     }
 
     @Volatile private var clientOut: java.io.OutputStream? = null
-    /** #20 — frames presented in the last second by the watched app (see [FpsSampler]). */
+    /** Frames presented in the last second by the watched app (see [FpsSampler]). */
     @Volatile var fpsListener: ((top: Int, bottom: Int) -> Unit)? = null
     /** Input layer: (type, code, value) of pad events the GAME did not get because Home or Back
      *  was held — Wayfinder's shortcuts read them here. Keys come as PRINTED buttons. */
@@ -97,8 +97,10 @@ object InputMonitor {
     /** Input layer: (printed evdev code, 1 = down / 0 = up) of a button the current app's remap
      *  sends to Wayfinder — a keyboard key or a Wayfinder action ([PadRemap]). */
     @Volatile var extListener: ((Int, Int) -> Unit)? = null
-    /** Stick lights: average screen colour from the helper's [AmbientSampler] (`C r g b`). */
-    @Volatile var ambientListener: ((Int) -> Unit)? = null
+    /** 1.3: a stick that is Wayfinder's (side 0 left / 1 right, x y −1000..1000). */
+    @Volatile var stickListener: ((Int, Int, Int) -> Unit)? = null
+    /** Stick lights: screen colour from the helper's [AmbientSampler] — (whole screen, left half, right half). */
+    @Volatile var ambientListener: ((Int, Int, Int) -> Unit)? = null
     /** A (new) helper is connected: it knows nothing yet — re-send what it should be doing
      *  (FPS watch, screen-colour sampling). Without this, a counter switched on while the
      *  helper was restarting stayed on "idle" for good. */
@@ -122,7 +124,7 @@ object InputMonitor {
         // Only OUR root helper (uid 0) may talk on this channel. Abstract sockets have no
         // file permissions: without this check any app could connect, inject fake
         // controller/touch events, or sit here while the helper is down and receive what
-        // the user types on Wayfinder's keyboard (docs/RELEASE_CHECKLIST.md §1).
+        // the user types on Wayfinder's keyboard.
         val uid = runCatching { client.peerCredentials.uid }.getOrDefault(-1)
         if (uid != 0) {
             Log.w(TAG, "refused a connection from uid $uid (not the root helper)")
@@ -143,9 +145,11 @@ object InputMonitor {
             while (running) {
                 val line = br.readLine() ?: break
                 val p = line.split(' ')
-                if (p[0] == "C" && p.size == 4) {
-                    val r = p[1].toIntOrNull(); val gg = p[2].toIntOrNull(); val b = p[3].toIntOrNull()
-                    if (r != null && gg != null && b != null) ambientListener?.invoke(android.graphics.Color.rgb(r, gg, b))
+                if (p[0] == "C" && (p.size == 4 || p.size == 10)) {
+                    val v = p.drop(1).map { it.toIntOrNull()?.coerceIn(0, 255) ?: 0 }
+                    fun c(i: Int) = android.graphics.Color.rgb(v[i], v[i + 1], v[i + 2])
+                    val avg = c(0)
+                    ambientListener?.invoke(avg, if (v.size >= 9) c(3) else avg, if (v.size >= 9) c(6) else avg)
                     continue
                 }
                 if (p[0] == "P") { PadLayerCtl.onStatus(line.removePrefix("P ")); continue }   // input layer status
@@ -157,6 +161,11 @@ object InputMonitor {
                 if (p[0] == "X" && p.size == 3) {   // input layer: a button mapped to a keyboard key / action
                     val c = p[1].toIntOrNull(); val v = p[2].toIntOrNull()
                     if (c != null && v != null) extListener?.invoke(c, v)
+                    continue
+                }
+                if (p[0] == "T" && p.size == 4) {   // input layer: a stick that is Wayfinder's (mouse / scroll / keys)
+                    val sd = p[1].toIntOrNull(); val x = p[2].toIntOrNull(); val y = p[3].toIntOrNull()
+                    if (sd != null && x != null && y != null) stickListener?.invoke(sd, x, y)
                     continue
                 }
                 if (p[0] == "D" && p.size >= 2) {   // which game an app runs: D <pkg> [<game-id> <title…>]

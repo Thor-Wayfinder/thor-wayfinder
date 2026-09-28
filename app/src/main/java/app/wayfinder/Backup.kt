@@ -10,8 +10,7 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 
 /**
- * Full backup / restore of Wayfinder's settings (2026-09-25; plan: FEATURE_IDEAS.md
- * "Profile export / import").
+ * Full backup / restore of Wayfinder's settings (2026-09-25).
  *
  * **Trust.** A backup is signed (HMAC-SHA256) with a key that exists only on this Thor, in the
  * app's private files — never in a backup, never copied off the device (dataExtractionRules).

@@ -22,7 +22,7 @@ import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.GlassSegmentedControl
 import app.wayfinder.ui.LocalGlass
 
-/** #22 Hub → Screens & power → Sleep & standby. */
+/** Hub → Screens & power → Sleep & standby. */
 @Composable
 fun SleepPage(myDisplayId: Int, onBack: () -> Unit) =
     SubPage(myDisplayId, "Sleep & standby", "Less drain while the screen is off, and a Thor that stays asleep in its case", onBack) {
@@ -51,6 +51,7 @@ fun SleepPage(myDisplayId: Int, onBack: () -> Unit) =
 
 @Composable
 private fun SleepActionsCard() {
+    @Suppress("UNUSED_VARIABLE") val v = SleepSettings.version.intValue   // redraw on change (GitHub #5)
     val ctx = LocalContext.current
     fun has(p: String) = runCatching { ctx.packageManager.getPackageInfo(p, 0); true }.getOrDefault(false)
     SettingCard("Wi-Fi", "Off while asleep (left alone in airplane mode)", checked = SleepSettings.wifi, onChecked = { SleepSettings.set("wifi", it) })
@@ -67,6 +68,7 @@ private fun SleepActionsCard() {
 
 @Composable
 private fun SleepWhenCard() {
+    @Suppress("UNUSED_VARIABLE") val v = SleepSettings.version.intValue   // redraw on change (GitHub #5)
     val g = LocalGlass.current
     val grace = SleepSettings.GRACE_OPTIONS
     SettingCard("After the screen goes off", "How long to wait first — a quick look at the clock won't trigger it") {
@@ -91,6 +93,7 @@ private fun SleepWhenCard() {
 
 @Composable
 private fun SleepLidCard() {
+    @Suppress("UNUSED_VARIABLE") val v = SleepSettings.version.intValue   // redraw on change (GitHub #5)
     SettingCard("Keep it asleep with the lid closed",
         "If it wakes in its case (a button, the power key, a notification) it goes straight back to sleep — checked again every few seconds, and if it runs hot in there, music stops and performance drops to Standard. Not while docked on an external display.",
         checked = SleepSettings.lidProtection, onChecked = { SleepSettings.set("lid", it) })

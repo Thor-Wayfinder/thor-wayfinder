@@ -11,7 +11,7 @@ import org.json.JSONObject
 import java.io.File
 import kotlin.math.PI
 
-/** #28 — what the stick lights do. AYN = leave AYN's own setting alone (the default). */
+/** What the stick lights do. AYN = leave AYN's own setting alone (the default). */
 enum class LightMode(val label: String) {
     AYN("AYN default"), OFF("Off"), STATIC("Colour"), BREATHING("Breathing"),
     STROBE("Strobe"), SPECTRUM("Spectrum"), SCREEN("Screen colour"),
@@ -27,9 +27,13 @@ data class LightProfile(
     val right: Int = 0xFF2BE0D8.toInt(),
     val speed: Float = 1f,
     val brightness: Float = 1f,
+    /** 1.3 (GitHub #15): Screen colour — each stick its own side (left ring = left half, right = right half). */
+    val split: Boolean = false,
+    /** 1.3 (GitHub #33): Screen colour from 0 the controller's screen · 1 the top screen · 2 the bottom screen. */
+    val screenFrom: Int = 0,
 ) {
     fun toJson(): JSONObject = JSONObject().put("mode", mode.name).put("left", left).put("right", right)
-        .put("speed", speed.toDouble()).put("brightness", brightness.toDouble())
+        .put("speed", speed.toDouble()).put("brightness", brightness.toDouble()).put("split", split).put("from", screenFrom)
 
     companion object {
         fun fromJson(o: JSONObject?): LightProfile? = o?.let {
@@ -37,7 +41,7 @@ data class LightProfile(
                 LightProfile(
                     LightMode.valueOf(it.optString("mode", "AYN")), it.optInt("left", 0xFF2BE0D8.toInt()),
                     it.optInt("right", 0xFF2BE0D8.toInt()), it.optDouble("speed", 1.0).toFloat(),
-                    it.optDouble("brightness", 1.0).toFloat(),
+                    it.optDouble("brightness", 1.0).toFloat(), it.optBoolean("split", false), it.optInt("from", 0).coerceIn(0, 2),
                 )
             }.getOrNull()
         }
@@ -63,12 +67,17 @@ object StickLights {
     private var start = 0L
     @Volatile private var screenColor: Int = Color.WHITE
 
-    /** Returns the average colour of the game's screen, or null (set by the service). */
-    @Volatile var screenSampler: (() -> Int?)? = null
+    /** The game's screen colour — (whole screen, left half, right half) — or null (set by the service). */
+    @Volatile var screenSampler: (() -> IntArray?)? = null
+    /** Which screen the Screen colour comes from (the profile's [LightProfile.screenFrom]). */
+    val screenFrom: Int get() = profile.screenFrom
     /** Called when Screen colour stops (the service stops its sampler). */
     @Volatile var screenStop: (() -> Unit)? = null
     /** What the rings fade toward (the latest screen colour); [screenColor] is what they show. */
     @Volatile private var screenTarget: Int = Color.WHITE
+    /** The right ring's, when each stick follows its own side ([LightProfile.split]). */
+    @Volatile private var screenTargetR: Int = Color.WHITE
+    @Volatile private var screenColorR: Int = Color.WHITE
 
     val available: Boolean get() = File(SIDES[0], "brightness").exists()
 
@@ -129,7 +138,8 @@ object StickLights {
                     // Glide toward the latest screen colour (~0.1 s time constant at 30 fps):
                     // smooth, but close behind the picture.
                     screenColor = blend(screenColor, screenTarget, 0.28f)
-                    write(screenColor, screenColor, p.brightness)
+                    screenColorR = blend(screenColorR, screenTargetR, 0.28f)
+                    write(screenColor, if (p.split) screenColorR else screenColor, p.brightness)
                 }
                 else -> return
             }
@@ -140,7 +150,10 @@ object StickLights {
     private val sample = object : Runnable {
         override fun run() {
             if (profile.mode != LightMode.SCREEN) return
-            screenSampler?.invoke()?.let { c -> screenTarget = vivid(c) }
+            screenSampler?.invoke()?.takeIf { it.size >= 3 }?.let { c ->
+                if (profile.split) { screenTarget = vivid(c[1]); screenTargetR = vivid(c[2]) }
+                else { screenTarget = vivid(c[0]); screenTargetR = screenTarget }
+            }
             h.postDelayed(this, 60)   // the root sampler streams ~12 colours/s (fallback: a11y, ~3/s)
         }
     }

@@ -8,7 +8,7 @@
 -keep class app.wayfinder.BrightnessTool { public static void main(java.lang.String[]); }
 
 # Shrink the libraries only: ALL of Wayfinder's own code stays as written — tools started by name
-# through app_process, enum and class names stored in settings / JSON, reflection, the debug-only
-# TestReceiver. No renaming at all (stack traces stay readable, stored names stay valid).
+# through app_process, enum and class names stored in settings / JSON, reflection, debug-build test
+# hooks. No renaming at all (stack traces stay readable, stored names stay valid).
 -keep class app.wayfinder.** { *; }
 -dontobfuscate

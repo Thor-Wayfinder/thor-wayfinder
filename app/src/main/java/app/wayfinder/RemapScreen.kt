@@ -83,7 +83,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 
 /**
- * Input layer, phase 2b — "Buttons for <app>" (docs/INPUT_LAYER_PLAN.md §6f).
+ * Input layer, phase 2b — "Buttons for <app>".
  * ONE thing to navigate: the Thor's controller, centred. The D-pad moves between controls (or
  * touch one); A opens that control's popup: what it becomes — Controller (it listens for the
  * button you press), Keyboard, Mouse, Actions — and what it does when held (normal, turbo,
@@ -168,6 +168,8 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     fun save(r: PadRemap) = Profiles.update(pkg) { it.copy(remap = r.takeIf { !r.isEmpty }) }
 
     var sel by remember { mutableStateOf(MapCtl.A) }
+    // 1.3: the D-pad direction being edited (its page opens the same editor as a button)
+    var dirSel by remember { mutableStateOf<ThorButton?>(null) }
     var popup by remember { mutableStateOf<Popup?>(null) }
     var tab by remember { mutableStateOf(Tab.CONTROLLER) }
     var kbPage by remember { mutableStateOf(0) }
@@ -176,7 +178,9 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     var live by remember { mutableStateOf<String?>(null) }
     var picking by remember { mutableStateOf(false) }
     var confirmReset by remember { mutableStateOf(false) }
-    var bHeld by remember { mutableStateOf(false) }
+    // the B press that closed a popup (its down-time): its release is eaten too. A time, not a flag: that
+    // release can reach no element (the popup's focus went with it) — a flag stayed set and ate the next B
+    var bHeldDown by remember { mutableStateOf(-1L) }
     // phase 3: which output a long / double press button's tabs edit (0 = its press, 1 = the 2nd
     // action); macro recording; a new chord's two buttons
     var slot by remember { mutableStateOf(0) }
@@ -192,7 +196,10 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     LaunchedEffect(popup, tab, kbPage) { delay(120); runCatching { if (popup != null) popupFirst.requestFocus() else mapFocus.requestFocus() } }
     LaunchedEffect(live) { if (live != null) { delay(2500); live = null } }
     LaunchedEffect(confirmReset) { if (confirmReset) { delay(3000); confirmReset = false } }
-    LaunchedEffect(popup) { if (popup == null) { listening = false; recording = false; chordListen = false; chordPair = emptyList() } }
+    LaunchedEffect(popup) {
+        if (popup != Popup.BIND) dirSel = null
+        if (popup == null) { listening = false; recording = false; chordListen = false; chordPair = emptyList() }
+    }
 
     // Face buttons: two choices; picking the one all apps use = follow all apps (no override).
     val globalXbox = remember { runCatching { android.provider.Settings.System.getInt(ctx.contentResolver, "temp_abxy_layout_mode", 1) == 0 }.getOrDefault(false) }
@@ -213,10 +220,10 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     }
     fun resetSel() {
         if (sel == MapCtl.GYRO) save(remap.copy(gyro = GyroSettings()))
-        sel.src?.let { s -> save(remap.copy(buttons = remap.buttons - s, fire = remap.fire - s, alt = remap.alt - s, shifted = remap.shifted - s)) }
+        (dirSel ?: sel.src)?.let { s -> save(remap.copy(buttons = remap.buttons - s, fire = remap.fire - s, alt = remap.alt - s, shifted = remap.shifted - s)) }
         slot = 0
     }
-    fun openSel() { popup = when (sel) { MapCtl.DPAD -> Popup.DPAD; MapCtl.GYRO -> Popup.GYRO; else -> Popup.BIND }; tab = Tab.CONTROLLER; slot = 0 }
+    fun openSel() { dirSel = null; popup = when (sel) { MapCtl.DPAD -> Popup.DPAD; MapCtl.GYRO -> Popup.GYRO; else -> Popup.BIND }; tab = Tab.CONTROLLER; slot = 0 }
 
     // "Find a control by pressing it" (map) and "Listen for a button" (popup): the next press
     // is captured (ButtonEngine swallows it, its release too). Home cancels listening.
@@ -224,7 +231,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
         if (!picking && !listening && !recording && !chordListen) return@DisposableEffect onDispose { }
         ForegroundAppService.startCapture { b, down ->
             if (recording) {                                     // a macro: presses + timing, appended
-                val src = sel.src ?: return@startCapture
+                val src = dirSel ?: sel.src ?: return@startCapture
                 if (b == ThorButton.HOME) { if (down) recording = false; return@startCapture }
                 if (b.isFlick || b == ThorButton.BACK || b !in PadRemap.OUTPUTS) return@startCapture
                 val now = android.os.SystemClock.uptimeMillis()
@@ -248,17 +255,19 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
             if (!down) return@startCapture
             if (chordListen) {                                   // a new chord's two buttons
                 if (b == ThorButton.HOME) { chordListen = false; chordPair = emptyList() }
-                else if (b in PadRemap.SOURCES && b !in chordPair) { chordPair = chordPair + b; if (chordPair.size == 2) chordListen = false }
+                else if (b in PadRemap.BUTTONS && b !in chordPair) { chordPair = chordPair + b; if (chordPair.size == 2) chordListen = false }
                 return@startCapture
             }
             if (picking) {
                 val c = MapCtl.values().firstOrNull { it.src == b } ?: if (b.isDpad) MapCtl.DPAD else null
                 if (c != null) { sel = c; picking = false }
+                // 1.3: a D-pad direction opens that direction's editor straight away
+                if (b.isDpad) { dirSel = b; tab = Tab.CONTROLLER; slot = 0; popup = Popup.BIND }
             } else if (listening && sel == MapCtl.GYRO) {        // the gyro's on / off button
                 if (b == ThorButton.HOME) listening = false
                 else if (b in GyroSettings.BUTTONS) { save(remap.copy(gyro = remap.gyro.copy(button = b))); listening = false }
             } else if (listening) {
-                val src = sel.src
+                val src = dirSel ?: sel.src
                 when {
                     b == ThorButton.HOME -> listening = false
                     src == null || b.isFlick -> {}
@@ -279,10 +288,14 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     // What the drawing's empty screen says about the selected control.
     val inspector: Pair<String, String> = sel.src?.let { s ->
         val t = remap.buttons[s]; val f = remap.fire[s]
-        (if (t == null) "${s.label} — as usual" else "${s.label}  →  ${t.short()}") to
-            ((f?.let { if (it.hasAlt) "${it.label} → ${remap.alt[s]?.short() ?: "nothing yet"}   ·   " else "${it.label} · " } ?: "") + "A  change   ·   Y  reset")
-    } ?: if (sel == MapCtl.GYRO) ("Gyro — ${remap.gyro.summary()}" to "Mouse or stick from moving the Thor · A  change   ·   Y  reset")
-    else ("D-pad" to (if (remap.dpadStick) "Swapped with the left stick · A  change" else "A  options"))
+        val job = when (s) { ThorButton.L3 -> remap.jobL; ThorButton.R3 -> remap.jobR; else -> null }?.takeIf { !it.isDefault }
+        (if (job != null) "${if (s == ThorButton.L3) "Left" else "Right"} stick  →  ${job.summary}"
+            else if (t == null) "${s.label} — as usual" else "${s.label}  →  ${t.short()}") to
+            ((f?.let { if (it.hasAlt) "${it.label} → ${remap.alt[s]?.short() ?: "nothing yet"}   ·   " else "${it.label} · " } ?: "") + "${ButtonNames.m("A")}  change   ·   ${ButtonNames.m("Y")}  reset")
+    } ?: if (sel == MapCtl.GYRO) ("Gyro — ${remap.gyro.summary()}" to "Mouse or stick from moving the Thor · ${ButtonNames.m("A")}  change   ·   ${ButtonNames.m("Y")}  reset")
+    else ("D-pad" to (PadRemap.DIRS.count { remap.buttons.containsKey(it) || remap.fire.containsKey(it) }.let { n ->
+        listOfNotNull("$n direction${if (n > 1) "s" else ""} changed".takeIf { n > 0 }, "swapped with the left stick".takeIf { remap.dpadStick })
+            .joinToString(" · ").ifEmpty { "Each direction can do something else" }.replaceFirstChar { it.uppercase() } + " · ${ButtonNames.m("A")}  change" }))
 
     GlassScreen(span = if (myDisplayId == 0) AuroraSpan.TOP else AuroraSpan.BOTTOM) {
       Box(Modifier.fillMaxSize().onPreviewKeyEvent { e ->
@@ -290,11 +303,27 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
             // the D-pad reaches the screen as well (Android makes keys of its HAT inside the app)
             if (listening || recording || chordListen) return@onPreviewKeyEvent true
             val n = e.nativeKeyEvent
-            val b = ButtonEngine.printedButton(n)
+            val b = ButtonEngine.menuButton(n)
             // B closes the popup (both halves kept, or Android's Back leaves the screen on the release)
-            if (b == ThorButton.B && (open || bHeld)) {
-                if (e.type == KeyEventType.KeyDown) { bHeld = true; popup = null } else bHeld = false
+            if (b == ThorButton.B && (open || bHeldDown == n.downTime)) {
+                if (e.type == KeyEventType.KeyDown) { bHeldDown = n.downTime; popup = if (popup == Popup.BIND && dirSel != null) Popup.DPAD else null } else bHeldDown = -1L
                 return@onPreviewKeyEvent true
+            }
+            // 1.3: the D-pad's page — press a direction to change it, X to swap with the left stick
+            if (popup == Popup.DPAD) {
+                val d = when (n.keyCode) {
+                    KeyEvent.KEYCODE_DPAD_UP -> ThorButton.UP; KeyEvent.KEYCODE_DPAD_DOWN -> ThorButton.DOWN
+                    KeyEvent.KEYCODE_DPAD_LEFT -> ThorButton.LEFT; KeyEvent.KEYCODE_DPAD_RIGHT -> ThorButton.RIGHT
+                    else -> null
+                }
+                if (d != null) {
+                    if (e.type == KeyEventType.KeyDown && n.repeatCount == 0) { dirSel = d; tab = Tab.CONTROLLER; slot = 0; popup = Popup.BIND }
+                    return@onPreviewKeyEvent true
+                }
+                if (b == ThorButton.X) {
+                    if (e.type == KeyEventType.KeyDown && n.repeatCount == 0) save(remap.copy(dpadStick = !remap.dpadStick))
+                    return@onPreviewKeyEvent true
+                }
             }
             if (e.type != KeyEventType.KeyDown || n.repeatCount > 0) return@onPreviewKeyEvent false
             if (open) when (b) {
@@ -312,7 +341,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                 ThorButton.Y -> { if (popup == Popup.BIND || popup == Popup.GYRO) resetSel(); return@onPreviewKeyEvent true }
                 else -> return@onPreviewKeyEvent false
             }
-            if (b != null && b in PadRemap.SOURCES) live = "${b.label}  →  $label gets  ${(remap.buttons[b] ?: RemapTarget.Button(b)).short()}"
+            if (b != null && b in PadRemap.BUTTONS) live = "${b.label}  →  $label gets  ${(remap.buttons[b] ?: RemapTarget.Button(b)).short()}"
             when (b) {
                 ThorButton.X -> { cycleFace(); true }
                 ThorButton.Y -> { resetSel(); true }
@@ -327,7 +356,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = g.accent, modifier = Modifier.size(20.dp))
                         Text(if (inGame) "Back to game" else "App profiles", color = g.textPrimary, style = MaterialTheme.typography.labelLarge)
-                        Hint("B")
+                        Hint(ButtonNames.m("B"))
                     }
                 }
                 app?.icon?.let { Image(it, null, Modifier.size(38.dp).clip(RoundedCornerShape(19.dp))) }
@@ -356,7 +385,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                         Row(Modifier.padding(4.dp).width(200.dp), verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             for (f in FaceLayout.values()) Pill(f.label, Modifier.weight(1f).then(behind), selected = f == effective) { setFace(f) }
-                            Hint("X")
+                            Hint(ButtonNames.m("X"))
                         }
                     }
                     Text(if (cfg.face == null) "Face buttons: following all apps" else "Face buttons: only for $label",
@@ -384,7 +413,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                             .onPreviewKeyEvent { e ->
                                 val n = e.nativeKeyEvent
                                 val confirm = n.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || n.keyCode == KeyEvent.KEYCODE_ENTER ||
-                                    ButtonEngine.printedButton(n) == ThorButton.A
+                                    ButtonEngine.menuButton(n) == ThorButton.A
                                 // A opens the control on its RELEASE (both halves kept here, so the release
                                 // can't "click" the popup's first choice).
                                 if (confirm) { if (e.type == KeyEventType.KeyUp) openSel(); return@onPreviewKeyEvent true }
@@ -430,12 +459,13 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                         Popup.BIND -> BindPopup(sel, remap, tab, kbPage, { kbPage = it }, listening, popupFirst,
                             slot = slot, onSlot = { slot = it }, recording = recording, onRecord = { recording = !recording },
                             onTab = { tab = it; listening = false; recording = false }, onListen = { listening = !listening },
-                            setTarget = { t -> sel.src?.let { bind(it, t) } }, save = ::save, reset = ::resetSel, close = { popup = null })
+                            setTarget = { t -> (dirSel ?: sel.src)?.let { bind(it, t) } }, save = ::save, reset = ::resetSel,
+                            close = { popup = if (dirSel != null) Popup.DPAD else null }, dir = dirSel)
                         Popup.APPS -> AppsPanel(pkg, appLabel, popupFirst, onPick = { popup = null; if (it != pkg) onSwitchApp(it) },
                             onAll = { popup = null; onAllApps() }) { popup = null }
                         Popup.CHORDS -> ChordsPanel(remap, popupFirst, chordListen, chordPair, onListen = { chordListen = !chordListen },
                             onDone = { chordPair = emptyList(); chordListen = false }, save = ::save) { popup = null }
-                        Popup.DPAD -> DpadPopup(remap, popupFirst, ::save) { popup = null }
+                        Popup.DPAD -> DpadPopup(remap, popupFirst, ::save, onEdit = { d -> dirSel = d; tab = Tab.CONTROLLER; slot = 0; popup = Popup.BIND }) { popup = null }
                         Popup.GYRO -> GyroPopup(remap.gyro, listening, popupFirst, PadLayerCtl.wanted, onListen = { listening = !listening },
                             set = { save(remap.copy(gyro = it)) }, reset = ::resetSel, close = { popup = null })
                         Popup.CHANGES -> ChangesPanel(remap, popupFirst, ::save) { popup = null }
@@ -464,13 +494,16 @@ private fun BindPopup(
     sel: MapCtl, remap: PadRemap, tab: Tab, kbPage: Int, onPage: (Int) -> Unit, listening: Boolean, first: FocusRequester,
     slot: Int, onSlot: (Int) -> Unit, recording: Boolean, onRecord: () -> Unit,
     onTab: (Tab) -> Unit, onListen: () -> Unit, setTarget: (RemapTarget?) -> Unit, save: (PadRemap) -> Unit,
-    reset: () -> Unit, close: () -> Unit,
+    reset: () -> Unit, close: () -> Unit, dir: ThorButton? = null,
 ) {
     val g = LocalGlass.current
-    val src = sel.src ?: return
+    val src = dir ?: sel.src ?: return
+    // 1.3: a D-pad direction edits like a button ("D-pad down becomes")
+    val title = dir?.spoken?.replaceFirstChar { it.uppercase() } ?: sel.title
     val fire = remap.fire[src] ?: Fire.NORMAL
     val onAlt = fire.hasAlt && slot == 1
-    val shiftBtn = remap.shift?.takeIf { it != src }
+    // the Shift layer is for buttons (while it's held the D-pad goes to Wayfinder as an axis, not presses)
+    val shiftBtn = remap.shift?.takeIf { it != src && !src.isDpad }
     val onShift = shiftBtn != null && slot == 2
     val cur = if (onShift) remap.shifted[src] else if (onAlt) remap.alt[src] else remap.buttons[src]
     // while listening, only the listening matters: everything else fades, the hints go
@@ -480,14 +513,17 @@ private fun BindPopup(
             Box(Modifier.size(32.dp).border(2.5.dp, g.accent, CircleShape), contentAlignment = Alignment.Center) {
                 Text(src.label, color = g.accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
             }
-            Text(if (onShift) "${sel.title} with ${shiftBtn!!.spoken} held" else if (onAlt) "${sel.title} — ${fire.label.lowercase()}" else "${sel.title} becomes", color = g.textPrimary,
+            val stickJob = when (src) { ThorButton.L3 -> remap.jobL; ThorButton.R3 -> remap.jobR; else -> null }
+            Text(if (onShift) "$title with ${shiftBtn!!.spoken} held" else if (onAlt) "$title — ${fire.label.lowercase()}"
+                else if (stickJob != null) title else "$title becomes", color = g.textPrimary,
                 fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleMedium)
-            Text(if (cur == null) (if (onAlt || onShift) "Now: nothing yet" else "Now: ${src.label} — as usual") else "Now: ${cur.short()}", color = g.accent,
+            Text(if (stickJob != null && !onAlt && !onShift) "Now: ${stickJob.summary.lowercase()} · click → ${cur?.short() ?: src.label}"
+                else if (cur == null) (if (onAlt || onShift) "Now: nothing yet" else "Now: ${src.label} — as usual") else "Now: ${cur.short()}", color = g.accent,
                 style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!listening) {
-                Pill("Reset", fill = false, hint = "Y", onClick = reset)
-                Pill("Close", fill = false, hint = "B", onClick = close)
+                Pill("Reset", fill = false, hint = ButtonNames.m("Y"), onClick = reset)
+                Pill("Close", fill = false, hint = ButtonNames.m("B"), onClick = close)
             }
         }
         // a long / double press button has two outputs: which one the tabs edit
@@ -529,7 +565,8 @@ private fun BindPopup(
         }
         // what it does when held (not for "Nothing")
         if (tab != Tab.KEYBOARD && tab != Tab.MACRO) Row(rest, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("How it fires", color = g.textSecondary, style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(84.dp))
+            Text(if (src == ThorButton.L3 || src == ThorButton.R3) "Its click fires" else "How it fires", color = g.textSecondary,
+                style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(84.dp))
             for ((f, caption) in listOf(Fire.NORMAL to "one press", Fire.TURBO to "rapid presses", Fire.TOGGLE to "stays on",
                     Fire.LONG to "hold = 2nd action", Fire.DOUBLE to "twice = 2nd action")) {
                 FocusableGlass(onClick = {
@@ -568,9 +605,30 @@ private fun ControllerTab(src: ThorButton, cur: RemapTarget?, listening: Boolean
                           onListen: () -> Unit, setTarget: (RemapTarget?) -> Unit, save: (PadRemap) -> Unit) {
     val g = LocalGlass.current
     val rest = if (listening) Modifier.alpha(.35f) else Modifier
+    // 1.3: a stick's page is about THE STICK first (what it does, its feel); its click comes after
+    val stick = src == ThorButton.L3 || src == ThorButton.R3
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (stick) Column(rest, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (src == ThorButton.L3) {
+                StickJobRows(remap.jobL, first) { save(remap.copy(jobL = it)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Toggle("Invert up / down", remap.invertLeftY, Modifier.weight(1f)) { save(remap.copy(invertLeftY = it)) }
+                    Toggle("Invert left / right", remap.invertLeftX, Modifier.weight(1f)) { save(remap.copy(invertLeftX = it)) }
+                    Toggle("Swap with the right stick", remap.swapSticks, Modifier.weight(1f)) { save(remap.copy(swapSticks = it)) } }
+                StickShapeRows(remap.stickL) { save(remap.copy(stickL = it)) }
+            } else {
+                StickJobRows(remap.jobR, first) { save(remap.copy(jobR = it)) }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Toggle("Invert up / down", remap.invertRightY, Modifier.weight(1f)) { save(remap.copy(invertRightY = it)) }
+                    Toggle("Invert left / right", remap.invertRightX, Modifier.weight(1f)) { save(remap.copy(invertRightX = it)) }
+                    Toggle("Swap with the left stick", remap.swapSticks, Modifier.weight(1f)) { save(remap.copy(swapSticks = it)) } }
+                StickShapeRows(remap.stickR) { save(remap.copy(stickR = it)) }
+            }
+            Spacer(Modifier.height(6.dp))
+            SubLabel("Its click (${src.label}) becomes")
+        }
         // the big one: it listens
-        FocusableGlass(onClick = onListen, radius = 16.dp, modifier = Modifier.fillMaxWidth(), focusRequester = first) {
+        FocusableGlass(onClick = onListen, radius = 16.dp, modifier = Modifier.fillMaxWidth(), focusRequester = if (stick) null else first) {
             Row(Modifier.fillMaxWidth().then(if (listening) Modifier.background(g.accent, RoundedCornerShape(16.dp)) else Modifier)
                 .padding(horizontal = 16.dp, vertical = 13.dp), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)) {
@@ -579,7 +637,7 @@ private fun ControllerTab(src: ThorButton, cur: RemapTarget?, listening: Boolean
                     color = Color.White, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
                 else {
                     Text("Listen for a button", color = g.textPrimary, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Hint("A")
+                    Hint(ButtonNames.m("A"))
                 }
             }
         }
@@ -617,14 +675,6 @@ private fun ControllerTab(src: ThorButton, cur: RemapTarget?, listening: Boolean
             }
             // what belongs to this control
             when (src) {
-                ThorButton.L3 -> { SubLabel("Left stick"); Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Toggle("Invert up / down", remap.invertLeftY, Modifier.weight(1f)) { save(remap.copy(invertLeftY = it)) }
-                    Toggle("Swap with the right stick", remap.swapSticks, Modifier.weight(1f)) { save(remap.copy(swapSticks = it)) } }
-                    StickShapeRows(remap.stickL) { save(remap.copy(stickL = it)) } }
-                ThorButton.R3 -> { SubLabel("Right stick"); Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Toggle("Invert up / down", remap.invertRightY, Modifier.weight(1f)) { save(remap.copy(invertRightY = it)) }
-                    Toggle("Swap with the left stick", remap.swapSticks, Modifier.weight(1f)) { save(remap.copy(swapSticks = it)) } }
-                    StickShapeRows(remap.stickR) { save(remap.copy(stickR = it)) } }
                 ThorButton.L2, ThorButton.R2 -> { SubLabel("Triggers")
                     Toggle("All-or-nothing (no half press)", remap.digitalTriggers) { save(remap.copy(digitalTriggers = it)) }
                     if (!remap.digitalTriggers) TriggerRangeRows(remap) { save(it) } }
@@ -634,15 +684,94 @@ private fun ControllerTab(src: ThorButton, cur: RemapTarget?, listening: Boolean
     }
 }
 
+/**
+ * 1.3 — the D-pad's page, laid out as the D-pad itself (a list of four rows wasn't ergonomic).
+ * Each arm says what that direction does; PRESS the direction on the D-pad to change it (RemapScreen's
+ * key handler), or touch it. X swaps the whole D-pad with the left stick.
+ */
 @Composable
-private fun DpadPopup(remap: PadRemap, first: FocusRequester, save: (PadRemap) -> Unit, onClose: () -> Unit) {
+private fun DpadPopup(remap: PadRemap, first: FocusRequester, save: (PadRemap) -> Unit, onEdit: (ThorButton) -> Unit, onClose: () -> Unit) {
     val g = LocalGlass.current
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         PanelTitle("D-pad", onClose)
-        Text("The D-pad works as usual. It can trade places with the left stick — handy for old games that only read one of them.",
+        Text("Press a direction on the D-pad to change it — or touch it. The directions you leave alone stay the D-pad.",
             color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
-        Toggle("Swap with the left stick", remap.dpadStick, focus = first) { save(remap.copy(dpadStick = it)) }
+        Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(20.dp), verticalAlignment = Alignment.CenterVertically) {
+            // the cross
+            Column(Modifier.weight(1.6f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Spacer(Modifier.weight(1f)); DirArm(ThorButton.UP, remap, Modifier.weight(1f), first) { onEdit(it) }; Spacer(Modifier.weight(1f))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    DirArm(ThorButton.LEFT, remap, Modifier.weight(1f)) { onEdit(it) }
+                    Box(Modifier.weight(1f).height(96.dp), contentAlignment = Alignment.Center) {
+                        Text("✚", color = g.textTertiary, fontSize = 44.sp)
+                    }
+                    DirArm(ThorButton.RIGHT, remap, Modifier.weight(1f)) { onEdit(it) }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Spacer(Modifier.weight(1f)); DirArm(ThorButton.DOWN, remap, Modifier.weight(1f)) { onEdit(it) }; Spacer(Modifier.weight(1f))
+                }
+            }
+            // the whole D-pad
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                SubLabel("The whole D-pad")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Toggle("Swap with the left stick", remap.dpadStick, Modifier.weight(1f)) { save(remap.copy(dpadStick = it)) }
+                    Hint(ButtonNames.m("X"))
+                }
+                Text("For old games that only read one of them.", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                val changed = PadRemap.DIRS.filter { remap.buttons.containsKey(it) || remap.fire.containsKey(it) }
+                if (changed.isNotEmpty()) Pill("Put all four back", Modifier.fillMaxWidth(), fill = false) {
+                    save(remap.copy(buttons = remap.buttons - changed.toSet(), fire = remap.fire - changed.toSet(), alt = remap.alt - changed.toSet()))
+                }
+            }
+        }
+        Text("↑ ↓ ← →  change that direction   ·   ${ButtonNames.m("X")}  swap   ·   ${ButtonNames.m("B")}  back", color = g.textTertiary, style = MaterialTheme.typography.labelMedium)
     }
+}
+
+/** One arm of the D-pad page: its arrow, its name, and what it does now (accent = changed). */
+@Composable
+private fun DirArm(d: ThorButton, remap: PadRemap, modifier: Modifier, focus: FocusRequester? = null, onEdit: (ThorButton) -> Unit) {
+    val g = LocalGlass.current
+    val t = remap.buttons[d]; val f = remap.fire[d]
+    val on = t != null || f != null
+    val arrow = when (d) { ThorButton.UP -> "↑"; ThorButton.DOWN -> "↓"; ThorButton.LEFT -> "←"; else -> "→" }
+    val name = when (d) { ThorButton.UP -> "Up"; ThorButton.DOWN -> "Down"; ThorButton.LEFT -> "Left"; else -> "Right" }
+    FocusableGlass(onClick = { onEdit(d) }, radius = 16.dp, modifier = modifier, focusRequester = focus) {
+        Column(Modifier.fillMaxWidth().height(96.dp).then(if (on) Modifier.padding(2.dp).background(g.accent, RoundedCornerShape(14.dp)) else Modifier)
+            .padding(horizontal = 8.dp, vertical = 6.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+            Text("$arrow  $name", color = if (on) Color.White else g.textPrimary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text((t?.short() ?: "as usual") + (f?.let { " · ${it.label.lowercase()}" } ?: ""),
+                color = if (on) Color.White.copy(alpha = .9f) else g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                maxLines = 2, overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+        }
+    }
+}
+
+/** 1.3 — a stick's job: itself, or the mouse / wheel / 4 keys (Wayfinder plays it; the game sees it centred). */
+@Composable
+private fun StickJobRows(j: StickJob, first: FocusRequester? = null, set: (StickJob) -> Unit) {
+    val g = LocalGlass.current
+    SubLabel("What the stick does")
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (u in StickUse.values()) Choice(u.label, u.caption, j.use == u, Modifier.weight(1f), focus = if (u == StickUse.STICK) first else null) {
+            set(if (u == StickUse.STICK) StickJob() else j.copy(use = u))
+        }
+    }
+    when (j.use) {
+        StickUse.MOUSE, StickUse.SCROLL -> Stepper(if (j.use == StickUse.MOUSE) "Pointer speed" else "Scroll speed", "${j.speed}",
+            { set(j.copy(speed = (j.speed - 1).coerceAtLeast(1))) }, { set(j.copy(speed = (j.speed + 1).coerceAtMost(10))) })
+        StickUse.KEYS -> Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Choice("Arrow keys", "↑ ↓ ← →", !j.wasd, Modifier.weight(1f)) { set(j.copy(wasd = false)) }
+            Choice("W A S D", "PC games", j.wasd, Modifier.weight(1f)) { set(j.copy(wasd = true)) }
+        }
+        StickUse.STICK -> {}
+    }
+    if (!j.isDefault) Text("The game doesn't see this stick any more. It only counts past its deadzone (at least 10 %, or the " +
+        "one set below if bigger), so a stick at rest — or one that drifts — never moves or scrolls anything.",
+        color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable
@@ -680,11 +809,15 @@ private fun ChangesPanel(remap: PadRemap, first: FocusRequester, save: (PadRemap
         if (remap.swapSticks) ChangeRow("Sticks swapped") { save(remap.copy(swapSticks = false)) }
         if (remap.invertLeftY) ChangeRow("Left stick inverted") { save(remap.copy(invertLeftY = false)) }
         if (remap.invertRightY) ChangeRow("Right stick inverted") { save(remap.copy(invertRightY = false)) }
+        if (remap.invertLeftX) ChangeRow("Left stick: left / right inverted") { save(remap.copy(invertLeftX = false)) }
+        if (remap.invertRightX) ChangeRow("Right stick: left / right inverted") { save(remap.copy(invertRightX = false)) }
         if (remap.dpadStick) ChangeRow("D-pad ↔ left stick") { save(remap.copy(dpadStick = false)) }
         if (remap.digitalTriggers) ChangeRow("Triggers all-or-nothing") { save(remap.copy(digitalTriggers = false)) }
         if (remap.gyro.isOn) ChangeRow("Gyro: ${remap.gyro.summary()}") { save(remap.copy(gyro = GyroSettings())) }
         fun shape(s: StickShape) = listOfNotNull("deadzone ${s.dead} %".takeIf { s.dead != 0 }, "full at ${s.full} %".takeIf { s.full != 100 },
             listOf("", "precise centre", "fast")[s.curve.coerceIn(0, 2)].ifEmpty { null }).joinToString(" · ")
+        if (!remap.jobL.isDefault) ChangeRow("Left stick  →  ${remap.jobL.summary}") { save(remap.copy(jobL = StickJob())) }
+        if (!remap.jobR.isDefault) ChangeRow("Right stick  →  ${remap.jobR.summary}") { save(remap.copy(jobR = StickJob())) }
         if (!remap.stickL.isDefault) ChangeRow("Left stick: ${shape(remap.stickL)}") { save(remap.copy(stickL = StickShape())) }
         if (!remap.stickR.isDefault) ChangeRow("Right stick: ${shape(remap.stickR)}") { save(remap.copy(stickR = StickShape())) }
         if (remap.trigRanged) ChangeRow("Triggers: ${remap.trigStart}–${remap.trigFull} %") { save(remap.copy(trigStart = 0, trigFull = 100)) }
@@ -707,7 +840,7 @@ private fun PresetsPanel(pkg: String, remap: PadRemap, first: FocusRequester, sa
         // under a second name — now it IS that switch (naming pass 2026-09-25)
         Pill("Xbox face buttons (A at the bottom)", Modifier.fillMaxWidth()) { xboxFace(); onClose() }
         Pill("Swap the sticks", Modifier.fillMaxWidth()) { save(remap.copy(swapSticks = true)); onClose() }
-        // round 8 (INPUT_LAYER_PLAN §6k.3): emulator hotkeys — only what each emulator does BY DEFAULT on
+        // round 8: emulator hotkeys — only what each emulator does BY DEFAULT on
         // Android (researched with sources 2026-09-25: RetroArch's keyboard table; the others only open
         // their menu with Back). Chords: Select held + a button; those two wait 60 ms before the game.
         val app = GameProfiles.pkgOf(pkg)
@@ -727,6 +860,16 @@ private fun PresetsPanel(pkg: String, remap: PadRemap, first: FocusRequester, sa
                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
         }
         Pill("Triggers all-or-nothing", Modifier.fillMaxWidth()) { save(remap.copy(digitalTriggers = true)); onClose() }
+        // 1.3: browsers and apps with a cursor (GitHub #9)
+        SubLabel("Web browsing and apps with a cursor")
+        Pill("Left stick: mouse · right stick: scroll · A: click · X: right click · B: back", Modifier.fillMaxWidth()) {
+            // B → Android Back: Firefox keeps the pad's B for the web's gamepad API, so B did nothing there (1.3 test)
+            save(remap.copy(jobL = StickJob(StickUse.MOUSE), jobR = StickJob(StickUse.SCROLL),
+                buttons = remap.buttons + (ThorButton.A to RemapTarget.Mouse(0)) + (ThorButton.X to RemapTarget.Mouse(1)) +
+                    (ThorButton.B to RemapTarget.Action(ThorAction.BACK)))); onClose()
+        }
+        Text("The D-pad keeps moving between links — each direction can be changed on its own (the D-pad's page). While Wayfinder's " +
+            "keyboard is open, the controller types (these changes pause).", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
         if (others.isNotEmpty()) {
             SubLabel("Copy from another app")
             val pm = LocalContext.current.packageManager
@@ -775,8 +918,8 @@ private fun GyroPopup(gyro: GyroSettings, listening: Boolean, first: FocusReques
             Text("Now: ${gyro.summary()}", color = g.accent, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
             if (!listening) {
-                Pill("Reset", fill = false, hint = "Y", onClick = reset)
-                Pill("Close", fill = false, hint = "B", onClick = close)
+                Pill("Reset", fill = false, hint = ButtonNames.m("Y"), onClick = reset)
+                Pill("Close", fill = false, hint = ButtonNames.m("B"), onClick = close)
             }
         }
         if (!layerOn) Text("Gyro needs the input layer — turn it on in Wayfinder, then Controller.",
@@ -906,7 +1049,7 @@ private fun Stepper(label: String, value: String, dec: () -> Unit, inc: () -> Un
     }
 }
 
-// ── the keyboard tab (docs/design/keyboard_page1.png / keyboard_page2.png) ─────────────────
+// ── the keyboard tab ────────────────────────────────────────────────────────────────────────
 
 /** Legacy single key + meta → the keys it stands for (modifiers first). */
 private fun RemapTarget.Key.asCodes(): List<Int> = buildList {
@@ -1144,7 +1287,7 @@ private fun MacroTab(cur: RemapTarget?, first: FocusRequester, recording: Boolea
                     Text("Check its steps below, then turn it on.", color = g.textSecondary, style = MaterialTheme.typography.labelMedium)
                 }
                 Text("Turn it on", color = g.accent, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                Hint("A")
+                Hint(ButtonNames.m("A"))
             }
         }
         // record: presses and their timing, added at the end
@@ -1158,7 +1301,7 @@ private fun MacroTab(cur: RemapTarget?, first: FocusRequester, recording: Boolea
                 else {
                     Text(if (steps.isEmpty()) "Record with the controller" else "Record more (added at the end)", color = g.textPrimary,
                         style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-                    Hint("A")
+                    Hint(ButtonNames.m("A"))
                 }
             }
         }
@@ -1363,7 +1506,7 @@ private fun ShareChoice(title: String, onSave: () -> Unit, onSend: () -> Unit, o
                     color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
                 Pill("Save to Download / Wayfinder", focus = first) { onSave() }
                 Pill("Send with another app…") { onSend() }
-                Pill("Cancel", fill = true, hint = "B") { onClose() }
+                Pill("Cancel", fill = true, hint = ButtonNames.m("B")) { onClose() }
             }
         }
     }
@@ -1441,6 +1584,13 @@ private fun PerfPanel(key: String, label: String, appPkg: String, first: FocusRe
         SubLabel("Refresh rate")
         Choice(listOf("Usual", "60 Hz", "120 Hz"), when (cfg.hz) { 60 -> 1; 120 -> 2; else -> 0 }) { i ->
             set { it.copy(hz = when (i) { 1 -> 60; 2 -> 120; else -> null }) } }
+        // 1.3 (GitHub #25, #22): the bottom screen and the frame-rate counter, per game too
+        SubLabel(if (isGame) "Bottom screen while this game is on top" else "Bottom screen while $label is on top")
+        Choice(listOf("Usual", "Keep on", "Off"), cfg.second.ordinal) { i ->
+            set { it.copy(second = SecondScreenPolicy.values()[i]) }; ForegroundAppService.reapplyPolicy() }
+        SubLabel("Frame-rate counter")
+        Choice(listOf("Usual", "Shown", "Hidden"), when (cfg.fps) { true -> 1; false -> 2; null -> 0 }) { i ->
+            set { it.copy(fps = when (i) { 1 -> true; 2 -> false; else -> null }) }; ForegroundAppService.reapplyFps() }
         SubLabel("Stick lights")
         Choice(listOf("Usual") + modes.map { if (it == app.wayfinder.lights.LightMode.SCREEN) "Screen" else it.label }, cfg.lights?.let { l -> modes.indexOf(l.mode) + 1 } ?: 0) { i ->
             set { it.copy(lights = if (i == 0) null else base.copy(mode = modes[i - 1])) } }
@@ -1486,7 +1636,7 @@ private fun MorePanel(remap: PadRemap, first: FocusRequester, onPresets: () -> U
     LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         PanelTitle("More", onClose, first)
-        Pill("Presets  ›  (emulator hotkeys, Xbox face buttons, copy from another app…)", Modifier.fillMaxWidth(), onClick = onPresets)
+        Pill("Presets  ›  (web browsing, emulator hotkeys, Xbox face buttons, copy from another app…)", Modifier.fillMaxWidth(), onClick = onPresets)
         Pill("Share these controls  ›", Modifier.fillMaxWidth(), onClick = onShare)
         // hold-to-shift (§6l): opt-in, off by default (2026-09-26)
         SubLabel("Shift button — hold it to give every button a second job")
@@ -1496,7 +1646,7 @@ private fun MorePanel(remap: PadRemap, first: FocusRequester, onPresets: () -> U
             else "Hold ${remap.shift.spoken} and press a button: its “With ${remap.shift.spoken} held” job (set on each button's page). " +
                 "Nothing reaches the game while it's held; pressed alone, ${remap.shift.spoken} still reaches the game (a moment late).",
             color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
-        Pill(if (confirm) "Press A again to reset everything" else "Reset all", Modifier.fillMaxWidth(), danger = true) {
+        Pill(if (confirm) "Press ${ButtonNames.m("A")} again to reset everything" else "Reset all", Modifier.fillMaxWidth(), danger = true) {
             if (remap.isEmpty) return@Pill
             if (confirm) onReset() else confirm = true
         }
@@ -1517,7 +1667,7 @@ private fun PanelTitle(text: String, onBack: () -> Unit, focus: FocusRequester? 
     val g = LocalGlass.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(text, color = g.textPrimary, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-        Pill("‹ Back", fill = false, hint = "B", focus = focus, onClick = onBack)
+        Pill("‹ Back", fill = false, hint = ButtonNames.m("B"), focus = focus, onClick = onBack)
     }
 }
 
@@ -1544,14 +1694,16 @@ private fun mapHit(p: Offset, w: Float, h: Float): MapCtl? {
         .minByOrNull { hypot(it.x - ux, it.y - uy) }
 }
 
-/** The control in that direction: the nearest one, favouring those straight ahead. */
-private fun neighbour(from: MapCtl, dx: Float, dy: Float): MapCtl? =
-    MapCtl.values().filter { it != from && ((it.x - from.x) * dx + (it.y - from.y) * dy) > 20f }
-        .minByOrNull { c ->
-            val along = (c.x - from.x) * dx + (c.y - from.y) * dy
-            val across = abs((c.x - from.x) * dy - (c.y - from.y) * dx)
-            along + 2.2f * across
-        }
+/** The control in that direction: the nearest one, favouring those straight ahead. 1.3: it must lie IN
+ *  that direction (within ~63°) — Left on Y went up to Start (a hair to the left, far above) and never
+ *  reached the left stick; only when nothing does, the nearest ahead. */
+private fun neighbour(from: MapCtl, dx: Float, dy: Float): MapCtl? {
+    fun along(c: MapCtl) = (c.x - from.x) * dx + (c.y - from.y) * dy
+    fun across(c: MapCtl) = abs((c.x - from.x) * dy - (c.y - from.y) * dx)
+    val ahead = MapCtl.values().filter { it != from && along(it) > 20f }
+    return (ahead.filter { along(it) > 0.5f * across(it) }.ifEmpty { ahead })
+        .minByOrNull { along(it) + 2.2f * across(it) }
+}
 
 private val INK = Color(0xFF363C58)
 private val ACC = Color(0xFF0A84FF)
@@ -1582,9 +1734,9 @@ private fun ControllerMap(remap: PadRemap, sel: MapCtl, focused: Boolean, inspec
             drawText(l, topLeft = Offset(X(cx) - l.size.width / 2f, Y(cy) - l.size.height / 2f))
         }
         val changed = { c: MapCtl -> when (c) {
-            MapCtl.DPAD -> remap.dpadStick
-            MapCtl.L3 -> remap.buttons.containsKey(ThorButton.L3) || remap.invertLeftY || remap.swapSticks
-            MapCtl.R3 -> remap.buttons.containsKey(ThorButton.R3) || remap.invertRightY || remap.swapSticks
+            MapCtl.DPAD -> remap.dpadStick || PadRemap.DIRS.any { remap.buttons.containsKey(it) || remap.fire.containsKey(it) }
+            MapCtl.L3 -> remap.buttons.containsKey(ThorButton.L3) || remap.invertLeftY || remap.invertLeftX || remap.swapSticks || !remap.jobL.isDefault
+            MapCtl.R3 -> remap.buttons.containsKey(ThorButton.R3) || remap.invertRightY || remap.invertRightX || remap.swapSticks || !remap.jobR.isDefault
             MapCtl.L2, MapCtl.R2 -> remap.buttons.containsKey(c.src) || remap.fire.containsKey(c.src) || remap.digitalTriggers
             MapCtl.GYRO -> remap.gyro.isOn
             else -> remap.buttons.containsKey(c.src) || remap.fire.containsKey(c.src)
@@ -1683,16 +1835,26 @@ private fun ControllerMap(remap: PadRemap, sel: MapCtl, focused: Boolean, inspec
         for (c in MapCtl.values()) {
             val fire = c.src?.let { s -> remap.fire[s]?.let { " · " + if (it.hasAlt) "${it.label.lowercase()} → ${remap.alt[s]?.short() ?: "?"}" else it.label } } ?: ""
             val becomes = c.src != null && remap.buttons[c.src] != null
+            // 1.3: a stick with a job (mouse / scroll / keys) says so first
+            val job = when (c) { MapCtl.L3 -> remap.jobL; MapCtl.R3 -> remap.jobR; else -> null }?.takeIf { !it.isDefault }
             val text = when {
-                c == MapCtl.DPAD -> if (remap.dpadStick) "↔ Left stick" else null
+                c == MapCtl.DPAD -> {
+                    val arrow = mapOf(ThorButton.UP to "↑", ThorButton.DOWN to "↓", ThorButton.LEFT to "←", ThorButton.RIGHT to "→")
+                    val parts = PadRemap.DIRS.mapNotNull { d -> remap.buttons[d]?.let { "${arrow[d]} ${it.short()}" } } +
+                        listOfNotNull("↔ Left stick".takeIf { remap.dpadStick })
+                    if (parts.isEmpty()) null else if (parts.size <= 2) parts.joinToString("  ·  ") else parts.take(2).joinToString("  ·  ") + "  +${parts.size - 2}"
+                }
+                job != null -> "→ " + job.summary
                 becomes -> "→ " + remap.buttons.getValue(c.src!!).short() + fire
                 fire.isNotEmpty() -> fire.removePrefix(" · ").replaceFirstChar { it.uppercase() }
-                c == MapCtl.L3 && (remap.invertLeftY || remap.swapSticks) -> if (remap.swapSticks) "↔ Right stick" else "Inverted ↕"
-                c == MapCtl.R3 && (remap.invertRightY || remap.swapSticks) -> if (remap.swapSticks) "↔ Left stick" else "Inverted ↕"
+                c == MapCtl.L3 && (remap.invertLeftY || remap.invertLeftX || remap.swapSticks) -> if (remap.swapSticks) "↔ Right stick"
+                    else listOfNotNull("↕".takeIf { remap.invertLeftY }, "↔".takeIf { remap.invertLeftX }).joinToString(" ", "Inverted ")
+                c == MapCtl.R3 && (remap.invertRightY || remap.invertRightX || remap.swapSticks) -> if (remap.swapSticks) "↔ Left stick"
+                    else listOfNotNull("↕".takeIf { remap.invertRightY }, "↔".takeIf { remap.invertRightX }).joinToString(" ", "Inverted ")
                 (c == MapCtl.L2 || c == MapCtl.R2) && remap.digitalTriggers -> "All-or-nothing"
                 else -> null
             } ?: continue
-            val filled = becomes || c == MapCtl.DPAD
+            val filled = becomes || c == MapCtl.DPAD || job != null
             val l = tm.measure(text, TextStyle(fontSize = (36f * k / density).sp, color = if (filled) Color.White else accText, fontWeight = FontWeight.SemiBold))
             val w = l.size.width + 32f * k; val h = 54f * k
             val left = if (c.align > 0) X(c.tagX) else X(c.tagX) - w
@@ -1728,7 +1890,7 @@ private fun ControllerMap(remap: PadRemap, sel: MapCtl, focused: Boolean, inspec
     }
 }
 
-/** Round 8 — emulator presets built only from verified DEFAULTS (docs/INPUT_LAYER_PLAN.md §6k.3). */
+/** Round 8 — emulator presets built only from verified DEFAULTS. */
 private object EmuPresets {
     private fun keys(code: Int) = RemapTarget.Keys(listOf(code))
     /** The Shift layer (hold Select) — RetroArch's default keyboard hotkeys. */

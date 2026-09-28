@@ -1,6 +1,11 @@
 package app.wayfinder
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.focusGroup
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,7 +49,7 @@ internal fun pairWhere(ctx: android.content.Context, top: String?, bottom: Strin
 ).joinToString(" · ")
 
 /**
- * #15 — the quick panel's "App pairs" tile: open a saved pair (the panel closes, both apps
+ * The quick panel's "App pairs" tile: open a saved pair (the panel closes, both apps
  * go to their screens), or save the two apps under the panel as a new pair. Editing
  * (swap ⇅, delete, build from a list) stays in Wayfinder, then Quick panel, then App pairs.
  */
@@ -56,12 +61,16 @@ internal fun PanelPairsDialog(closePanel: () -> Unit, onClose: () -> Unit) {
     LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
     val (top, bottom) = remember { ForegroundAppService.currentLayout() }
     var saved by remember { mutableStateOf(Layouts.pairs.any { it.top == top && it.bottom == bottom }) }
-    androidx.compose.ui.window.Dialog(
-        onDismissRequest = onClose,
-        properties = androidx.compose.ui.window.DialogProperties(usePlatformDefaultWidth = false),
-    ) {
+    // 1.3: drawn over the panel (the panel is an overlay window now — it can't host a Dialog)
+    androidx.activity.compose.BackHandler { onClose() }
+    Box(Modifier.fillMaxSize().background(androidx.compose.ui.graphics.Color(0x99000000))
+        .pointerInput(Unit) { detectTapGestures { onClose() } }, contentAlignment = Alignment.Center) {
         val shape = RoundedCornerShape(24.dp)
-        Box(Modifier.fillMaxWidth(0.92f).background(g.base.copy(alpha = 0.97f), shape).glassSurface(g, shape, raised = true)) {
+        @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+        Box(Modifier.fillMaxWidth(0.92f).pointerInput(Unit) { detectTapGestures { } }   // a tap on the card isn't "outside"
+            // the D-pad stays in the sheet (the tiles behind it can't be reached)
+            .focusProperties { exit = { androidx.compose.ui.focus.FocusRequester.Cancel } }.focusGroup()
+            .background(g.base.copy(alpha = 0.97f), shape).glassSurface(g, shape, raised = true)) {
             Column(Modifier.padding(18.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
@@ -69,7 +78,7 @@ internal fun PanelPairsDialog(closePanel: () -> Unit, onClose: () -> Unit) {
                         Text("Pick one: both apps open, each on its screen", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
                     }
                     FocusableGlass(onClick = onClose, radius = 14.dp) {
-                        Text("Close  ·  B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                        Text("Close  ·  ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp))
                     }
                 }

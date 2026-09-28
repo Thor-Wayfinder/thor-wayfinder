@@ -10,7 +10,7 @@ import org.json.JSONObject
 /**
  * Sharing one app's or one game's CONTROLLER MAPPING as a file (2026-09-25: "just the
  * mapping for the controller, no system input, macros saved but disabled; safety is
- * important"). Plan: docs/FEATURE_IDEAS.md "Profile export / import".
+ * important").
  *
  * A shared file is written by someone else: everything in it is untrusted. What survives an
  * import — and what doesn't:

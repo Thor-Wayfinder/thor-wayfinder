@@ -43,17 +43,6 @@
             </intent-filter>
         </activity>
 
-        <!-- #20 Quick panel (our drawer): its own task, never pulls the Hub along. -->
-        <activity
-            android:name=".QuickPanelActivity"
-            android:theme="@style/Theme.Wayfinder.Glass"
-            android:taskAffinity="app.wayfinder.panel"
-            android:launchMode="singleTask"
-            android:excludeFromRecents="true"
-            android:label="Quick panel"
-            android:configChanges="uiMode|orientation|screenSize|screenLayout|smallestScreenSize|density|keyboard|keyboardHidden|navigation|fontScale"
-            android:exported="false" />
-
         <!-- #25 Game companion on the bottom screen (own task: never pulls the Hub along). -->
         <activity
             android:name=".CompanionActivity"

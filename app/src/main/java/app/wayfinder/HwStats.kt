@@ -17,12 +17,14 @@ data class HwSnapshot(
 /**
  * Reads the hardware straight from the kernel — all of it readable by the app itself
  * (no root): /proc/stat (CPU load), cpufreq, kgsl (GPU), thermal zones cpu-* / gpuss-*,
- * /proc/meminfo, the battery broadcast + power_supply for watts. See THOR_PLATFORM_NOTES §3d.
+ * /proc/meminfo, the battery broadcast + power_supply for watts.
  */
 class HwStats(private val ctx: Context) {
     private var lastIdle = 0L
     private var lastTotal = 0L
-    private val cpuZones by lazy { zones { it.startsWith("cpu-") || it.startsWith("cpuss-") } }
+    // 1.3 (GitHub #21): the cluster sensors (cpuss-*). The per-core hot spots (cpu-x-y) read several °C above
+    // them at idle and far more under load — their max showed "> 90 °C" while other tools showed the CPU cooler
+    private val cpuZones by lazy { zones { it.startsWith("cpuss-") }.ifEmpty { zones { it.startsWith("cpu-") } } }
     private val gpuZones by lazy { zones { it.startsWith("gpuss-") } }
 
     private fun read(path: String): String? = runCatching { File(path).readText().trim() }.getOrNull()

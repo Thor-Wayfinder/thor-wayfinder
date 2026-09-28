@@ -3,7 +3,7 @@ package app.wayfinder
 import android.util.Log
 
 /**
- * #20 FPS counter — runs INSIDE the root input helper (app_process, uid 0).
+ * FPS counter — runs INSIDE the root input helper (app_process, uid 0).
  *
  * Counts the frames SurfaceFlinger actually presented for an app's layers during the
  * last second: `dumpsys SurfaceFlinger --latency <layer>` lists the last 128 frames

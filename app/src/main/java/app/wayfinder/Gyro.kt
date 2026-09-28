@@ -19,7 +19,7 @@ import kotlin.math.min
 import kotlin.math.sign
 import kotlin.math.sqrt
 
-/** What the gyro drives (docs/INPUT_LAYER_PLAN.md §6f, 3). */
+/** What the gyro drives. */
 enum class GyroMode(val label: String, val caption: String) {
     OFF("Off", "the game reads the gyro itself, or nothing"),
     MOUSE("Mouse", "camera in PC games, a cursor"),
@@ -183,7 +183,7 @@ object GyroEngine : SensorEventListener {
         ensureListening()
     }
 
-    /** Debug (TestReceiver): pretend the Thor turns at x, y, z °/s (display frame) for [ms]. */
+    /** Test hook (debug builds only): pretend the Thor turns at x, y, z °/s (display frame) for [ms]. */
     fun simulate(x: Float, y: Float, z: Float, ms: Long) = h.post {
         val t0 = System.nanoTime(); val end = t0 + ms * 1_000_000
         simulating = true

@@ -97,14 +97,14 @@ fun DeckGuidePane(pkg: String?, appLabel: String?, onClose: () -> Unit, modifier
                 }
             }
             Box(UiModifier.weight(1f))
-            Chip("Edit / full page", selected = false) { onClose(); ForegroundAppService.openCompanionNow(pkg) }
+            Chip("Full page", selected = false) { onClose(); ForegroundAppService.openCompanionNow(pkg) }
         }
         if (!notesTab) key(key) { GuideWeb(key, game, pinned, UiModifier.fillMaxWidth().weight(1f)) { web = it } }
         else {
             val notes = remember(key) { CompanionStore.notes(ctx, key) }
             Box(UiModifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp))
                 .background(if (g.dark) Color(0x26FFFFFF) else Color(0xB3FFFFFF)).padding(14.dp)) {
-                Text(notes.ifBlank { "No notes for $game yet — write them in the full page (Edit / full page)." },
+                Text(notes.ifBlank { "No notes for $game yet — write them in the full page (Full page)." },
                     color = if (notes.isBlank()) g.textTertiary else g.textPrimary, fontSize = 16.sp,
                     modifier = UiModifier.fillMaxSize().verticalScroll(rememberScrollState()))
             }

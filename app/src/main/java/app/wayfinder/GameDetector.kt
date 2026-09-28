@@ -7,7 +7,7 @@ import android.util.Log
 import java.io.File
 
 /**
- * Per-game profiles (docs/INPUT_LAYER_PLAN.md §6i) — WHICH game an app is running. Runs INSIDE
+ * Per-game profiles — WHICH game an app is running. Runs INSIDE
  * the root helper ([InputMonitorTool], uid 0): `D <pkg>` → `D <pkg> <game-id> <title>` (or `D <pkg>`
  * when it can't tell). Whatever launched the game (Cocoon, another launcher, the emulator's own
  * library), in this order (verified 2026-09-24 on the Thor):

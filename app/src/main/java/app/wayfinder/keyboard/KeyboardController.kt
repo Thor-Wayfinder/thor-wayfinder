@@ -112,6 +112,9 @@ class KeyboardController(private val sink: () -> KeySink?) {
         if (key.kind == KeyKind.CHAR && page == Page.LETTERS && shift != Shift.OFF) upper(key.text) else key.text
 
     // ── pressing ─────────────────────────────────────────────────────────
+    /** 1.3: Space held and slid — the text cursor moves ([delta] characters). */
+    fun slideCursor(delta: Int) { if (delta != 0) sink()?.moveCursor(delta) }
+
     fun press(key: KeySpec) {
         val s = sink() ?: return
         when (key.kind) {

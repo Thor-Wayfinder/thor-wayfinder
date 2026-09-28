@@ -6,24 +6,24 @@ import androidx.compose.runtime.mutableIntStateOf
 import org.json.JSONObject
 import java.util.concurrent.ConcurrentHashMap
 
-/** #12 — what the SECOND screen should do while an app is on the top screen. */
+/** What the SECOND screen should do while an app is on the top screen. */
 enum class SecondScreenPolicy { DEFAULT, KEEP_ON, BLANK }
 
-/** #14 — which screen this app opens on (ANY = wherever Android puts it). */
+/** Which screen this app opens on (ANY = wherever Android puts it). */
 enum class Route(val label: String) { ANY("Any screen"), TOP("Top"), BOTTOM("Bottom") }
 
 /** Input layer — face buttons for this app: as PRINTED on the Thor (Nintendo: A right, B
  *  bottom) or Xbox (A at the bottom). null in [AppConfig.face] = AYN's own setting. */
 enum class FaceLayout(val label: String) { NINTENDO("Nintendo"), XBOX("Xbox") }
 
-/** #18 — how Wayfinder's button bindings behave while this app has the controller. */
+/** How Wayfinder's button bindings behave while this app has the controller. */
 enum class ButtonsMode(val label: String) { NORMAL("Normal"), CUSTOM("Custom"), OFF("Off") }
 
 /**
- * Per-app settings. One record per package so later per-app features (#14
- * routing, #21 performance) extend this instead of adding menus.
+ * Per-app settings. One record per package so later per-app features (screen
+ * routing, performance) extend this instead of adding menus.
  *
- * #18 buttons: [buttons] are this app's overrides (same trigger or same action as
+ * Buttons: [buttons] are this app's overrides (same trigger or same action as
  * a global binding → replaces it); [freed] are global triggers handed back to the
  * app untouched. Both only apply in [ButtonsMode.CUSTOM]; OFF gives every button
  * to the app.
@@ -33,12 +33,12 @@ data class AppConfig(
     val buttonsMode: ButtonsMode = ButtonsMode.NORMAL,
     val buttons: List<Binding> = emptyList(),
     val freed: List<Trigger> = emptyList(),
-    /** #28 — this app's stick lights (null = the global setting). */
+    /** This app's stick lights (null = the global setting). */
     val lights: app.wayfinder.lights.LightProfile? = null,
     val route: Route = Route.ANY,
-    /** #25 — open the Game companion on the bottom screen while this app is on top. */
+    /** Open the Game companion on the bottom screen while this app is on top. */
     val companion: Boolean = false,
-    /** #21 — performance / fan while this app is on screen (null = the user's AYN setting). */
+    /** Performance / fan while this app is on screen (null = the user's AYN setting). */
     val perf: PerfMode? = null,
     val fan: FanMode? = null,
     /** Refresh rate while this app is on screen: 60 / 120 (null = the user's setting). */
@@ -47,6 +47,11 @@ data class AppConfig(
     val face: FaceLayout? = null,
     /** Input layer: what this app's controls become (null = as the Thor sends them). */
     val remap: PadRemap? = null,
+    /** 1.3 — the controller's own Back goes straight to this app, held too (RetroArch's Back
+     *  hotkeys and menu): no Wayfinder combo uses Back here. null = automatic (on for RetroArch). */
+    val backToGame: Boolean? = null,
+    /** 1.3 (GitHub #22): the frame-rate counter for this app (null = the usual setting). */
+    val fps: Boolean? = null,
 ) {
     val isDefault get() = this == AppConfig()
 
@@ -63,6 +68,8 @@ data class AppConfig(
         .apply { perf?.let { put("perf", it.name) }; fan?.let { put("fan", it.name) }; hz?.let { put("hz", it) } }
         .apply { face?.let { put("face", it.name) } }
         .apply { remap?.takeIf { !it.isEmpty }?.let { put("remap", it.toJson()) } }
+        .apply { backToGame?.let { put("backGame", it) } }
+        .apply { fps?.let { put("fps", it) } }
         .toString()
 
     companion object {
@@ -90,6 +97,8 @@ data class AppConfig(
                 hz = o.optInt("hz", 0).takeIf { it == 60 || it == 120 },
                 face = runCatching { FaceLayout.valueOf(o.optString("face")) }.getOrNull(),
                 remap = PadRemap.fromJson(o.optJSONObject("remap")),
+                backToGame = if (o.has("backGame")) o.optBoolean("backGame") else null,
+                fps = if (o.has("fps")) o.optBoolean("fps") else null,
             )
         }.getOrDefault(AppConfig())
     }

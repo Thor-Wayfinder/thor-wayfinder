@@ -344,7 +344,10 @@ fun GlassSegmentedControl(
     onSelect: (Int) -> Unit,
 ) {
     val g = LocalGlass.current
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    // 1.3: five or more options (the fan: Usual · Off · Quiet · Smart · Sports · Custom) — no check mark
+    // (the fill says it), smaller text, one line: "Usual" wrapped into "Usua / l"
+    val tight = options.size >= 5
+    Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (tight) 6.dp else 8.dp)) {
         options.forEachIndexed { i, opt ->
             val selected = i == selectedIndex
             // Selected = the blue fill + a check; focused (the controller is HERE) = a thick ring in
@@ -364,14 +367,17 @@ fun GlassSegmentedControl(
                     contentAlignment = Alignment.Center,
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        if (selected) androidx.compose.material3.Icon(
+                        if (selected && !tight) androidx.compose.material3.Icon(
                             androidx.compose.material.icons.Icons.Rounded.Check, null, tint = Color.White,
                             modifier = Modifier.padding(end = 6.dp).size(18.dp),
                         )
                         Text(
                             opt,
                             color = if (selected) Color.White else g.textSecondary,
-                            style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
+                            style = if (tight) androidx.compose.material3.MaterialTheme.typography.labelMedium
+                                else androidx.compose.material3.MaterialTheme.typography.labelLarge,
+                            maxLines = 1, softWrap = false,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
                 }

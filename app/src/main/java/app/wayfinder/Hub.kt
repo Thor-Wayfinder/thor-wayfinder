@@ -247,10 +247,15 @@ private fun HubHome(myDisplayId: Int, go: (String) -> Unit) {
     val st = rememberHubStatus()
     val firstFocus = remember { FocusRequester() }
     val setupFocus = remember { FocusRequester() }
-    // the setup button when it's shown (it's what needs doing), else the first tile (review)
+    // 1.3: back from a page, the card that opened it has the focus again (not the first one)
+    val cardFocus = remember { HashMap<String, FocusRequester>() }
+    fun cardFocus(page: String) = cardFocus.getOrPut(page) { FocusRequester() }
+    val open: (String) -> Unit = { page -> lastHubCard = page; go(page) }
+    // the setup button when it's shown (it's what needs doing), else the card last opened, else the first
     LaunchedEffect(Unit) {
         delay(350)
-        runCatching { (if (!ForegroundAppService.isRunning) setupFocus else firstFocus).requestFocus() }
+        val back = lastHubCard?.let { cardFocus[it] }
+        runCatching { (if (!ForegroundAppService.isRunning) setupFocus else back ?: firstFocus).requestFocus() }
             .onFailure { runCatching { firstFocus.requestFocus() } }
     }
     @Suppress("UNUSED_VARIABLE") val v = ControlsStore.version.intValue + AppConfigStore.version.intValue
@@ -308,20 +313,23 @@ private fun HubHome(myDisplayId: Int, go: (String) -> Unit) {
 
             // Menus
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MenuCard("Screens & power", screensSummary(), Icons.Rounded.Tv, Modifier.weight(1f), firstFocus) { go(HubPage.SCREENS) }
-                MenuCard("Controller", controllerSummary(), Icons.Rounded.SportsEsports, Modifier.weight(1f)) { go(HubPage.CONTROLLER) }
-                MenuCard("Keyboard", keyboardSummary(LocalContext.current), Icons.Rounded.Keyboard, Modifier.weight(1f)) { go(HubPage.KEYBOARD) }
-                MenuCard("App profiles", appsSummary(), Icons.Rounded.Apps, Modifier.weight(1f)) { go(HubPage.APPS) }
+                MenuCard("Screens & power", screensSummary(), Icons.Rounded.Tv, Modifier.weight(1f), firstFocus, cardFocus(HubPage.SCREENS)) { open(HubPage.SCREENS) }
+                MenuCard("Controller", controllerSummary(), Icons.Rounded.SportsEsports, Modifier.weight(1f), null, cardFocus(HubPage.CONTROLLER)) { open(HubPage.CONTROLLER) }
+                MenuCard("Keyboard", keyboardSummary(LocalContext.current), Icons.Rounded.Keyboard, Modifier.weight(1f), null, cardFocus(HubPage.KEYBOARD)) { open(HubPage.KEYBOARD) }
+                MenuCard("App profiles", appsSummary(), Icons.Rounded.Apps, Modifier.weight(1f), null, cardFocus(HubPage.APPS)) { open(HubPage.APPS) }
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MenuCard("Quick panel", panelSummary(ctx), Icons.Rounded.Dashboard, Modifier.weight(1f)) { go(HubPage.PANEL) }
-                MenuCard("Stick lights", lightsSummary(), Icons.Rounded.Lightbulb, Modifier.weight(1f)) { go(HubPage.LIGHTS) }
-                MenuCard("Appearance", appearanceSummary(), Icons.Rounded.Palette, Modifier.weight(1f)) { go(HubPage.APPEARANCE) }
-                MenuCard("Help & status", if (st.ready) "All set · how to use" else "Something needs setup", Icons.Rounded.Info, Modifier.weight(1f)) { go(HubPage.HELP) }
+                MenuCard("Quick panel", panelSummary(ctx), Icons.Rounded.Dashboard, Modifier.weight(1f), null, cardFocus(HubPage.PANEL)) { open(HubPage.PANEL) }
+                MenuCard("Stick lights", lightsSummary(), Icons.Rounded.Lightbulb, Modifier.weight(1f), null, cardFocus(HubPage.LIGHTS)) { open(HubPage.LIGHTS) }
+                MenuCard("Appearance", appearanceSummary(), Icons.Rounded.Palette, Modifier.weight(1f), null, cardFocus(HubPage.APPEARANCE)) { open(HubPage.APPEARANCE) }
+                MenuCard("Help & status", if (st.ready) "All set · how to use" else "Something needs setup", Icons.Rounded.Info, Modifier.weight(1f), null, cardFocus(HubPage.HELP)) { open(HubPage.HELP) }
             }
         }
     }
 }
+
+/** The Hub card last opened (its page), so going back puts the focus on it again. */
+private var lastHubCard: String? = null
 
 const val KOFI_URL = "https://ko-fi.com/thorwayfinder"
 
@@ -335,10 +343,12 @@ fun openKofi(ctx: android.content.Context, displayId: Int) {
 }
 
 @Composable
-private fun MenuCard(title: String, summary: String, icon: ImageVector, modifier: Modifier, focus: FocusRequester? = null, onClick: () -> Unit) {
+private fun MenuCard(title: String, summary: String, icon: ImageVector, modifier: Modifier, focus: FocusRequester? = null,
+                     back: FocusRequester? = null, onClick: () -> Unit) {
     val g = LocalGlass.current
     // 126 dp: both rows fit the top screen with the status strip, no scrolling (Option B)
-    FocusableGlass(onClick = onClick, modifier = modifier.height(126.dp), radius = 26.dp, focusRequester = focus) {
+    FocusableGlass(onClick = onClick, modifier = modifier.height(126.dp).then(if (back != null) Modifier.focusRequester(back) else Modifier),
+        radius = 26.dp, focusRequester = focus) {
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
             Icon(icon, null, tint = g.accent, modifier = Modifier.size(30.dp))
             Column {
@@ -556,6 +566,12 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
         SettingCard("Volume", "Top and Bottom set how loud each screen is compared with the other; \"Both screens\" keeps that difference") {
             VolumeSliders()
         }
+        // 1.3 (Reddit request): the volume booster
+        SettingCard("Volume boost", if (SpeakerTune.boost == 0) "Louder than the maximum: extra gain with a limiter (no crackle), on the speakers, headphones and Bluetooth"
+            else "${SpeakerTune.boostStatus()} — with headphones, start low: it's louder than their usual maximum") {
+            GlassSegmentedControl(SpeakerTune.BOOST_STEPS.map { if (it == 0) "Off" else "+$it dB" },
+                SpeakerTune.BOOST_STEPS.indexOf(SpeakerTune.boost).coerceAtLeast(0), Modifier.fillMaxWidth()) { SpeakerTune.setVolumeBoost(SpeakerTune.BOOST_STEPS[it]) }
+        }
         SettingCard(
             "Volume buttons change both screens",
             if (LinkedVolume.enabled) "The buttons turn both screens up and down together, keeping their difference"
@@ -646,7 +662,7 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
     }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// #15 App pairs + #16 restore after a restart
+// App pairs + restore after a restart
 // ─────────────────────────────────────────────────────────────────────────────
 
 private fun appLabel(ctx: android.content.Context, pkg: String?): String =
@@ -718,6 +734,20 @@ private fun ControllerPage(myDisplayId: Int, onBack: () -> Unit, go: (String) ->
             icon = Icons.Rounded.Dashboard) { go(HubPage.PANEL) }
         ControllerScreenCard()
         HomeTwiceCard()
+        // 1.3 (GitHub #13): the Recents hint — smaller, off, or in a corner (it covered the middle card's icon)
+        SettingCard("Recent apps — the controller hint", when (AppSettings.recentsHint) {
+            1 -> "Compact: one slim line of symbols (↗ open · ✕ close · ⌂ home · ↩ back)"
+            2 -> "Off — the buttons still work: A opens, Y closes, Select closes all, Start goes home, B goes back"
+            else -> "What the buttons do in Recent apps, for a few seconds when it opens"
+        }) {
+            GlassSegmentedControl(listOf("Full", "Compact", "Off"), AppSettings.recentsHint, Modifier.fillMaxWidth()) {
+                AppSettings.chooseRecentsHint(it, AppSettings.recentsHintAt) }
+            if (AppSettings.recentsHint != 2) {
+                androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+                GlassSegmentedControl(listOf("Top", "Top left", "Top right", "Bottom left", "Bottom right"), AppSettings.recentsHintAt,
+                    Modifier.fillMaxWidth()) { AppSettings.chooseRecentsHint(AppSettings.recentsHint, it) }
+            }
+        }
         GlassListRow("Game controls — each game its own buttons", value = "App profiles", icon = Icons.Rounded.Apps) { go(HubPage.APPS) }
         // Face buttons for every app = AYN's own controller style (one setting, the same as
         // AYN's drawer and our quick-panel tile). Per-app choices live in App profiles.
@@ -727,15 +757,23 @@ private fun ControllerPage(myDisplayId: Int, onBack: () -> Unit, go: (String) ->
         }
         SettingCard(
             "Face buttons — all apps",
-            if (style == 0) "Xbox: A at the bottom, B on the right (buttons by position). One game differently: Game controls (Home + X)."
-            else "Nintendo: as printed on the Thor, A on the right. One game differently: Game controls (Home + X).",
+            if (style == 0) "Xbox: A at the bottom, B on the right (buttons by position). One game differently: Game controls (Home + ${ThorButton.X.label})."
+            else "Nintendo: as printed on the Thor, A on the right. One game differently: Game controls (Home + ${ThorButton.X.label}).",
         ) {
             GlassSegmentedControl(listOf("Nintendo", "Xbox"), if (style == 0) 1 else 0, Modifier.fillMaxWidth()) { i ->
                 val xbox = i == 1
                 if (xbox != (style == 0)) { QuickSettings.toggleControllerStyle(style); style = if (xbox) 0 else 1 }
             }
         }
-        // The input layer (docs/INPUT_LAYER_PLAN.md): on by default, a master switch here.
+        // 1.3 (GitHub #27): what the face buttons are CALLED on screen
+        SettingCard("Button names on screen", when (ButtonNames.mode) {
+            1 -> "As printed on the Thor: A on the right, B at the bottom — in every hint, combo and page"
+            2 -> "The Xbox way: A at the bottom, B on the right, X on the left, Y on top — combos stay on the same buttons"
+            else -> "Automatic: they follow the face-button style above (Xbox style → A is the bottom button)"
+        }) {
+            GlassSegmentedControl(listOf("Automatic", "As printed", "Xbox"), ButtonNames.mode, Modifier.fillMaxWidth()) { ButtonNames.choose(it) }
+        }
+        // The input layer: on by default, a master switch here.
         var layer by remember { mutableStateOf(PadLayerCtl.wanted) }
         SettingCard(
             "Input layer",
@@ -784,12 +822,13 @@ fun AynHomeWarning() {
 private fun AppearancePage(myDisplayId: Int, onBack: () -> Unit) {
     val ctx = LocalContext.current
     SubPage(myDisplayId, "Appearance", "Theme, and which screen Wayfinder opens on", onBack) {
-        SettingCard("Theme", "Glass in light or dark — or follow the system") {
+        SettingCard("Theme", if (AppSettings.themeMode == ThemeMode.BLACK) "Black: dark glass on pure black — OLED screens show true black and use less power (no aurora, no background blur)"
+            else "Glass in light or dark — or follow the system") {
             GlassSegmentedControl(
-                listOf("System", "Light", "Dark"),
-                when (AppSettings.themeMode) { ThemeMode.SYSTEM -> 0; ThemeMode.LIGHT -> 1; ThemeMode.DARK -> 2 },
+                listOf("System", "Light", "Dark", "Black"),
+                when (AppSettings.themeMode) { ThemeMode.SYSTEM -> 0; ThemeMode.LIGHT -> 1; ThemeMode.DARK -> 2; ThemeMode.BLACK -> 3 },
                 Modifier.fillMaxWidth(),
-            ) { AppSettings.setMode(when (it) { 1 -> ThemeMode.LIGHT; 2 -> ThemeMode.DARK; else -> ThemeMode.SYSTEM }) }
+            ) { AppSettings.setMode(when (it) { 1 -> ThemeMode.LIGHT; 2 -> ThemeMode.DARK; 3 -> ThemeMode.BLACK; else -> ThemeMode.SYSTEM }) }
         }
         SettingCard(
             "Glass backdrop",
@@ -902,7 +941,7 @@ private fun RestoreDialog(inc: Backup.Incoming?, error: String?, onRestore: (Bac
                     }
                     // focus starts here: "Restore everything" replaces it all and restarts (review)
                     FocusableGlass(onClick = onClose, radius = 14.dp, focusRequester = first) {
-                        Text(if (inc == null) "Close" else "Cancel  ·  B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                        Text(if (inc == null) "Close" else "Cancel  ·  ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                     }
                 }
@@ -981,7 +1020,14 @@ private fun HelpPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit)
         }
         if (!st.backend) Text("If it stays unreachable: turn off “Force SELinux” in the Thor's settings, then restart the Thor.",
             color = LocalGlass.current.textSecondary, style = MaterialTheme.typography.bodySmall)
-        SectionHeader("About")
+        // 1.3 (GitHub #39): the input layer's state — and why it stopped, to put in a report
+        val layerWhy = PadLayerCtl.failReason
+        GlassListRow("Input layer (game controls, gyro, macros)", value = when {
+            PadLayerCtl.active -> "working ✓"
+            !PadLayerCtl.wanted && layerWhy.isEmpty() -> "off"
+            layerWhy.isNotEmpty() -> "stopped: $layerWhy — press to try again"
+            else -> "starting…"
+        }, icon = Icons.Rounded.Info) { if (!PadLayerCtl.active) { PadLayerCtl.set(ctx, true) } }
         GlassListRow("Open-source licenses", value = "The libraries inside Wayfinder", icon = Icons.Rounded.Gavel) { go(HubPage.LICENSES) }
         Text("Wayfinder ${BuildConfig.VERSION_NAME} is an independent project, not affiliated with, endorsed or sponsored by " +
             "AYN or any other company named in it. AYN, Thor and Odin are trademarks of AYN; other names are trademarks of " +
@@ -1029,6 +1075,14 @@ private val SEARCH_INDEX = listOf(
     SearchEntry("Take a screenshot", "Action", "screenshot capture picture photo print screen", HubPage.SCREENS, ThorAction.SCREENSHOT),
     SearchEntry("Turn the bottom screen off / on", "Action", "blank off black wake screen bottom oled battery turn off", HubPage.SCREENS, ThorAction.TOGGLE_SECOND_SCREEN),
     SearchEntry("Stay awake (no screen timeout)", "Action", "keep awake sleep screen on stay bottom timeout never", HubPage.SCREENS, ThorAction.TOGGLE_KEEP_AWAKE),
+    SearchEntry("The quick panel takes the controller", "Quick panel", "quick panel controller touch only keep playing game focus", HubPage.PANEL),
+    SearchEntry("Volume boost (louder than the maximum)", "Screens & power", "volume boost booster louder amplify gain loud", HubPage.SCREENS),
+    SearchEntry("Button names: Xbox or as printed", "Controller", "button names xbox nintendo printed a b x y labels hints", HubPage.CONTROLLER),
+    SearchEntry("Recent apps — the controller hint (smaller, off, corner)", "Controller", "recents hint compact small corner hide recent apps", HubPage.CONTROLLER),
+    SearchEntry("Gyro on / off (an action for a combo or a long press)", "Action", "gyro motion aim tilt toggle pause long press hold", HubPage.HOME, ThorAction.GYRO_TOGGLE),
+    SearchEntry("Guide & notes (the game's guide and your notes)", "Action", "guide notes walkthrough map single screen overlay companion", HubPage.HOME, ThorAction.GUIDE),
+    SearchEntry("Mouse mode (AYN's virtual mouse)", "Action", "mouse cursor pointer virtual stick ayn gamenative web", HubPage.HOME, ThorAction.AYN_MOUSE),
+    SearchEntry("Sleep (both screens off)", "Action", "sleep power off screens standby suspend lock button", HubPage.HOME, ThorAction.SLEEP),
     SearchEntry("Close background apps", "Action", "clear close kill recent memory ram background", HubPage.HOME, ThorAction.CLEAR_BACKGROUND),
     SearchEntry("Recent apps", "Action", "recents multitask overview switcher", HubPage.HOME, ThorAction.RECENTS),
     SearchEntry("Turn the bottom screen off with 3 fingers", "Screens & power", "gesture three 3 finger tap swipe blank wake off", HubPage.SCREENS),

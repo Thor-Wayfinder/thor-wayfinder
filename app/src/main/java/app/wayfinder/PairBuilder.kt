@@ -38,7 +38,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
- * #15 — build a pair by picking its two apps: one list per screen, side by side (left =
+ * Build a pair by picking its two apps: one list per screen, side by side (left =
  * top screen, right = bottom). Replaces "save what's on the screens now", which could
  * only ever see Wayfinder itself from inside Wayfinder (that one lives in the quick
  * panel now: the "App pairs" tile). Closes with Cancel, B / Back or a tap outside.
@@ -77,7 +77,7 @@ internal fun PairBuilderDialog(onClose: () -> Unit) {
                         )
                     }
                     FocusableGlass(onClick = onClose, radius = 14.dp) {
-                        Text("Cancel  ·  B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                        Text("Cancel  ·  ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                     }
                     val ready = top != null || bottom != null

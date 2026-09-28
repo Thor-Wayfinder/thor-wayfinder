@@ -19,6 +19,14 @@ enum class ThorAction(val title: String, val description: String) {
     SCREENSHOT("Screenshot", "Capture the top, bottom or both screens (pick which in Screens & power)"),
     TOGGLE_SECOND_SCREEN("Bottom screen off / on", "Turn the bottom screen off, or back on"),
     TOGGLE_KEEP_AWAKE("Stay awake", "The screens don't turn off on their own (press again to stop)"),
+    /** 1.3: sleep without the power button (Reddit request). */
+    SLEEP("Sleep", "Both screens off, like a press on the power button"),
+    /** 1.3 (GitHub #12): the game's guide page and notes — the other screen, or beside the game. */
+    GUIDE("Guide & notes", "The game's guide page and your notes — on the other screen, or beside the game on one screen"),
+    /** 1.3 (GitHub #17): AYN's virtual mouse on / off. */
+    AYN_MOUSE("Mouse mode (AYN)", "AYN's virtual mouse on or off — then click a stick to make it the pointer"),
+    /** 1.3: the game's gyro paused / back on (a combo, the AYN button, a button's long press). */
+    GYRO_TOGGLE("Gyro on / off", "Pause the game's gyro, or turn it back on (set it up in Game controls → Gyro)"),
     FOCUS_SWITCH_UP("Controller to the top screen", "The controller now works the top screen"),
     FOCUS_SWITCH_DOWN("Controller to the bottom screen", "The controller now works the bottom screen"),
     FOCUS_LOCK_TOGGLE("Lock the controller", "Keep the controller on its screen — touching the other one won't move it"),
@@ -45,7 +53,7 @@ object ActionRegistry {
         ThorAction.TOGGLE_KEEP_AWAKE, ThorAction.FOCUS_SWITCH_UP, ThorAction.FOCUS_SWITCH_DOWN,
         ThorAction.FOCUS_LOCK_TOGGLE, ThorAction.SCREENSHOT, ThorAction.KEYBOARD,
         ThorAction.BRIGHTER, ThorAction.DIMMER, ThorAction.FPS_COUNTER, ThorAction.QUICK_MENU,
-        ThorAction.GAME_CONTROLS, ThorAction.OPEN, ThorAction.CLOSE_APP -> true
+        ThorAction.GAME_CONTROLS, ThorAction.OPEN, ThorAction.CLOSE_APP, ThorAction.SLEEP, ThorAction.AYN_MOUSE, ThorAction.GUIDE, ThorAction.GYRO_TOGGLE -> true
         else -> false
     }
 }

@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.BrightnessHigh
@@ -34,6 +35,9 @@ import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Menu
+import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Mouse
+import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.South
 import androidx.compose.material.icons.rounded.VerticalAlignBottom
@@ -103,11 +107,12 @@ fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false) {
     val rim = if (g.dark) Color(0x66FFFFFF) else Color(0x40000000)
     when {
         b in FACE -> {
-            val c = FACE.getValue(b)
+            val shown = app.wayfinder.ButtonNames.shown(b)     // 1.3 (GitHub #27): named the Xbox way if chosen
+            val c = FACE.getValue(shown)
             Box(
                 Modifier.size(size).background(c.copy(alpha = if (dim) 0.18f else 0.26f), CircleShape).border(1.5.dp, c, CircleShape),
                 contentAlignment = Alignment.Center,
-            ) { Text(b.label, color = c, fontSize = (size.value * 0.5f).sp, fontWeight = FontWeight.Bold) }
+            ) { Text(shown.printed, color = c, fontSize = (size.value * 0.5f).sp, fontWeight = FontWeight.Bold) }
         }
         b == ThorButton.L1 || b == ThorButton.R1 || b == ThorButton.L2 || b == ThorButton.R2 -> {
             val shape = RoundedCornerShape(topStart = size * 0.45f, topEnd = size * 0.45f, bottomStart = 6.dp, bottomEnd = 6.dp)
@@ -188,6 +193,10 @@ fun actionIcon(a: ThorAction): ImageVector = when (a) {
     ThorAction.SCREENSHOT -> Icons.Rounded.PhotoCamera
     ThorAction.TOGGLE_SECOND_SCREEN -> Icons.Rounded.DarkMode
     ThorAction.TOGGLE_KEEP_AWAKE -> Icons.Rounded.Coffee
+    ThorAction.SLEEP -> Icons.Rounded.Bedtime
+    ThorAction.AYN_MOUSE -> Icons.Rounded.Mouse
+    ThorAction.GYRO_TOGGLE -> androidx.compose.material.icons.Icons.Rounded.ScreenRotation
+    ThorAction.GUIDE -> Icons.Rounded.MenuBook
     ThorAction.FOCUS_SWITCH_UP -> Icons.Rounded.VerticalAlignTop
     ThorAction.FOCUS_SWITCH_DOWN -> Icons.Rounded.VerticalAlignBottom
     ThorAction.FOCUS_LOCK_TOGGLE -> Icons.Rounded.Lock

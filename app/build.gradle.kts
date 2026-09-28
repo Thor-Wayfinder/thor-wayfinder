@@ -6,7 +6,7 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// Release signing (RELEASE_CHECKLIST §4): read from ~/.wayfinder/release.properties, never from
+// Release signing: read from ~/.wayfinder/release.properties, never from
 // the repo — storeFile, storePassword, keyAlias, keyPassword. Made by tools/make_release_key.ps1.
 // Missing → the release APK comes out unsigned.
 val releaseKey = Properties().apply {
@@ -26,8 +26,8 @@ android {
         // getWindowsOnAllDisplays(), both API 30 — the app cannot function below that.
         minSdk = 30
         targetSdk = 34
-        versionCode = 3
-        versionName = "1.2"
+        versionCode = 4
+        versionName = "1.3"
 
     }
 
@@ -44,7 +44,7 @@ android {
         release {
             signingConfig = signingConfigs.findByName("release")
             // Shrinks the LIBRARIES (unused Material icons etc.: 43 MB of code → far less) — the
-            // service's start-up peak got it killed at boot (RELEASE_CHECKLIST §2). Wayfinder's own
+            // service's start-up peak got it killed at boot. Wayfinder's own
             // code is kept whole (proguard-rules.pro).
             isMinifyEnabled = true
             proguardFiles(
