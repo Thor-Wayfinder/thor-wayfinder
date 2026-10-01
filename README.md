@@ -15,11 +15,7 @@ press away — all without leaving your game.
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 > [!NOTE]
-> **Using ClusterTune or Pulse?** Since 1.4, when one of them is installed Wayfinder leaves the CPU to it: no per-game
-> performance from Wayfinder (with Pulse, no per-game fan or refresh rate either), and the quick panel's Performance tile
-> steps aside — the two never fight over the clocks. Wayfinder also warns you when another app does the same job as one
-> of its parts (Mjolnir, BiFrost, OdinTools). If your Thor was unstable with ClusterTune before 1.4, restart it after
-> updating.
+> **ClusterTune, Pulse, SleepManager and other Thor apps:** Since 1.4, Wayfinder leaves the CPU to ClusterTune and Pulse, so they can stay installed together. With SleepManager, Wayfinder's sleep actions and lid guard stay off unless you turn them on. And if another app does the same job as a part of Wayfinder (Mjolnir, BiFrost, OdinTools), the Hub tells you what to do. If ClusterTune and Wayfinder gave you trouble before, restart your Thor once after updating.
 
 ## Highlights
 
