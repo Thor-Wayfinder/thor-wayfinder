@@ -92,6 +92,13 @@ object TouchPointer {
         if (stroke != null) { pendingX = x; pendingY = y; pump() }
     }
 
+    /** 1.4 (GitHub #65): the pointer jumps to a place (fractions of the game's screen); a held finger follows. */
+    fun jumpTo(fx: Float, fy: Float) {
+        x = (fx * w).coerceIn(0f, w - 1); y = (fy * h).coerceIn(0f, h - 1)
+        place()
+        if (stroke != null) { pendingX = x; pendingY = y; pump() }
+    }
+
     /** A tap at the pointer. */
     fun tap() = dispatch(GestureDescription.StrokeDescription(pathAt(x, y), 0, 40))
 

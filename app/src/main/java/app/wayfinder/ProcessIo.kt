@@ -30,7 +30,7 @@ internal fun runProcessWithTimeout(
     val finished = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
     if (!finished) {
         // only the command word: the rest can name apps, and any app can read the log on the Thor
-        Log.w("ThorShell", "Command timed out after ${timeoutSeconds}s: ${label.split(' ').take(3).joinToString(" ")}")
+        Log.w("ThorShell", "Command timed out after ${timeoutSeconds}s: ${label.split(' ').take(2).joinToString(" ")}")
         process.destroy()
         return -1 to stdout.toString().trim()
     }

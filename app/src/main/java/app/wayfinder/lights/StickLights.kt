@@ -31,9 +31,12 @@ data class LightProfile(
     val split: Boolean = false,
     /** 1.3 (GitHub #33): Screen colour from 0 the controller's screen · 1 the top screen · 2 the bottom screen. */
     val screenFrom: Int = 0,
+    /** 1.4 (Reddit): dim and brighten with the screens ([brightness] = with the screens at full). */
+    val followScreen: Boolean = false,
 ) {
     fun toJson(): JSONObject = JSONObject().put("mode", mode.name).put("left", left).put("right", right)
         .put("speed", speed.toDouble()).put("brightness", brightness.toDouble()).put("split", split).put("from", screenFrom)
+        .put("follow", followScreen)
 
     companion object {
         fun fromJson(o: JSONObject?): LightProfile? = o?.let {
@@ -42,6 +45,7 @@ data class LightProfile(
                     LightMode.valueOf(it.optString("mode", "AYN")), it.optInt("left", 0xFF2BE0D8.toInt()),
                     it.optInt("right", 0xFF2BE0D8.toInt()), it.optDouble("speed", 1.0).toFloat(),
                     it.optDouble("brightness", 1.0).toFloat(), it.optBoolean("split", false), it.optInt("from", 0).coerceIn(0, 2),
+                    it.optBoolean("follow", false),
                 )
             }.getOrNull()
         }
@@ -82,31 +86,45 @@ object StickLights {
     val available: Boolean get() = File(SIDES[0], "brightness").exists()
 
     /** Screen off: stop animating (no LED writes while the Thor sleeps). */
-    fun pause() = h.post { h.removeCallbacks(frame); h.removeCallbacks(sample); paused = true }
+    fun pause() = h.post { h.removeCallbacks(frame); h.removeCallbacks(sample); h.removeCallbacks(follow); paused = true }
 
     /** Screen on again: pick the effect back up. */
     fun resume(ctx: Context) = h.post {
         if (!paused) return@post
         paused = false
+        reapply(ctx)
+        // 1.4 (GitHub #64): AYN's own software writes the rings when the Thor wakes (after us, sometimes) — ours again
+        h.postDelayed({ if (!paused && profile.mode != LightMode.AYN) reapply(ctx) }, 1500)
+        h.postDelayed({ if (!paused && profile.mode != LightMode.AYN) reapply(ctx) }, 4000)
+    }
+
+    /** Write the current profile again, whatever we think the LEDs show. */
+    private fun reapply(ctx: Context) {
         val p = profile
-        profile = LightProfile(mode = LightMode.AYN)   // force a fresh apply
+        profile = p.copy(speed = -1f)   // never equal: a fresh apply
+        // AYN mode: AYN's lights are put back only if Wayfinder had changed them (review: untouched stays untouched)
+        if (p.mode != LightMode.AYN) touched = true
         apply(ctx, p)
     }
     @Volatile private var paused = false
 
     /** Apply [p] (animations keep running until another profile or AYN mode). */
-    fun apply(ctx: Context, p: LightProfile) {
+    fun apply(ctx: Context, wanted: LightProfile) {
+        // 1.4: stick lights turned off in Features = AYN's own lights, untouched
+        val p = if (app.wayfinder.Features.lights) wanted else LightProfile(mode = LightMode.AYN)
+        appCtx = ctx.applicationContext
         h.post {
             if (paused) { profile = p; return@post }   // applied on resume
             if (p == profile && touched) return@post
             profile = p
-            h.removeCallbacks(frame); h.removeCallbacks(sample)
+            h.removeCallbacks(frame); h.removeCallbacks(sample); h.removeCallbacks(follow)
+            if (p.followScreen) h.post(follow)
             if (p.mode != LightMode.SCREEN) screenStop?.invoke()
             start = SystemClock.uptimeMillis()
             when (p.mode) {
                 LightMode.AYN -> if (touched) { restoreAyn(ctx); touched = false }
                 LightMode.OFF -> { enable(false); touched = true }
-                LightMode.STATIC -> { enable(true); write(p.left, p.right, p.brightness); touched = true }
+                LightMode.STATIC -> { enable(true); write(p.left, p.right, lvl(p)); touched = true }
                 else -> {
                     enable(true); touched = true
                     if (p.mode == LightMode.SCREEN) h.post(sample)
@@ -124,22 +142,22 @@ object StickLights {
             when (p.mode) {
                 LightMode.BREATHING -> {
                     val k = (0.5f - 0.5f * kotlin.math.cos(2 * PI.toFloat() * t / 3f)).coerceIn(0.03f, 1f)
-                    write(p.left, p.right, p.brightness * k)
+                    write(p.left, p.right, lvl(p) * k)
                 }
                 LightMode.STROBE -> {
                     val on = ((t * 4f).toInt() % 2) == 0
-                    write(p.left, p.right, if (on) p.brightness else 0f)
+                    write(p.left, p.right, if (on) lvl(p) else 0f)
                 }
                 LightMode.SPECTRUM -> {
                     val hue = (t * 60f) % 360f
-                    write(hsv(hue), hsv((hue + 180f) % 360f), p.brightness)
+                    write(hsv(hue), hsv((hue + 180f) % 360f), lvl(p))
                 }
                 LightMode.SCREEN -> {
                     // Glide toward the latest screen colour (~0.1 s time constant at 30 fps):
                     // smooth, but close behind the picture.
                     screenColor = blend(screenColor, screenTarget, 0.28f)
                     screenColorR = blend(screenColorR, screenTargetR, 0.28f)
-                    write(screenColor, if (p.split) screenColorR else screenColor, p.brightness)
+                    write(screenColor, if (p.split) screenColorR else screenColor, lvl(p))
                 }
                 else -> return
             }
@@ -155,6 +173,32 @@ object StickLights {
                 else { screenTarget = vivid(c[0]); screenTargetR = screenTarget }
             }
             h.postDelayed(this, 60)   // the root sampler streams ~12 colours/s (fallback: a11y, ~3/s)
+        }
+    }
+
+    // ── 1.4 (Reddit): follow the screens' brightness ─────────────────────
+    @Volatile private var appCtx: Context? = null
+    /** The brighter lit screen's level, on the eye's scale (0.05..1). */
+    @Volatile private var screenFactor = 1f
+    private fun lvl(p: LightProfile) = if (p.followScreen) p.brightness * screenFactor else p.brightness
+
+    /** Every 2 s: the screens' levels (the root input helper answers in milliseconds). */
+    private val follow = object : Runnable {
+        override fun run() {
+            val p = profile; val ctx = appCtx ?: return
+            if (paused || !p.followScreen || p.mode == LightMode.AYN || p.mode == LightMode.OFF) return
+            val ids = listOf(0) + app.wayfinder.ForegroundAppService.availableDisplayIds.filter { it != 0 }.take(1)
+            app.wayfinder.ScreenLevels.readAsync(ctx, ids) { m -> h.post {
+                // a screen Wayfinder turned off doesn't count (1 = bottom off, 2 = top off)
+                val off = when (app.wayfinder.ForegroundAppService.screenMode()) { 1 -> ids.drop(1); 2 -> listOf(0); else -> emptyList() }
+                val f = (m.filterKeys { it !in off }.values.maxOrNull()?.let { kotlin.math.sqrt(it) } ?: return@post).coerceIn(0.05f, 1f)
+                if (kotlin.math.abs(f - screenFactor) < 0.01f) return@post
+                screenFactor = f
+                Log.i(TAG, "rings follow the screens: ${(f * 100).toInt()} %")
+                val now = profile
+                if (!paused && now.followScreen && now.mode == LightMode.STATIC) write(now.left, now.right, lvl(now))
+            } }
+            h.postDelayed(this, 2000)
         }
     }
 

@@ -5,7 +5,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -20,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -46,6 +50,7 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -257,6 +262,83 @@ fun FocusableGlass(
     ) { content(focused) }
 }
 
+/**
+ * A text field the controller passes over like a button: A (or a tap) starts typing — the keyboard opens; ↵, B, or
+ * leaving it with the D-pad stops. (before: a plain field opened the keyboard as soon as the D-pad crossed it, and the
+ * keyboard then kept the D-pad.) [modifier] sizes it; [surface] is its look (glassSurface / background).
+ */
+@Composable
+fun ControllerTextField(
+    value: String, onValueChange: (String) -> Unit, modifier: Modifier = Modifier,
+    textStyle: androidx.compose.ui.text.TextStyle, placeholder: String? = null, singleLine: Boolean = true,
+    surface: Modifier = Modifier, shape: androidx.compose.ui.graphics.Shape = RoundedCornerShape(14.dp),
+    contentPadding: PaddingValues = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+) {
+    val g = LocalGlass.current
+    var editing by remember { mutableStateOf(false) }
+    var gateFocused by remember { mutableStateOf(false) }
+    val field = remember { androidx.compose.ui.focus.FocusRequester() }
+    val gate = remember { androidx.compose.ui.focus.FocusRequester() }
+    val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    fun stop() {
+        if (!editing) return
+        editing = false; keyboard?.hide(); runCatching { gate.requestFocus() }
+    }
+    androidx.compose.runtime.LaunchedEffect(editing) {
+        if (editing) { kotlinx.coroutines.delay(40); runCatching { field.requestFocus() } }
+    }
+    // the keyboard closed (its B / ↵ / close key): the typing ends here too — one B, not two
+    @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
+    val imeShown = androidx.compose.foundation.layout.WindowInsets.Companion.isImeVisible
+    var imeSeen by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(imeShown, editing) {
+        if (!editing) imeSeen = false
+        else if (imeShown) imeSeen = true
+        else if (imeSeen) { kotlinx.coroutines.delay(150); if (editing) stop() }
+    }
+    val ring = gateFocused || editing
+    Box(modifier.then(surface)
+        .border(if (ring) 2.dp else 0.dp, if (ring) g.accent else Color.Transparent, shape)) {
+        androidx.compose.foundation.text.BasicTextField(
+            value, onValueChange, singleLine = singleLine, textStyle = textStyle,
+            cursorBrush = androidx.compose.ui.graphics.SolidColor(g.accent),
+            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                imeAction = if (singleLine) androidx.compose.ui.text.input.ImeAction.Done else androidx.compose.ui.text.input.ImeAction.Default),
+            keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { stop() }),
+            modifier = (if (singleLine) Modifier.fillMaxWidth() else Modifier.fillMaxSize())
+                .padding(contentPadding)
+                .focusRequester(field)
+                .focusProperties { canFocus = editing }
+                .onFocusChanged { if (editing && !it.isFocused) editing = false }
+                .onKeyEvent { e ->
+                    // the keyboard closed: B (or Escape) ends the typing here instead of leaving the page
+                    if (editing && (e.key == Key.ButtonB || e.key == Key.Back || e.key == Key.Escape)) {
+                        if (e.type == KeyEventType.KeyUp) stop(); true
+                    } else false
+                },
+            decorationBox = { inner ->
+                Box {
+                    if (value.isEmpty() && placeholder != null) Text(placeholder, color = g.textTertiary, style = textStyle)
+                    inner()
+                }
+            },
+        )
+        // not typing: one focus target over the field (A or a tap starts). Always there — only off while typing — so
+        // the focus has somewhere to return when the typing stops.
+        Box(Modifier.matchParentSize()
+            .focusRequester(gate)
+            .focusProperties { canFocus = !editing }
+            .onFocusChanged { gateFocused = it.isFocused }
+            .onKeyEvent { e ->
+                if (e.key == Key.ButtonA || e.key == Key.DirectionCenter || e.key == Key.Enter || e.key == Key.NumPadEnter) {
+                    if (e.type == KeyEventType.KeyUp) editing = true; true
+                } else false
+            }
+            .focusable()
+            .pointerInput(editing) { if (!editing) detectTapGestures { editing = true } })
+    }
+}
+
 /** Big primary action tile: icon + label + optional subtitle. */
 @Composable
 fun GlassActionButton(
@@ -264,6 +346,7 @@ fun GlassActionButton(
     icon: ImageVector,
     modifier: Modifier = Modifier,
     subtitle: String? = null,
+    subtitleLines: Int = 1,
     tint: Color? = null,
     focusRequester: androidx.compose.ui.focus.FocusRequester? = null,
     onClick: () -> Unit,
@@ -279,10 +362,23 @@ fun GlassActionButton(
             Column(Modifier.weight(1f)) {
                 Text(label, color = g.textPrimary, style = androidx.compose.material3.MaterialTheme.typography.titleMedium)
                 if (subtitle != null)
-                    Text(subtitle, color = g.textSecondary, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(subtitle, color = g.textSecondary, style = androidx.compose.material3.MaterialTheme.typography.bodyMedium, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
             }
         }
     }
+}
+
+/** 1.4: which row opened which Hub page — Back focuses that row again. */
+object ReturnFocus {
+    /** The row just pressed (the page it opens records it). */
+    @Volatile var clicked: String? = null
+    /** The row to focus on the page being shown (set by Back). */
+    @Volatile var pending: String? = null
+    val opener = HashMap<String, String>()
+    /** A page opened by a link from another page than its parent → Back goes back there. */
+    val from = HashMap<String, String>()
+    @Volatile var shown: String? = null
+    @Volatile var goingBack = false
 }
 
 /** A tappable list row (label + value + chevron). */
@@ -295,7 +391,19 @@ fun GlassListRow(
     onClick: () -> Unit,
 ) {
     val g = LocalGlass.current
-    FocusableGlass(onClick = onClick, modifier = modifier, radius = 16.dp) {
+    // 1.4: back from the page this row opened → the controller is on this row again
+    val me = remember { androidx.compose.ui.focus.FocusRequester() }
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        if (ReturnFocus.pending == label) {
+            kotlinx.coroutines.delay(360)   // after the page's own first focus (its Back button, at 300 ms)
+            if (ReturnFocus.pending == label) { runCatching { me.requestFocus() }; ReturnFocus.pending = null }
+        }
+    }
+    FocusableGlass(onClick = {
+        ReturnFocus.clicked = label; onClick()
+        // a row that doesn't open a page (a switch, "More options") is forgotten
+        android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({ if (ReturnFocus.clicked == label) ReturnFocus.clicked = null }, 700)
+    }, modifier = modifier, radius = 16.dp, focusRequester = me) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -341,19 +449,29 @@ fun GlassSegmentedControl(
     options: List<String>,
     selectedIndex: Int,
     modifier: Modifier = Modifier,
+    /** 1.4 (§10.4): 4+ choices show as one value row that opens its list; false keeps the buttons. */
+    collapse: Boolean = options.size >= 4,
+    /** The value row's name, when the card has other choices too ("Where", "Corner"). */
+    label: String? = null,
     onSelect: (Int) -> Unit,
 ) {
+    if (collapse) { GlassChoiceRow(options, selectedIndex, modifier, label, onSelect); return }
     val g = LocalGlass.current
     // 1.3: five or more options (the fan: Usual · Off · Quiet · Smart · Sports · Custom) — no check mark
     // (the fill says it), smaller text, one line: "Usual" wrapped into "Usua / l"
     val tight = options.size >= 5
-    Row(modifier, horizontalArrangement = Arrangement.spacedBy(if (tight) 6.dp else 8.dp)) {
+    // the D-pad into the row lands on the current choice (before: it took the nearest one)
+    val optFocus = remember(options.size) { List(options.size) { androidx.compose.ui.focus.FocusRequester() } }
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+    Row(modifier
+        .focusProperties { enter = { optFocus.getOrNull(selectedIndex) ?: androidx.compose.ui.focus.FocusRequester.Default } }
+        .focusGroup(), horizontalArrangement = Arrangement.spacedBy(if (tight) 6.dp else 8.dp)) {
         options.forEachIndexed { i, opt ->
             val selected = i == selectedIndex
             // Selected = the blue fill + a check; focused (the controller is HERE) = a thick ring in
             // the text colour. Both were blue before: with the controller you couldn't tell which
             // option was chosen and which one A would pick (release critique 2026-09-24).
-            FocusableGlass(onClick = { onSelect(i) }, modifier = Modifier.weight(1f), radius = 14.dp) { focused ->
+            FocusableGlass(onClick = { onSelect(i) }, modifier = Modifier.weight(1f), radius = 14.dp, focusRequester = optFocus[i]) { focused ->
                 Box(
                     Modifier.fillMaxWidth()
                         .then(
@@ -380,6 +498,44 @@ fun GlassSegmentedControl(
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
                     }
+                }
+            }
+        }
+    }
+}
+
+/** 1.4 (§10.4): the current choice as one row (▾); opened, the choices as a list (✓ = current); a pick closes it. */
+@Composable
+fun GlassChoiceRow(options: List<String>, selectedIndex: Int, modifier: Modifier = Modifier, label: String? = null, onSelect: (Int) -> Unit) {
+    val g = LocalGlass.current
+    var open by remember { mutableStateOf(false) }
+    val rowFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    val pickFocus = remember { androidx.compose.ui.focus.FocusRequester() }
+    var refocus by remember { mutableStateOf(false) }
+    androidx.compose.runtime.LaunchedEffect(open) {
+        if (open) { kotlinx.coroutines.delay(60); runCatching { pickFocus.requestFocus() } }
+        else if (refocus) { kotlinx.coroutines.delay(60); runCatching { rowFocus.requestFocus() }; refocus = false }
+    }
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        FocusableGlass(onClick = { open = !open }, modifier = Modifier.fillMaxWidth(), radius = 14.dp, focusRequester = rowFocus) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                if (label != null) Text(label, color = g.textSecondary, style = androidx.compose.material3.MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(end = 14.dp))
+                Text(options.getOrElse(selectedIndex) { "—" }, color = g.textPrimary,
+                    style = androidx.compose.material3.MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                Icon(if (open) androidx.compose.material.icons.Icons.Rounded.ExpandLess else androidx.compose.material.icons.Icons.Rounded.ExpandMore,
+                    null, tint = g.textSecondary, modifier = Modifier.size(22.dp))
+            }
+        }
+        if (open) options.forEachIndexed { i, opt ->
+            val selected = i == selectedIndex
+            FocusableGlass(onClick = { open = false; refocus = true; if (!selected) onSelect(i) },
+                modifier = Modifier.fillMaxWidth().padding(start = 18.dp), radius = 12.dp,
+                focusRequester = if (selected || (selectedIndex !in options.indices && i == 0)) pickFocus else null) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(opt, color = if (selected) g.accent else g.textSecondary,
+                        style = androidx.compose.material3.MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
+                    if (selected) Icon(androidx.compose.material.icons.Icons.Rounded.Check, null, tint = g.accent, modifier = Modifier.size(18.dp))
                 }
             }
         }

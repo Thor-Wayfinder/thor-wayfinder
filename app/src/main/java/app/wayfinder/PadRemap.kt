@@ -6,7 +6,7 @@ import org.json.JSONObject
 /**
  * Input layer, phase 2 — what one app's controls become.
  * Buttons are PRINTED buttons (as on the Thor), whatever AYN's layout. Home and Back are never
- * remapped (plan §9, decision 3). Turned into the mapping engine's tokens by [engineTokens]
+ * remapped. Turned into the mapping engine's tokens by [engineTokens]
  * (fx/wfmap.h `wf_parse`); keyboard keys and Wayfinder actions are done by the app ("X" lines).
  */
 sealed class RemapTarget {

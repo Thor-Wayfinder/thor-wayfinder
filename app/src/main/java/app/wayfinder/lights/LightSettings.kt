@@ -8,7 +8,7 @@ import androidx.compose.runtime.setValue
 import org.json.JSONObject
 
 /**
- * The global stick-light profile (apps can override it in App profiles).
+ * The global stick-light profile (apps can override it in Games).
  * Plug and play: the default is AYN's own lighting, untouched, until the user picks.
  */
 object LightSettings {

@@ -22,6 +22,8 @@
     <!-- Speaker tuning: an audio effect on the output mix. -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <!-- 1.4: after a restart, check Wayfinder's service came back (Android can stop it while the Thor starts) -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <application
         android:allowBackup="false"
@@ -93,6 +95,17 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
         </service>
+
+        <!-- 1.4: Wayfinder back after a restart (ServiceWatch) -->
+        <receiver android:name=".ServiceWatch$Boot" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
+        <service
+            android:name=".ServiceWatch$Job"
+            android:exported="false"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <!-- #27 — the Thor Keyboard (input method) -->
         <service

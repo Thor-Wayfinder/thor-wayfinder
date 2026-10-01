@@ -8,6 +8,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.shape.RoundedCornerShape
+import app.wayfinder.ui.glassSurface
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -74,7 +78,7 @@ fun LightsPage(myDisplayId: Int, pkg: String?, onBack: () -> Unit) {
         if (pkg == null) "The rings around the sticks — for every app"
         else "While $appLabel has the controller", onBack) {
         if (!StickLights.available) SettingCard("No stick lights found", "This device doesn't expose the Thor's stick LEDs.")
-        if (pkg == null) Text("One app its own lights (Screen colour too): App profiles, then the app, then “Stick lights”.",
+        if (pkg == null) Text("One app its own lights (Screen colour too): Games, then the app, then “Stick lights”.",
             color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
 
         if (pkg != null) SettingCard(
@@ -98,10 +102,13 @@ fun LightsPage(myDisplayId: Int, pkg: String?, onBack: () -> Unit) {
                 val setColour: (Int) -> Unit = { c ->
                     save(if (sameColour) p.copy(left = c, right = c) else if (editSide == 0) p.copy(left = c) else p.copy(right = c))
                 }
-                SectionHeader("Colour — pick one, or A on the wheel to steer it with the stick")
+                SectionHeader("Colour — pick one, or ${app.wayfinder.ButtonNames.m("A")} on the wheel to steer it with the stick")
                 SwatchRow(current, setColour)
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                     app.wayfinder.ui.ColorWheel(current, 240.dp, setColour)
+                    // 1.4 (GitHub #64): or type the colour
+                    androidx.compose.foundation.layout.Spacer(Modifier.width(24.dp))
+                    HexField(current, setColour)
                 }
             }
             if (p.mode in ANIMATED) {
@@ -115,8 +122,15 @@ fun LightsPage(myDisplayId: Int, pkg: String?, onBack: () -> Unit) {
             if (p.mode != LightMode.AYN && p.mode != LightMode.OFF) {
                 SectionHeader("Brightness · ${(p.brightness * 100).toInt()} %")
                 app.wayfinder.ui.GlassSlider(p.brightness) { v -> save(p.copy(brightness = v.coerceAtLeast(0.01f))) }
+                // 1.4 (Reddit)
+                SettingCard("Follow the screens' brightness", if (p.followScreen) "The rings dim and brighten with the screens — the slider above is how bright they are with the screens at full"
+                    else "Off — the rings stay at the brightness above", checked = p.followScreen, onChecked = { save(p.copy(followScreen = it)) })
             }
             if (p.mode == LightMode.SCREEN) {
+                // 1.4 (measured): the effect reads the screen several times a second — say what it costs
+                Text("Screen colour costs about 0.2–0.3 W more than the other effects (≈ 10 % of the Thor's draw at rest): " +
+                    "it reads the screen several times a second. The other effects cost almost nothing.",
+                    color = LocalGlass.current.textTertiary, style = MaterialTheme.typography.bodySmall)
                 // 1.3 (GitHub #15): like BiFrost — each ring its side of the screen
                 SettingCard("Each stick its own side", if (p.split) "Left ring = the left half of the screen, right ring = the right half"
                     else "Both rings show the whole screen's main colour", checked = p.split, onChecked = { save(p.copy(split = it)) })
@@ -154,6 +168,23 @@ private fun ModeChip(m: LightMode, selected: Boolean, modifier: Modifier, onClic
                 .padding(vertical = 14.dp),
             contentAlignment = Alignment.Center,
         ) { Text(m.label, color = if (selected) Color.White else g.textPrimary, style = MaterialTheme.typography.labelLarge) }
+    }
+}
+
+@Composable
+internal fun HexField(argb: Int, onPick: (Int) -> Unit) {
+    val g = app.wayfinder.ui.LocalGlass.current
+    var hex by remember(argb) { mutableStateOf("#%06X".format(argb and 0xFFFFFF)) }
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Box(Modifier.size(40.dp).background(androidx.compose.ui.graphics.Color(argb or 0xFF000000.toInt()), RoundedCornerShape(10.dp)))
+        app.wayfinder.ui.ControllerTextField(hex, { t ->
+            hex = t.take(7).uppercase()
+            Regex("^#?([0-9A-F]{6})$").find(hex)?.groupValues?.get(1)?.let { onPick(it.toLong(16).toInt() or 0xFF000000.toInt()) }
+        }, Modifier.width(110.dp),
+            textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)),
+            surface = Modifier.glassSurface(g, RoundedCornerShape(12.dp), raised = false), shape = RoundedCornerShape(12.dp),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 9.dp))
+        Text("hex", color = g.textTertiary, style = MaterialTheme.typography.labelSmall)
     }
 }
 

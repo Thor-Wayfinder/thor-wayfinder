@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Wayfinder</string>
-    <string name="accessibility_service_description">Wayfinder (for the AYN Thor) sees which app is on each screen so it can move apps between the two screens, and reads the controller\'s buttons for its shortcuts. It takes a screenshot or a tap only when you ask for one (a screenshot, Recents\' Clear all, handing the controller to a screen). Nothing is collected or sent anywhere.</string>
+    <string name="accessibility_service_description">Wayfinder (for the AYN Thor) sees which app is on each screen so it can move apps between the two screens, and reads the controller\'s buttons for its shortcuts. It takes a screenshot or a tap only when you ask for one (a screenshot, Recents\' Clear all, handing the controller to a screen, or the stick lights\' Screen colour effect while it is on). Nothing is collected or sent anywhere.</string>
 </resources>

@@ -90,8 +90,8 @@ class CompanionPresentation(
                     ThemeMode.LIGHT -> false
                     ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
                 }
-                androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && AppSettings.themeMode != ThemeMode.BLACK)) {
-                    ThorGlassTheme(dark = dark) { CompanionScreen() }
+                androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && !AppSettings.flatLook)) {
+                    ThorGlassTheme(dark = dark) { app.wayfinder.ui.CappedFontScale { CompanionScreen() } }
                 }
             }
         }

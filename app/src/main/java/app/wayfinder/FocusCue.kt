@@ -26,7 +26,7 @@ class FocusCue(private val service: AccessibilityService) {
     private val main = Handler(Looper.getMainLooper())
 
     /** A pill window and the moment it must be gone at the latest. */
-    private class Pill(val wm: WindowManager, val view: View, var deadline: Long)
+    private class Pill(val wm: WindowManager, val view: View, var deadline: Long, val line: Boolean = false)
 
     /** EVERY pill window this cue has put up — an entry leaves this list only once its window
      *  is really removed. Pills stayed on screen for good twice (2026-09-24): an entry was
@@ -76,7 +76,7 @@ class FocusCue(private val service: AccessibilityService) {
         class Table(val title: List<String>, val cells: List<Pair<String, String>>, val at: Int = 0, val compact: Boolean = false) : Content()
     }
 
-    fun hideHint() = main.post { dismiss() }
+    fun hideHint() = main.post { dismiss(tablesOnly = true) }
 
     /** Remove everything at once (the service is going away / being re-created). */
     fun dismissAll() = main.post { main.removeCallbacks(hideRunnable); dismissNow() }
@@ -102,7 +102,9 @@ class FocusCue(private val service: AccessibilityService) {
         val ink = if (dark) 0xFFFFFFFF.toInt() else 0xFF0A0C14.toInt()
         val soft = if (dark) 0xCCFFFFFF.toInt() else 0xB30A0C14.toInt()
         fun label(t: CharSequence, sp: Float, color: Int = ink) = TextView(ctx).apply {
-            text = t; setTextColor(color); setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
+            // 1.4 (GitHub #66): larger font sizes up to 1.1× — bigger overflowed the screen; cells wrap below
+            text = t; setTextColor(color)
+            setTextSize(TypedValue.COMPLEX_UNIT_DIP, sp * ctx.resources.configuration.fontScale.coerceIn(0.85f, 1.1f))
             setLineSpacing(0f, 1.15f)
         }
         // one line = a pill; a table = a rounded card (a pill's round ends cut into several lines)
@@ -118,17 +120,23 @@ class FocusCue(private val service: AccessibilityService) {
                 }
                 if (content.cells.isNotEmpty()) addView(TableLayout(ctx).apply {
                     setPadding(0, if (content.compact) 0 else (8 * dp).toInt(), 0, 0)
-                    if (content.compact) isShrinkAllColumns = true   // one line on a narrow screen: cells wrap, nothing cut
-                    for (row in content.cells.chunked(if (content.compact) content.cells.size else 3)) addView(TableRow(ctx).apply {
-                        for ((btn, what) in row) {
-                            val t = android.text.SpannableStringBuilder().apply {
-                                append(btn, android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0)
-                                if (what.isNotEmpty()) { append(if (content.compact) " " else "  "); append(what) }
-                            }
-                            addView(label(t, if (content.compact) 14f else 16f).apply {
-                                setPadding(0, (3 * dp).toInt(), ((if (content.compact) 14 else 26) * dp).toInt(), (3 * dp).toInt()) })
+                    isShrinkAllColumns = true   // cells wrap on a narrow screen or a large font — nothing cut (1.4, #66)
+                    val cells = content.cells.map { (btn, what) ->
+                        val t = android.text.SpannableStringBuilder().apply {
+                            append(btn, android.text.style.StyleSpan(android.graphics.Typeface.BOLD), 0)
+                            if (what.isNotEmpty()) { append(if (content.compact) " " else "  "); append(what) }
                         }
-                    })
+                        label(t, if (content.compact) 14f else 16f).apply {
+                            setPadding(0, (3 * dp).toInt(), ((if (content.compact) 14 else 26) * dp).toInt(), (3 * dp).toInt()) }
+                    }
+                    // 1.4 (GitHub #66 + the bottom screen): as many columns (3 → 1) as the cells' real widths fit on THIS
+                    // screen — a fixed 3 squeezed the last column to a word per line on the narrower bottom screen
+                    val room = ctx.resources.displayMetrics.widthPixels - (2 * 16 + 40) * dp
+                    val widths = cells.map { it.measure(0, 0); it.measuredWidth }
+                    fun fits(c: Int) = (0 until c).sumOf { col -> widths.filterIndexed { i, _ -> i % c == col }.maxOrNull() ?: 0 } <= room
+                    val tall = cells.sumOf { it.measuredHeight } > ctx.resources.displayMetrics.heightPixels * 0.7f
+                    val cols = if (content.compact) cells.size else listOf(3, 2).firstOrNull { fits(it) } ?: if (tall) 2 else 1
+                    for (row in cells.chunked(cols)) addView(TableRow(ctx).apply { row.forEach { addView(it) } })
                 })
             }
         }
@@ -170,13 +178,14 @@ class FocusCue(private val service: AccessibilityService) {
         try {
             wm.addView(pill, lp)
             pill.animate().alpha(1f).translationY(0f).setDuration(160).start()
-            shown += Pill(wm, pill, android.os.SystemClock.uptimeMillis() + holdMs + 1500)
+            shown += Pill(wm, pill, android.os.SystemClock.uptimeMillis() + holdMs + 1500, line = content is Content.Line)
             main.removeCallbacks(sweep); main.postDelayed(sweep, 1000)
         } catch (_: Exception) {}
     }
 
-    private fun dismiss() {
+    private fun dismiss(tablesOnly: Boolean = false) {
         for (p in shown.toList()) {
+            if (tablesOnly && p.line) continue   // 1.4: a combo's own message outlives the list it came from
             // Fade, then remove. The pill stays in [shown] until really removed; a cancelled
             // fade (no end action) is covered by the timer, and the timer by [sweep].
             p.deadline = minOf(p.deadline, android.os.SystemClock.uptimeMillis() + 600)

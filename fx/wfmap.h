@@ -180,13 +180,14 @@ static inline void wf_state_rest(wf_state *s) {
     memset(s->vkey, 0, sizeof s->vkey);
 }
 
-/** A virtual press / release (`p <code> <0|1>`): a pad button the pad has (not Home / Back) or a
- *  D-pad direction. `p 0 0` releases them all. Returns -1 for anything else. */
+/** A virtual press / release (`p <code> <0|1>`): a pad button the pad has (not Home) or a
+ *  D-pad direction. `p 0 0` releases them all. Returns -1 for anything else.
+ *  1.4 (GitHub #43): Back too — Wayfinder hands a short Back to the game as the pad's own press. */
 static inline int wf_vpress(wf_state *s, int code, int v) {
     if (code == 0 && v == 0) { memset(s->vkey, 0, sizeof s->vkey); return 0; }
     if (v != 0 && v != 1) return -1;
     int ok = code >= WF_HAT_UP && code <= WF_HAT_RIGHT;
-    for (int i = 0; !ok && i < s->nk; i++) if (s->keys[i] == code && !wf_is_system(code)) ok = 1;
+    for (int i = 0; !ok && i < s->nk; i++) if (s->keys[i] == code && code != WF_HOME) ok = 1;
     if (!ok) return -1;
     s->vkey[code] = (unsigned char)v;
     return 0;

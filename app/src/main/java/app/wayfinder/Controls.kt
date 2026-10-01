@@ -64,7 +64,8 @@ enum class Press(val label: String) { TAP("tap"), DOUBLE_TAP("double-tap"), TRIP
 data class Trigger(val button: ThorButton, val press: Press = Press.TAP, val modifier: ThorButton? = null) {
     val isChord get() = modifier != null
     // in words, never arrows: shown in hints, lists and the tour (2026-09-25)
-    fun label(): String = if (modifier != null) "${modifier.spoken} + ${button.spoken}" else "${button.spoken} · ${press.label}"
+    fun label(): String = if (modifier != null) "${modifier.spoken} + ${button.spoken}" + (if (press != Press.TAP) " · ${press.label}" else "")
+        else "${button.spoken} · ${press.label}"
 
     fun toJson(): JSONObject = JSONObject().put("button", button.name).put("press", press.name)
         .apply { if (modifier != null) put("modifier", modifier.name) }
@@ -97,7 +98,7 @@ object ControlsStore {
         Binding(Trigger(ThorButton.BACK, Press.DOUBLE_TAP), ThorAction.RECENTS),
         Binding(Trigger(ThorButton.BACK, Press.TRIPLE_TAP), ThorAction.CLEAR_BACKGROUND),
         Binding(Trigger(ThorButton.BACK, Press.HOLD), ThorAction.SWAP_OR_SEND),
-        // Rev 5 — system shortcuts on Home/Back only (input layer plan §4): the controller moves
+        // Rev 5 — system shortcuts on Home/Back only: the controller moves
         // with Home + a flick of the right stick (was R3 + D-pad, which reached the game), and
         // Home + R3 locks it.
         Binding(Trigger(ThorButton.RS_UP, modifier = ThorButton.HOME), ThorAction.FOCUS_SWITCH_UP),
@@ -110,7 +111,7 @@ object ControlsStore {
         // Rev 4 — brightness of the screen with the controller.
         Binding(Trigger(ThorButton.R2, modifier = ThorButton.HOME), ThorAction.BRIGHTER),
         Binding(Trigger(ThorButton.L2, modifier = ThorButton.HOME), ThorAction.DIMMER),
-        // Rev 6 — the game's controls (remap, gyro, macros) while playing (plan §6h).
+        // Rev 6 — the game's controls (remap, gyro, macros) while playing.
         Binding(Trigger(ThorButton.X, modifier = ThorButton.HOME), ThorAction.GAME_CONTROLS),
     )
 
@@ -182,7 +183,8 @@ object ControlsStore {
     fun all(): List<Binding> = bindings
 
     /** Only bindings whose action actually does something today. */
-    fun active(): List<Binding> = bindings.filter { ActionRegistry.isImplemented(it.action) }
+    // 1.4: a part turned off (Features) keeps its combos, unused until it's back on
+    fun active(): List<Binding> = bindings.filter { ActionRegistry.isImplemented(it.action) && Features.allows(it.action) }
 
     fun triggerFor(action: ThorAction): Trigger? = bindings.firstOrNull { it.action == action }?.trigger
 
@@ -203,7 +205,12 @@ object ControlsStore {
      *  or a hotkey on Back, GitHub #1 / Reddit); else Wayfinder's Back (hold = move / swap) as usual. */
     fun backToGame(pkg: String): Boolean {
         val app = pkg.substringBefore('#')
-        return AppConfigStore.get(app).backToGame ?: (app.startsWith("com.retroarch") && RetroArchBack.usesBack(app))
+        AppConfigStore.get(app).backToGame?.let { return it }
+        // 1.4 (GitHub #43): the layer hands Back to the game as a real pad press (and Select + Back straight
+        // through) — the game gets its Back and Wayfinder keeps its own
+        // ...unless RetroArch HOLDS Back itself (hotkey enable / hold functions): then it's RetroArch's, as in 1.3.2
+        if (PadLayerCtl.active) return app.startsWith("com.retroarch") && RetroArchBack.holdsBack(app)
+        return app.startsWith("com.retroarch") && RetroArchBack.usesBack(app)
     }
 
     private fun effectiveAll(pkg: String?): List<Binding> {

@@ -104,6 +104,9 @@ int main(void) {
     pad(0);
     CHECK(wf_vpress(&S, WF_A, 1) == 0, "vpress A accepted"); frame(); CHECK(O.key[WF_A], "vpress A → A");
     CHECK(wf_vpress(&S, WF_HOME, 1) == -1 && wf_vpress(&S, 0x2f0, 1) == -1 && wf_vpress(&S, WF_A, 2) == -1, "vpress refuses Home, unknown codes, bad values");
+    wf_vpress(&S, 0, 0); CHECK(wf_vpress(&S, WF_BACK, 1) == 0, "vpress accepts Back (1.4, #43)"); frame();
+    CHECK(O.key[WF_BACK] && !S.gated, "vpress Back → the copy's Back, no gate"); wf_vpress(&S, WF_BACK, 0); frame();
+    CHECK(!O.key[WF_BACK], "vpress Back released"); wf_vpress(&S, WF_A, 1);
     wf_vpress(&S, WF_HAT_LEFT, 1); wf_vpress(&S, WF_R2, 1); frame();
     CHECK(O.abs[WF_HX] == -1 && O.key[WF_R2] && O.abs[WF_GAS] == 32767, "vpress D-pad left + R2 full pull");
     key(WF_HOME, 1); frame(); CHECK(!O.key[WF_A] && O.abs[WF_HX] == 0 && O.abs[WF_GAS] == 0, "vpress silent while Home is held");

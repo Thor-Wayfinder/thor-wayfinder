@@ -74,6 +74,7 @@ object SpeakerTune {
     fun init(ctx: Context) {
         if (::app.isInitialized) return
         app = ctx.applicationContext
+        HeadphoneEq.init(app)
         enabled = prefs.getBoolean("speaker_tune", false)
         width = prefs.getFloat("stereo_width", 2f)
         eqOn = prefs.getBoolean("speaker_eq", true)
@@ -119,7 +120,7 @@ object SpeakerTune {
     }
 
     private val devices = object : AudioDeviceCallback() {
-        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) = apply()
+        override fun onAudioDevicesAdded(added: Array<out AudioDeviceInfo>?) { HeadphoneEq.noteAdded(added); apply() }
         override fun onAudioDevicesRemoved(removed: Array<out AudioDeviceInfo>?) = apply()
     }
 
@@ -135,7 +136,9 @@ object SpeakerTune {
     @Synchronized fun apply() {
         if (!started) return
         val want = enabled && onSpeaker()
-        syncBoost(boost > 0 && !(want && eqOn))    // the fix's own effect carries the boost when it plays
+        // 1.4 (Reddit): the output's own EQ (headphones, USB, Bluetooth) — it carries the boost when it plays
+        val hp = HeadphoneEq.sync(if (onSpeaker()) null else HeadphoneEq.now(app), boost)
+        syncBoost(boost > 0 && !(want && eqOn) && !hp)    // the fix's own effect carries the boost when it plays
         if (dp != null && dpBoost != boost) { runCatching { dp!!.enabled = false; dp!!.release() }; dp = null }
         // The widener (a native effect, see AudioFx): neutral unless the fix is playing.
         AudioFx.setWidth(if (want && AudioFx.installed) width else 0f)
@@ -239,6 +242,7 @@ object SpeakerTune {
     fun boostStatus(): String = when {
         boost == 0 -> "Off"
         dp != null && dpBoost == boost -> "+$boost dB, with the speaker fix"
+        HeadphoneEq.active() -> "+$boost dB, with the ${HeadphoneEq.playing?.title?.lowercase() ?: "headphone"} EQ"
         boostFx != null && runCatching { boostFx!!.hasControl() }.getOrDefault(false) -> "+$boost dB"
         boostFx != null -> "+$boost dB (another app has priority on the audio effect)"
         else -> "+$boost dB — couldn't start"
@@ -251,6 +255,7 @@ object SpeakerTune {
         override fun run() {
             // the booster alone: rebuilt when the audio server dropped it
             if (boostFx != null && !runCatching { boostFx!!.enabled && boostFx!!.hasControl() }.getOrDefault(false)) { boostFxDb = -1; apply() }
+            if (HeadphoneEq.dead()) { HeadphoneEq.drop(); apply() }
             if (enabled && !installing) {
                 val dpDead = dp != null && !runCatching { dp!!.enabled && dp!!.hasControl() }.getOrDefault(false)
                 val wideDead = wide != null && !runCatching { wide!!.enabled }.getOrDefault(false)

@@ -42,6 +42,10 @@ object DeckSettings {
     /** 1.3 (GitHub #36): the trackpad sends finger touches (a pointer on the game's screen), not a mouse. */
     var touchMode by mutableStateOf(false)
         private set
+    /** 1.4 (GitHub #65): Touch mode as Direct — the pad maps onto the game's screen, one finger touches / swipes there. */
+    var directTouch by mutableStateOf(false)
+        private set
+    fun chooseDirect(on: Boolean) { directTouch = on; prefs.edit().putBoolean("direct_touch", on).apply() }
     private val perApp = HashMap<String, String>()
 
     fun init(ctx: Context) {
@@ -50,6 +54,7 @@ object DeckSettings {
         autoPick = prefs.getBoolean("auto_pick", true)
         simpleKeys = prefs.getBoolean("simple_keys", false)
         touchMode = prefs.getBoolean("touch_mode", false)
+        directTouch = prefs.getBoolean("direct_touch", false)
         lastPad = prefs.getString("last_pad", PAD_PC) ?: PAD_PC
         runCatching {
             val o = JSONObject(prefs.getString("per_app", "{}") ?: "{}")

@@ -10,9 +10,9 @@ import android.content.Context
 object OpenTargets {
     /** The pages a combo can open (the Hub's own ids), with their names. */
     val PAGES = listOf(
-        HubPage.HOME to "Home", HubPage.SCREENS to "Screens & power", HubPage.SLEEP to "Sleep & standby",
+        HubPage.HOME to "Home", HubPage.SCREENS to "Screens", HubPage.BATTERY to "Battery", HubPage.SOUND to "Sound", HubPage.SLEEP to "Sleep & standby",
         HubPage.CONTROLLER to "Controller", HubPage.CONTROLS to "Combos", HubPage.KEYBOARD to "Keyboard",
-        HubPage.APPS to "App profiles", HubPage.PANEL to "Quick panel", HubPage.PAIRS to "App pairs",
+        HubPage.APPS to "Games", HubPage.PANEL to "Quick panel", HubPage.PAIRS to "App pairs",
         HubPage.LIGHTS to "Stick lights", HubPage.APPEARANCE to "Appearance", HubPage.HELP to "Help & status",
     )
 

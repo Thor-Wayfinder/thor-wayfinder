@@ -81,6 +81,10 @@ object GameProfiles {
         if (p.perf == null && p.fan == null && p.hz == null && p.lights == null && p.second == null && p.fps == null &&
             p.face == a.face && r(p.remap) == r(a.remap)) remove(key)
     }
+    /** 1.4: game profiles with nothing of their own (an untouched copy left when Game controls closed by a crash or
+     *  an update) — removed at service start. */
+    fun dropPlain() { cache.keys.toList().forEach { removeIfPlain(it) } }
+
     /** A new game profile: starts as a copy of its app's controls. */
     fun create(pkg: String, game: String, title: String): String {
         val k = key(pkg, game)

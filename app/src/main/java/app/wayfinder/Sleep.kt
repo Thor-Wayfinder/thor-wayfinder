@@ -167,7 +167,7 @@ object SleepEngine {
         if (!closed && hotDropped) {
             hotDropped = false
             val mode = Settings.System.getInt(app.contentResolver, "performance_mode", 0).coerceIn(0, 2)
-            Thread { PServiceBridge.exec("setprop persist.vendor.debug.mode $mode") }.start()
+            if (Tuners.installed(app) == null) Thread { PServiceBridge.exec("setprop persist.vendor.debug.mode $mode") }.start()
             PerfProfiles.forget(); ForegroundAppService.reapplyPolicy()   // a game's own mode comes back too
             log("Lid opened — performance back to normal")
         }
@@ -217,7 +217,8 @@ object SleepEngine {
                     hotLogged = true
                     pauseMedia()
                     hotDropped = true
-                    Thread { PServiceBridge.exec("setprop persist.vendor.debug.mode 0") }.start()
+                    // with ClusterTune / Pulse the CPU is theirs: the music still stops
+                    if (Tuners.installed(app) == null) Thread { PServiceBridge.exec("setprop persist.vendor.debug.mode 0") }.start()
                 }
             } else if (t != null && t < HOT_C - 3) hotLogged = false
             // (Runs only while the CPU is awake — asleep, nothing heats up.)

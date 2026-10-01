@@ -16,6 +16,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ScreenRotation
 import androidx.compose.material.icons.rounded.Apps
+import androidx.compose.material.icons.rounded.SwipeUp
+import androidx.compose.material.icons.rounded.SwipeDown
+import androidx.compose.material.icons.rounded.SwipeLeft
+import androidx.compose.material.icons.rounded.SwipeRight
+import androidx.compose.material.icons.rounded.Dashboard
+import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.BrightnessHigh
 import androidx.compose.material.icons.rounded.BrightnessLow
@@ -87,7 +93,7 @@ fun TriggerGlyphs(t: Trigger, size: Dp = 30.dp, dim: Boolean = false) {
             Text("+", color = g.textTertiary, fontSize = (size.value * 0.55f).sp, fontWeight = FontWeight.SemiBold)
         }
         ButtonGlyph(t.button, size, dim)
-        if (t.modifier == null && t.press != Press.TAP) PressTag(t.press)
+        if (t.press != Press.TAP) PressTag(t.press)   // 1.4: a combo's second button can be doubled / held too
     }
 }
 
@@ -96,8 +102,9 @@ private fun PressTag(p: Press) {
     val g = LocalGlass.current
     val text = when (p) { Press.DOUBLE_TAP -> "×2"; Press.TRIPLE_TAP -> "×3"; Press.HOLD -> "hold"; Press.TAP -> "" }
     Box(
-        Modifier.background(g.accent.copy(alpha = 0.18f), RoundedCornerShape(8.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
-    ) { Text(text, color = g.accent, style = MaterialTheme.typography.labelLarge) }
+        // solid: readable on any row, selected or not (before: accent on accent vanished)
+        Modifier.background(g.accent, RoundedCornerShape(8.dp)).padding(horizontal = 7.dp, vertical = 2.dp),
+    ) { Text(text, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelLarge) }
 }
 
 /** 1.3.1 — the AYN button (not a [ThorButton]: it never goes through combos), tapped or held. */
@@ -116,6 +123,12 @@ fun AynGlyph(hold: Boolean, size: Dp = 30.dp) {
     }
 }
 
+/** 1.4 (GitHub #50): PlayStation's symbol colours, keyed by the Xbox-position letter (A = ✕ …). */
+private val PS_FACE = mapOf(
+    ThorButton.A to Color(0xFF6F9FE6), ThorButton.B to Color(0xFFFF5A5F),
+    ThorButton.X to Color(0xFFE38AC8), ThorButton.Y to Color(0xFF3DDC97),
+)
+
 /** One physical button, drawn the way it looks on a controller. */
 @Composable
 fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false) {
@@ -126,11 +139,14 @@ fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false) {
     when {
         b in FACE -> {
             val shown = app.wayfinder.ButtonNames.shown(b)     // 1.3 (GitHub #27): named the Xbox way if chosen
-            val c = FACE.getValue(shown)
+            // 1.4 (GitHub #50): PlayStation — its symbols in its colours
+            val ps = app.wayfinder.ButtonNames.playStation
+            val c = if (ps) PS_FACE.getValue(shown) else FACE.getValue(shown)
             Box(
                 Modifier.size(size).background(c.copy(alpha = if (dim) 0.18f else 0.26f), CircleShape).border(1.5.dp, c, CircleShape),
                 contentAlignment = Alignment.Center,
-            ) { Text(shown.printed, color = c, fontSize = (size.value * 0.5f).sp, fontWeight = FontWeight.Bold) }
+            ) { Text(if (ps) app.wayfinder.ButtonNames.psSymbol(shown) ?: shown.printed else shown.printed, color = c,
+                fontSize = (size.value * (if (ps) 0.46f else 0.5f)).sp, fontWeight = FontWeight.Bold) }
         }
         b == ThorButton.L1 || b == ThorButton.R1 || b == ThorButton.L2 || b == ThorButton.R2 -> {
             val shape = RoundedCornerShape(topStart = size * 0.45f, topEnd = size * 0.45f, bottomStart = 6.dp, bottomEnd = 6.dp)
@@ -233,6 +249,14 @@ fun actionIcon(a: ThorAction): ImageVector = when (a) {
     ThorAction.HOME_TOP -> Icons.Rounded.VerticalAlignTop
     ThorAction.HOME_BOTTOM -> Icons.Rounded.VerticalAlignBottom
     ThorAction.HOME_BOTH -> Icons.Rounded.Home
+    ThorAction.RECORD_SCREEN -> Icons.Rounded.FiberManualRecord
+    ThorAction.CLOSE_OTHER -> Icons.Rounded.Close
+    ThorAction.AYN_DRAWER -> Icons.Rounded.Dashboard
+    ThorAction.HOME_HERE -> Icons.Rounded.Home
+    ThorAction.SWIPE_UP -> Icons.Rounded.SwipeUp
+    ThorAction.SWIPE_DOWN -> Icons.Rounded.SwipeDown
+    ThorAction.SWIPE_LEFT -> Icons.Rounded.SwipeLeft
+    ThorAction.SWIPE_RIGHT -> Icons.Rounded.SwipeRight
 }
 
 /** Three fingertips — the blank gesture's badge. */

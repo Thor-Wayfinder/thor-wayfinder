@@ -14,6 +14,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -130,12 +133,19 @@ fun ControllerTestPage(myDisplayId: Int, onBack: () -> Unit) {
 
     app.wayfinder.ui.GlassScreen(span = if (myDisplayId == 0) app.wayfinder.ui.AuroraSpan.TOP else app.wayfinder.ui.AuroraSpan.BOTTOM) {
         // scrolls: its last line was cut off at the bottom of the Thor's top screen (1.3 pass)
-        Column(Modifier.fillMaxWidth().verticalScroll(androidx.compose.foundation.rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(Modifier.fillMaxWidth()
+            // under the status bar like every page (before: the title was cut off)
+            .then(Modifier.statusBarsPadding().navigationBarsPadding())
+            .verticalScroll(androidx.compose.foundation.rememberScrollState())
+            .padding(horizontal = 20.dp, vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 FocusableGlass(onClick = onBack, radius = 16.dp) {
-                    Text("‹ Back", color = g.textPrimary, style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    Row(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        androidx.compose.material3.Icon(androidx.compose.material.icons.Icons.AutoMirrored.Rounded.ArrowBack, null,
+                            tint = g.accent, modifier = Modifier.size(20.dp))
+                        Text("Back", color = g.textPrimary, style = MaterialTheme.typography.labelLarge)
+                    }
                 }
                 Column(Modifier.weight(1f)) {
                     Text("Test the controller", color = g.textPrimary, style = MaterialTheme.typography.headlineSmall)

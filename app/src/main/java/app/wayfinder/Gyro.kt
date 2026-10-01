@@ -35,6 +35,8 @@ enum class GyroOn(val label: String, val usesButton: Boolean, val trigger: Boole
     OFF_WHILE_HOLD("Off while holding", true),
     TRIGGER_FULL("Full trigger pull", true, trigger = true),
     TRIGGER_HALF("Half trigger pull", true, trigger = true),
+    /** 1.4 (Reddit): while a finger rests on either screen. */
+    TOUCH("While touching a screen", false),
 }
 
 /** Which motion turns the camera left / right. */
@@ -67,6 +69,7 @@ data class GyroSettings(
         GyroOn.OFF_WHILE_HOLD -> "off holding ${button.label}"
         GyroOn.TRIGGER_FULL -> "full ${button.label}"
         GyroOn.TRIGGER_HALF -> "half ${button.label}"
+        GyroOn.TOUCH -> "while touching"
     }
 
     fun toJson(): JSONObject = JSONObject().put("m", mode.name).put("on", on.name).put("b", button.name)
@@ -229,6 +232,7 @@ object GyroEngine : SensorEventListener {
         GyroOn.TOGGLE -> latched
         GyroOn.TRIGGER_FULL -> trig >= 32767 * .88f
         GyroOn.TRIGGER_HALF -> trig >= 32767 * .30f
+        GyroOn.TOUCH -> ForegroundAppService.fingerOnAScreen()
     }
 
     /** The sensor runs while a mode is on (activation is cheap to check per event, and the

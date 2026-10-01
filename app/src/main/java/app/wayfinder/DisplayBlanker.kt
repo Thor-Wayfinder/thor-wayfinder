@@ -66,6 +66,14 @@ class DisplayBlanker(private val service: AccessibilityService) {
 
     fun toggle(displayId: Int) { if (isBlanked(displayId)) wake(displayId) else blank(displayId) }
 
+    /** 1.4: when each screen last woke (the auto-off timer counts from it too). */
+    private val wokeAt = ConcurrentHashMap<Int, Long>()
+    fun wokeAt(displayId: Int): Long = wokeAt[displayId] ?: 0L
+    /** 1.4: a screen just went dark (the service moves the controller off it). */
+    @Volatile var onBlanked: ((Int) -> Unit)? = null
+    /** 1.4: a screen woke. */
+    @Volatile var onWoken: ((Int) -> Unit)? = null
+
     fun blank(displayId: Int) {
         if (blanks.containsKey(displayId)) return
         runOnMain {
@@ -79,13 +87,29 @@ class DisplayBlanker(private val service: AccessibilityService) {
                     setBackgroundColor(Color.BLACK)
                     // A faint hint that fades out; the whole surface wakes on tap.
                     addView(TextView(dctx).apply {
-                        text = "Tap to wake"; setTextColor(0x66FFFFFF); textSize = 14f
+                        text = if (AppSettings.wakeDoubleTap) "Tap twice to wake" else "Tap to wake"; setTextColor(0x66FFFFFF); textSize = 14f
                     }, FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
                     ).apply { gravity = Gravity.CENTER })
-                    // Wake on the first touch-down anywhere (more reliable than a click).
-                    setOnTouchListener { _, ev ->
-                        if (ev.action == android.view.MotionEvent.ACTION_DOWN) { wake(displayId); true } else false
+                    // Wake on the first touch-down anywhere (more reliable than a click) — or, with "double tap to
+                    // wake" (1.4, GitHub #54), on a second tap close to the first. Every touch is kept from the app below.
+                    var lastDown = 0L; var lastX = 0f; var lastY = 0f
+                    val slop = 60 * dctx.resources.displayMetrics.density
+                    setOnTouchListener { v, ev ->
+                        if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) {
+                            if (!AppSettings.wakeDoubleTap) wake(displayId)
+                            else {
+                                val t = ev.eventTime
+                                if (t - lastDown <= 400 && kotlin.math.hypot(ev.x - lastX, ev.y - lastY) <= slop) wake(displayId)
+                                else {
+                                    lastDown = t; lastX = ev.x; lastY = ev.y
+                                    // the hint comes back for a moment: "tap twice"
+                                    (v as? FrameLayout)?.getChildAt(0)?.animate()?.alpha(1f)?.setDuration(120)
+                                        ?.withEndAction { v.postDelayed({ v.getChildAt(0)?.animate()?.alpha(0f)?.setDuration(600)?.start() }, 1200) }?.start()
+                                }
+                            }
+                        }
+                        true
                     }
                     postDelayed({ getChildAt(0)?.animate()?.alpha(0f)?.setDuration(600)?.start() }, 1800)
                 }
@@ -103,6 +127,7 @@ class DisplayBlanker(private val service: AccessibilityService) {
                 wm.addView(root, lp)
                 blanks[displayId] = Blank(wm, root)
                 Log.d(TAG, "blanked display $displayId")
+                onBlanked?.invoke(displayId)
             } catch (e: Exception) {
                 Log.w(TAG, "blank $displayId failed: ${e.message}")
             }
@@ -111,7 +136,9 @@ class DisplayBlanker(private val service: AccessibilityService) {
 
     fun wake(displayId: Int) {
         val b = blanks.remove(displayId) ?: return
+        wokeAt[displayId] = android.os.SystemClock.uptimeMillis()
         runOnMain { try { b.wm.removeView(b.root) } catch (_: Exception) {} }
+        onWoken?.invoke(displayId)
         Log.d(TAG, "woke display $displayId")
     }
 

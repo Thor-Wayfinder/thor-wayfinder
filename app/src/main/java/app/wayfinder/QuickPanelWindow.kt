@@ -145,10 +145,10 @@ object QuickPanelWindow {
                     ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
                 }
                 androidx.compose.runtime.CompositionLocalProvider(
-                    app.wayfinder.ui.LocalRealGlass provides (blur && AppSettings.themeMode != ThemeMode.BLACK),
+                    app.wayfinder.ui.LocalRealGlass provides (blur && !AppSettings.flatLook),
                     androidx.activity.compose.LocalOnBackPressedDispatcherOwner provides owner,
                 ) {
-                    ThorGlassTheme(dark = dark) { PanelContent(close = { close() }) }
+                    ThorGlassTheme(dark = dark) { app.wayfinder.ui.CappedFontScale { PanelContent(close = { close() }) } }
                 }
             }
         }
@@ -268,9 +268,14 @@ private fun NowPlaying() {
     val own = remember(v, key) { Profiles.get(key) }
     val eff = remember(v, pkg) { GameProfiles.effective(pkg) }       // what's applied: the game's, else the app's
     val title = game?.title ?: label
-    val ownText = listOfNotNull(own.perf?.label, own.fan?.let { "fan ${it.label.lowercase()}" }, own.hz?.let { "$it Hz" },
+    // what a tuner (ClusterTune / Pulse) owns isn't applied: not listed
+    val tuner = remember { Tuners.installed(ctx) }
+    val pulse = tuner == "Pulse"
+    val ownText = listOfNotNull(own.perf?.takeIf { tuner == null }?.label, own.fan?.takeIf { !pulse }?.let { "fan ${it.label.lowercase()}" },
+        own.hz?.takeIf { !pulse }?.let { "$it Hz" },
         "bottom off".takeIf { own.second == SecondScreenPolicy.BLANK }).joinToString(" · ")
-    val effText = listOfNotNull(eff.perf?.label, eff.fan?.let { "fan ${it.label.lowercase()}" }, eff.hz?.let { "$it Hz" }).joinToString(" · ")
+    val effText = listOfNotNull(eff.perf?.takeIf { tuner == null }?.label, eff.fan?.takeIf { !pulse }?.let { "fan ${it.label.lowercase()}" },
+        eff.hz?.takeIf { !pulse }?.let { "$it Hz" }).joinToString(" · ")
     var keptAt by remember { mutableStateOf(-1) }
     val kept = keptAt == PanelShortcuts.touchCount
     GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
@@ -296,7 +301,7 @@ private fun NowPlaying() {
                 val t = PanelShortcuts.touched
                 val bottomOff = ForegroundAppService.screenMode() == 1
                 Profiles.update(k) { c -> c.copy(
-                    perf = if ("perf" in t) PerfMode.values().firstOrNull { it.value == perf } else c.perf,
+                    perf = if ("perf" in t && Tuners.installed(ctx) == null) PerfMode.ofAyn(perf) else c.perf,
                     fan = if ("fan" in t) FanMode.values().firstOrNull { it.value == fan } else c.fan,
                     hz = if ("hz" in t) (if (peak > 90f) 120 else 60) else c.hz,
                     // 1.3 (GitHub #25): the bottom screen turned off here → off whenever this game is on top
@@ -384,7 +389,7 @@ private fun DetailsCard() {
             Readout("CPU", listOfNotNull(v?.cpuGhz?.let { "%.1f GHz".format(it) }, v?.cpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "))
             Readout("GPU", listOfNotNull(v?.gpuMhz?.let { "$it MHz" }, v?.gpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "))
             Readout("Battery", listOfNotNull(v?.batteryTemp?.let { "%.0f°".format(it) },
-                if (v?.charging == true) "charging" else hoursLeft?.let { h -> "about ${h.toInt()} h ${((h % 1) * 60).toInt()} left" }).joinToString(" · "))
+                if (v?.charging == true) Charging.now(ctx).phrase ?: "charging" else hoursLeft?.let { h -> "about ${h.toInt()} h ${((h % 1) * 60).toInt()} min left" }).joinToString(" · "))
         }
     }
 }
@@ -452,12 +457,18 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
             // With the default text size (or bigger) and a 12-hour clock the four readouts overflowed —
             // "Battery" wrapped letter by letter or was cut off (1.1). Their real text is measured and
             // shrunk just enough to fit; only below a readable minimum does the last one (RAM) step aside.
-            val readouts = listOf(
+            // 1.4 (GitHub #55): RAM showed for a second then left — the CPU's load only comes with the 2nd sample and
+            // pushed it out. Widths are now measured on each readout's widest text from the first frame, and the
+            // values get shorter (RAM used only, no battery watts) before RAM steps aside.
+            fun readouts(short: Boolean) = listOf(
                 "CPU" to listOfNotNull(s?.cpuLoad?.let { "$it %" }, s?.cpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "),
                 "GPU" to listOfNotNull(s?.gpuLoad?.let { "$it %" }, s?.gpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "),
-                "RAM" to (s?.ramUsedGb?.let { u -> "%.1f/%.0f GB".format(u, s.ramTotalGb ?: 0f) } ?: ""),
+                "RAM" to (s?.ramUsedGb?.let { u -> if (short) "%.1f GB".format(u) else "%.1f/%.0f GB".format(u, s.ramTotalGb ?: 0f) } ?: ""),
                 "Battery" to listOfNotNull(s?.battery?.let { "$it %" },
-                    s?.watts?.takeIf { it > 0.05f }?.let { (if (s.charging) "+" else "−") + "%.1f W".format(it) }).joinToString(" · "))
+                    s?.watts?.takeIf { it > 0.05f && !short }?.let { (if (s.charging) "+" else "−") + "%.1f W".format(it) }).joinToString(" · "))
+            // the widest each can get, so nothing jumps when a value arrives or grows
+            fun widest(short: Boolean) = mapOf("CPU" to "100 % · 99°", "GPU" to "100 % · 99°",
+                "RAM" to if (short) "15.9 GB" else "15.9/16 GB", "Battery" to if (short) "100 %" else "100 % · −19.9 W")
             val measurer = rememberTextMeasurer()
             val density = LocalDensity.current
             val labelStyle = MaterialTheme.typography.labelSmall
@@ -469,12 +480,15 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
                 }
                 // readable floor = 72 % of the DEFAULT size: users with large text can shrink further
                 val minScale = (0.72f / density.fontScale).coerceAtMost(0.72f)
-                var shown = readouts
+                var short = false
+                var shown = readouts(false)
                 var scale = 1f
                 while (true) {
-                    val total = shown.sumOf { (k, v) -> widthOf(k, v).toDouble() }.toFloat()
+                    val w = widest(short)
+                    val total = shown.sumOf { (k, _) -> widthOf(k, w.getValue(k)).toDouble() }.toFloat()
                     val fit = (maxWidth.value - gap * shown.size) / total
                     if (fit >= minScale || shown.size <= 2) { scale = fit.coerceIn(0.5f, 1f); break }
+                    if (!short) { short = true; shown = readouts(true); continue }
                     shown = shown.filterNot { it.first == "RAM" }.takeIf { it.size < shown.size } ?: shown.dropLast(1)
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
@@ -527,6 +541,7 @@ private fun ScreenModeCard(first: FocusRequester, close: () -> Unit) {
         options = ScreenMode.values().map { it.label },
         selectedIndex = mode,
         modifier = Modifier.fillMaxWidth().focusRequesterSafe(first),
+        collapse = false,
     ) { i ->
         mode = i
         PanelShortcuts.touchBottom()   // 1.3 (GitHub #25): "Keep for <game>" can remember it
@@ -571,7 +586,7 @@ private fun TilesGrid(close: () -> Unit) {
     val after: (Long, () -> Unit) -> Unit = { ms, block -> close(); ForegroundAppService.later(ms, block) }
     val refresh: (Long) -> Unit = { ms -> ForegroundAppService.later(ms) { tick++ } }
     val all = PanelShortcuts.tiles(ctx, close, after, refresh)
-    val chosen = PanelShortcuts.chosen(ctx).mapNotNull { all[it] }
+    val chosen = PanelShortcuts.chosen(ctx).filter { PanelShortcuts.allowed(it) }.mapNotNull { all[it] }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         chosen.chunked(4).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -589,8 +604,17 @@ private fun TileView(t: PanelTile, modifier: Modifier) {
     FocusableGlass(onClick = t.action, modifier = modifier.height(64.dp), radius = 16.dp) {
         Column(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp), verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(t.icon, null, tint = if (t.on) g.accent else g.textSecondary, modifier = Modifier.size(20.dp))
-            Text(t.label, color = g.textPrimary, style = MaterialTheme.typography.labelMedium, maxLines = 1, textAlign = TextAlign.Center)
+            TileIcon(t.icon, t.pkg, if (t.on) g.accent else g.textSecondary, 20.dp)
+            // 1.4: a label too wide for the tile (large font: "Keyboard &…") shrinks to fit instead of being cut
+            androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                val m = androidx.compose.ui.text.rememberTextMeasurer()
+                val base = MaterialTheme.typography.labelMedium
+                val w = m.measure(t.label, base).size.width.toFloat()
+                val room = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }
+                val scale = if (w > room && w > 0f) (room / w).coerceAtLeast(0.7f) else 1f
+                Text(t.label, color = g.textPrimary, style = base.copy(fontSize = base.fontSize * scale, letterSpacing = base.letterSpacing * scale),
+                    maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+            }
             if (t.value != null) Text(t.value, color = if (t.on) g.accent else g.textTertiary, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
     }

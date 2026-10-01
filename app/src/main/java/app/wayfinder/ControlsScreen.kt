@@ -63,6 +63,8 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
     // [picking] = the list to pick a target from ("app" / "pair" / "page")
     var openEdit by remember { mutableStateOf<Pair<String, Trigger?>?>(null) }
     var picking by remember { mutableStateOf<String?>(null) }
+    // 1.4 (GitHub #51): the "Add a combo" list of actions
+    var adding by remember { mutableStateOf(false) }
     // when the "Open…" card or picker closes, the controller lands on "+ An app" (it landed nowhere)
     val openFocus = remember { FocusRequester() }
     var openWasUp by remember { mutableStateOf(false) }
@@ -81,7 +83,7 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
     var confirmReset by remember { mutableStateOf(false) }
     LaunchedEffect(confirmReset) { if (confirmReset) { delay(3000); confirmReset = false } }
     val view = androidx.compose.ui.platform.LocalView.current
-    val listFocusable = editing == null && openEdit == null && picking == null   // the card / picker is modal
+    val listFocusable = editing == null && openEdit == null && picking == null && !adding   // the card / picker is modal
     LaunchedEffect(Unit) { delay(300); runCatching { backFocus.requestFocus() } }
     // When the card closes, the controller lands back on the row it came from (it used
     // to land nowhere: A did nothing and the D-pad restarted at the top).
@@ -93,6 +95,10 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
     }
 
     val actions = ThorAction.values().filter { ActionRegistry.isImplemented(it) && it != ThorAction.OPEN }
+    // 1.4 (GitHub #51): all apps = only the combos you have, by their first button; one app = the full list
+    val shownActions = if (pkg != null) actions else actions.filter { a -> ControlsStore.triggerFor(a) != null && Features.allows(a) }
+        .sortedWith(compareBy({ ControlsStore.triggerFor(it)!!.let { t -> (t.modifier ?: t.button).ordinal } },
+            { ControlsStore.triggerFor(it)!!.let { t -> if (t.modifier == null) -1 else t.button.ordinal } }))
 
     GlassScreen(span = if (myDisplayId == 0) AuroraSpan.TOP else AuroraSpan.BOTTOM) {
       Box(Modifier.fillMaxSize()) {
@@ -118,7 +124,7 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                     Text(if (pkg == null) "Combos" else "Combos · $appLabel", color = g.textPrimary, style = MaterialTheme.typography.headlineMedium)
                     Text(
                         if (pkg == null) "Button combos that run Wayfinder's actions anywhere. Combos that start with Home or Back " +
-                            "never reach the game. (A game's own buttons: App profiles, then the game, then Game controls.)"
+                            "never reach the game. (A game's own buttons: in the game, Home + ${ThorButton.X.label} — or Games, then the game.)"
                         else "Changes here only apply while $appLabel has the controller. Highlighted = specific to this app.",
                         color = g.textTertiary, style = MaterialTheme.typography.bodyMedium,
                     )
@@ -150,7 +156,7 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                         Column(Modifier.padding(start = 4.dp)) {
                             Text("AYN BUTTON", color = g.textTertiary, style = MaterialTheme.typography.labelMedium)
                             Text(if (AppSettings.aynButtonOurs) "A tap and a hold can each do an action — e.g. hold = bottom screen off. It never reaches the game."
-                                else "The AYN button opens AYN's own drawer. Turn on “The AYN button opens the quick panel” in Controller → Quick panel (AYN button) to give it a tap and a hold.",
+                                else "The AYN button opens AYN's own drawer. Turn on “The AYN button opens the quick panel” on the Quick panel page (the Hub's Quick panel card, or More → Features) to give it a tap and a hold.",
                                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
                         }
                     }
@@ -158,11 +164,23 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { AynButtonChoices(canFocus = listFocusable) }
                     }
                     item(key = "combos-h") {
-                        Text("COMBOS", color = g.textTertiary, style = MaterialTheme.typography.labelMedium,
-                            modifier = Modifier.padding(top = 10.dp, start = 4.dp))
+                        Column(Modifier.fillMaxWidth().padding(top = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Column(Modifier.padding(start = 4.dp)) {
+                                Text("YOUR COMBOS", color = g.textTertiary, style = MaterialTheme.typography.labelMedium)
+                                Text("Press one to change or remove it.", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                            }
+                            // full width: a small button at the end of the header was skipped by the D-pad
+                            FocusableGlass(onClick = { adding = true }, radius = 18.dp,
+                                modifier = Modifier.fillMaxWidth().focusProperties { canFocus = listFocusable }) {
+                                Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Text("+ Add a combo", color = g.accent, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+                                    Text("Home, Back or two buttons — tapped, twice, held…", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
                     }
                 }
-                items(actions, key = { it.name }) { action ->
+                items(shownActions, key = { it.name }) { action ->
                     val trigger = if (pkg == null) ControlsStore.triggerFor(action) else ControlsStore.effectiveTriggerFor(pkg, action)
                     val appSpecific = pkg != null && AppConfigStore.get(pkg).let { c ->
                         c.buttons.any { it.action == action } ||
@@ -247,6 +265,15 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
                 }
             }
         }
+        if (adding) {
+            androidx.activity.compose.BackHandler { adding = false }
+            Box(Modifier.fillMaxSize().background(Color(0xB3000000)), contentAlignment = Alignment.Center) {
+                Box(Modifier.widthIn(max = 1100.dp).fillMaxHeight(0.9f).padding(24.dp)
+                    .background(if (g.dark) Color(0xF01C1E26) else Color(0xF5F4F5FA), androidx.compose.foundation.shape.RoundedCornerShape(22.dp))) {
+                    AddComboPicker(actions, onCancel = { adding = false }) { a -> adding = false; editing = a }
+                }
+            }
+        }
         picking?.let { kind ->
             androidx.activity.compose.BackHandler { picking = null }
             Box(Modifier.fillMaxSize().background(Color(0xB3000000)), contentAlignment = Alignment.Center) {
@@ -257,6 +284,63 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit) {
             }
         }
       }
+    }
+}
+
+/** 1.4 (GitHub #51): the actions in groups — the ones already on a combo say which. */
+private val COMBO_GROUPS: List<Pair<String, List<ThorAction>>> = listOf(
+    "Screens & apps" to listOf(ThorAction.SWAP_OR_SEND, ThorAction.RECENTS, ThorAction.CLEAR_BACKGROUND, ThorAction.CLOSE_APP,
+        ThorAction.CLOSE_OTHER, ThorAction.HOME_HERE, ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH,
+        ThorAction.TOGGLE_SECOND_SCREEN, ThorAction.BACK),
+    "Controller" to listOf(ThorAction.FOCUS_SWITCH_UP, ThorAction.FOCUS_SWITCH_DOWN, ThorAction.FOCUS_LOCK_TOGGLE,
+        ThorAction.GAME_CONTROLS, ThorAction.GYRO_TOGGLE, ThorAction.KEYBOARD, ThorAction.AYN_MOUSE),
+    "Brightness & volume" to listOf(ThorAction.BRIGHTER, ThorAction.DIMMER, ThorAction.TOP_BRIGHTER, ThorAction.TOP_DIMMER,
+        ThorAction.BOTTOM_BRIGHTER, ThorAction.BOTTOM_DIMMER, ThorAction.LOUDER, ThorAction.QUIETER, ThorAction.TOP_LOUDER,
+        ThorAction.TOP_QUIETER, ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER),
+    "Wayfinder" to listOf(ThorAction.QUICK_MENU, ThorAction.GUIDE, ThorAction.SCREENSHOT, ThorAction.RECORD_SCREEN, ThorAction.FPS_COUNTER),
+    "Android & the Thor" to listOf(ThorAction.SLEEP, ThorAction.TOGGLE_KEEP_AWAKE, ThorAction.AYN_DRAWER),
+    "Touch" to listOf(ThorAction.SWIPE_UP, ThorAction.SWIPE_DOWN, ThorAction.SWIPE_LEFT, ThorAction.SWIPE_RIGHT),
+)
+
+@Composable
+private fun AddComboPicker(actions: List<ThorAction>, onCancel: () -> Unit, onPick: (ThorAction) -> Unit) {
+    val g = LocalGlass.current
+    val first = remember { FocusRequester() }
+    LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
+    val listed = COMBO_GROUPS.flatMap { it.second }.toSet()
+    val groups = COMBO_GROUPS.map { (t, l) -> t to l.filter { it in actions && Features.allows(it) } } +
+        listOf("Other" to actions.filter { it !in listed && Features.allows(it) })
+    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text("Add a combo — pick what it does", color = g.textPrimary, style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            FocusableGlass(onClick = onCancel, radius = 14.dp) {
+                Text("Cancel · ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+            }
+        }
+        val firstAction = groups.firstOrNull { it.second.isNotEmpty() }?.second?.first()
+        LazyColumn(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for ((title, list) in groups) {
+                if (list.isEmpty()) continue
+                item(key = "g:$title") {
+                    Text(title.uppercase(), color = g.textTertiary, style = MaterialTheme.typography.labelMedium,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp))
+                }
+                items(list, key = { it.name }) { a ->
+                    FocusableGlass(onClick = { onPick(a) }, modifier = Modifier.fillMaxWidth(), radius = 16.dp,
+                        focusRequester = if (a == firstAction) first else null) {
+                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Column(Modifier.weight(1f)) {
+                                Text(a.title, color = g.textPrimary, style = MaterialTheme.typography.bodyLarge)
+                                Text(a.description, color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                            }
+                            ControlsStore.triggerFor(a)?.let { Text("now: ${it.label()}", color = g.accent, style = MaterialTheme.typography.labelMedium) }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -327,7 +411,10 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
     // 1.3.2 (GitHub #42): an app opens on the controller's screen, the top or the bottom
     var openTarget by remember(openArg) { mutableStateOf(openArg) }
     val title = if (openTarget != null) OpenTargets.label(ctx, openTarget) else action.title
-    var capturing by remember { mutableStateOf(true) }
+    // 1.4: an existing combo opens on itself (Change / Remove); a new one starts recording at once
+    val current = remember(action, openArg) {
+        if (openArg != null) openOld else if (pkg == null) ControlsStore.triggerFor(action) else ControlsStore.effectiveTriggerFor(pkg, action) }
+    var capturing by remember { mutableStateOf(current == null) }
     val order = remember { mutableStateListOf<ThorButton>() }    // buttons in press order this attempt
     val down = remember { mutableStateListOf<ThorButton>() }
     var result by remember { mutableStateOf<Trigger?>(null) }
@@ -394,15 +481,18 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
             } else {
                 val r = result
                 if (r != null) {
-                    val t = if (r.isChord) r else r.copy(press = press)
+                    val t = r.copy(press = press)   // 1.4 (GitHub #59): combos too
                     Text("For “$title”", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
                     app.wayfinder.ui.TriggerGlyphs(t, 34.dp)
-                    if (!r.isChord) {
-                        GlassSegmentedControl(
-                            options = Press.values().map { it.label.replaceFirstChar { c -> c.uppercase() } },
-                            selectedIndex = press.ordinal, modifier = Modifier.fillMaxWidth(),
-                        ) { press = Press.values()[it] }
-                    }
+                    // 1.4 (GitHub #59): a combo's second button can be tapped once, twice, three times or held too
+                    if (r.isChord) Text("Keep ${r.modifier!!.spoken} held, and ${r.button.spoken}:", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                    // a stick flick is a press and a release in one: it can't be held
+                    val presses = Press.values().filter { it != Press.HOLD || !r.button.isFlick }
+                    if (press !in presses) press = Press.TAP
+                    GlassSegmentedControl(
+                        options = presses.map { it.label.replaceFirstChar { c -> c.uppercase() } },
+                        selectedIndex = presses.indexOf(press), modifier = Modifier.fillMaxWidth(), collapse = false,
+                    ) { press = presses[it] }
                     val note = when {
                         r.modifier == ThorButton.AYN -> if (r.button.isDpad) "The D-pad press still reaches the game." else null
                         r.isChord && r.modifier?.isSystem == false && r.button.isDpad ->
@@ -440,6 +530,21 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
                         }
                     }
+                } else if (error == null && current != null) {
+                    // 1.4: the combo as it is — change it, or remove it below
+                    Text("“$title”", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
+                    app.wayfinder.ui.TriggerGlyphs(current, 34.dp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        FocusableGlass(onClick = { capturing = true }, radius = 14.dp, focusRequester = saveFocus) {
+                            Text("Change the buttons", color = g.accent, style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                        }
+                        FocusableGlass(onClick = { onDone() }, radius = 14.dp) {
+                            Text("Cancel", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
+                        }
+                    }
+                    LaunchedEffect(Unit) { delay(150); runCatching { saveFocus.requestFocus() } }
                 } else {
                     WarnBox(error ?: "")
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -478,7 +583,7 @@ private fun CaptureCard(action: ThorAction, pkg: String?, onDone: () -> Unit, op
 
 /** Round 8 — pick what an "Open…" combo opens: an app, an app pair or a Wayfinder page. */
 @Composable
-private fun OpenPicker(kind: String, onCancel: () -> Unit, onPick: (String) -> Unit) {
+internal fun OpenPicker(kind: String, onCancel: () -> Unit, onPick: (String) -> Unit) {
     val g = LocalGlass.current
     val ctx = androidx.compose.ui.platform.LocalContext.current
     val first = remember { FocusRequester() }
@@ -500,7 +605,7 @@ private fun OpenPicker(kind: String, onCancel: () -> Unit, onPick: (String) -> U
             Text(when (kind) { "app" -> "Which app?"; "pair" -> "Which app pair?"; else -> "Which Wayfinder page?" },
                 color = g.textPrimary, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
             FocusableGlass(onClick = onCancel, radius = 14.dp) {
-                Text("Cancel · B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                Text("Cancel · ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }
@@ -540,16 +645,11 @@ private fun AppGridPicker(onCancel: () -> Unit, onPick: (String) -> Unit) {
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Text("Which app?", color = g.textPrimary, style = MaterialTheme.typography.titleMedium)
-            androidx.compose.foundation.text.BasicTextField(
-                query, { query = it.take(30) }, singleLine = true,
+            app.wayfinder.ui.ControllerTextField(query, { query = it.take(30) }, Modifier.weight(1f),
                 textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)),
-                cursorBrush = androidx.compose.ui.graphics.SolidColor(g.accent),
-                modifier = Modifier.weight(1f).background(g.textPrimary.copy(alpha = 0.08f), RoundedCornerShape(14.dp))
-                    .padding(horizontal = 14.dp, vertical = 10.dp),
-                decorationBox = { inner -> if (query.isEmpty()) Text("Find an app…", color = g.textTertiary); inner() },
-            )
+                placeholder = "Find an app…", surface = Modifier.background(g.textPrimary.copy(alpha = 0.08f), RoundedCornerShape(14.dp)))
             FocusableGlass(onClick = onCancel, radius = 14.dp) {
-                Text("Cancel · B", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
+                Text("Cancel · ${ButtonNames.m("B")}", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
         }

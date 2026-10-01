@@ -36,6 +36,29 @@ object GuideCache {
         cm.getNetworkCapabilities(cm.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true
     }.getOrDefault(true)
 
+    /** 1.4 (Reddit): ad and tracking networks (a host or any of its subdomains) — the guide doesn't load them. */
+    private val AD_HOSTS = setOf(
+        "doubleclick.net", "googlesyndication.com", "googleadservices.com", "adservice.google.com", "google-analytics.com",
+        "googletagmanager.com", "googletagservices.com", "amazon-adsystem.com", "adnxs.com", "adsrvr.org",
+        "rubiconproject.com", "pubmatic.com", "openx.net", "criteo.com", "criteo.net", "casalemedia.com", "indexww.com",
+        "taboola.com", "outbrain.com", "scorecardresearch.com", "quantserve.com", "quantcount.com", "moatads.com",
+        "adsafeprotected.com", "doubleverify.com", "3lift.com", "triplelift.com", "sharethrough.com", "teads.tv",
+        "33across.com", "smartadserver.com", "adform.net", "bidswitch.net", "lijit.com", "sovrn.com", "media.net",
+        "contextweb.com", "yieldmo.com", "gumgum.com", "kargo.com", "springserve.com", "connatix.com", "primis.tech",
+        "revcontent.com", "mgid.com", "zemanta.com", "nitropay.com", "ezoic.net", "ezojs.com", "mediavine.com",
+        "adthrive.com", "freestar.io", "pub.network", "venatusmedia.com", "playwire.com", "adsco.re",
+        "id5-sync.com", "rlcdn.com", "crwdcntrl.net", "bluekai.com", "demdex.net", "everesttech.net", "adroll.com",
+        "yahoo-ads.com", "advertising.com", "unrulymedia.com", "sonobi.com", "district-m.com", "e-planning.net",
+        "undertone.com", "adkernel.com", "onetag-sys.com", "richaudience.com", "seedtag.com", "improvedigital.com",
+    )
+    fun isAd(host: String?): Boolean {
+        var h = host?.lowercase() ?: return false
+        while (true) {
+            if (h in AD_HOSTS) return true
+            h = h.substringAfter('.', "").takeIf { it.contains('.') } ?: return false
+        }
+    }
+
     /** A page showing the saved copy, not the live one. */
     fun isOffline(web: WebView?) = web?.url?.startsWith("file:") == true
 
@@ -52,6 +75,10 @@ object GuideCache {
             return true
         }
         web.webViewClient = object : WebViewClient() {   // links stay in the guide
+            // 1.4 (Reddit): no ads — an ad network's request gets an empty answer
+            override fun shouldInterceptRequest(v: WebView?, req: WebResourceRequest?): android.webkit.WebResourceResponse? =
+                if (req != null && !req.isForMainFrame && isAd(req.url?.host)) android.webkit.WebResourceResponse("text/plain", "utf-8", java.io.ByteArrayInputStream(ByteArray(0)))
+                else null
             override fun onPageStarted(v: WebView?, url: String?, favicon: android.graphics.Bitmap?) { onFailed(false) }
             override fun onPageFinished(v: WebView?, url: String?) {
                 // the pinned page loaded live → refresh its offline copy

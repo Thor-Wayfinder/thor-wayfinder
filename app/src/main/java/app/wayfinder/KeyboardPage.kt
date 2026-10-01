@@ -117,14 +117,19 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
         // On first, in their switching order; then the rest.
         val on = KeyboardSettings.layoutIds.mapNotNull { id -> ALL_LAYOUTS.firstOrNull { it.id == id } }
         val off = ALL_LAYOUTS.filter { it.id !in KeyboardSettings.layoutIds }
-        for (row in (on + off).chunked(3)) LanguageRow(row)
+        // 1.4: your languages; the others behind one row (like "Add a combo")
+        for (row in on.chunked(3)) LanguageRow(row)
+        if (off.isNotEmpty()) MoreOptions("${off.size} more", title = "Add a language") { for (row in off.chunked(3)) LanguageRow(row) }
 
+        // 1.4
+        MoreOptions("the controller's keys, Keyboard & mouse: my pad") {
         SectionHeader("With the controller — also on the keyboard: the ? key (or click the left stick)")
         GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
             KeyboardControlsLegend(Modifier.fillMaxWidth().padding(16.dp).height(300.dp), big = false)
         }
 
         DeckEditorSection()
+        }
     }
 }
 

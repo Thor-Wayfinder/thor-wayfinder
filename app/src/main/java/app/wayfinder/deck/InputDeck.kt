@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.TouchApp
+import androidx.compose.material.icons.rounded.Swipe
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Dialpad
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -137,7 +138,22 @@ class DeckState(val pkg: String?, val appLabel: String?, initialPad: String, val
  * everything it sends lands in the game. Touch-only: the pad stays the game's.
  */
 class InputDeckOverlay(private val service: AccessibilityService) {
-    companion object { @Volatile var stickMouseByDeck = false }
+    companion object {
+        @Volatile var stickMouseByDeck = false
+            private set
+        /** 1.4 (GitHub #53): remembered on disk — a crash, an update or a reboot with it on left AYN's mouse on
+         *  for good (the pointer stuck on a screen); the service undoes it when it starts ([undoLeftover]). */
+        fun markStickMouse(ctx: android.content.Context, on: Boolean) {
+            stickMouseByDeck = on
+            runCatching { ctx.getSharedPreferences("thor_settings", android.content.Context.MODE_PRIVATE).edit().putBoolean("deck_stick_mouse", on).apply() }
+        }
+        fun undoLeftover(ctx: android.content.Context) {
+            val p = ctx.getSharedPreferences("thor_settings", android.content.Context.MODE_PRIVATE)
+            if (!p.getBoolean("deck_stick_mouse", false)) return
+            p.edit().putBoolean("deck_stick_mouse", false).apply()
+            Thread { app.wayfinder.PServiceBridge.exec("settings put system global_gamepad_to_mouse_mode 0") }.apply { isDaemon = true }.start()
+        }
+    }
     init { deckService = service }
 
     private var view: ComposeView? = null
@@ -164,9 +180,9 @@ class InputDeckOverlay(private val service: AccessibilityService) {
         val v = ComposeView(ctx).apply {
             owner.attach(this)
             setContent {
-                ThorGlassTheme(dark = dark) {
+                ThorGlassTheme(dark = dark) { app.wayfinder.ui.CappedFontScale {
                     DeckPanel(st, UiModifier.fillMaxSize(), onClose = { hide() }, onOpenHub = onOpenHub, onFocusGame = onFocusGame)
-                }
+                }}
             }
         }
         val screenW = runCatching { wm.currentWindowMetrics.bounds.width() }.getOrDefault(0)
@@ -201,7 +217,7 @@ class InputDeckOverlay(private val service: AccessibilityService) {
         // AYN's stick mouse, turned on from the deck: off again, or every game afterwards had
         // L3 / R3 turning the stick into a cursor and the D-pad into volume (review 2026-09-25)
         if (stickMouseByDeck) {
-            stickMouseByDeck = false
+            markStickMouse(service, false)
             Thread { app.wayfinder.PServiceBridge.exec("settings put system global_gamepad_to_mouse_mode 0") }.apply { isDaemon = true }.start()
         }
         val v = view ?: return
@@ -455,6 +471,23 @@ private suspend fun touchGestures(scope: androidx.compose.ui.input.pointer.Point
     }
 }
 
+/** 1.4 (GitHub #65): Direct — the pad is the game's screen: a finger down touches the same place there, moves drag it,
+ *  lifting lets go — so one-finger swipes, taps and drags work as on the game's own screen. */
+private suspend fun directGestures(scope: androidx.compose.ui.input.pointer.PointerInputScope) = scope.awaitEachGesture {
+    val w = scope.size.width.toFloat().coerceAtLeast(1f); val h = scope.size.height.toFloat().coerceAtLeast(1f)
+    val first = awaitFirstDown(requireUnconsumed = false)
+    TouchPointer.jumpTo(first.position.x / w, first.position.y / h)
+    TouchPointer.press()
+    while (true) {
+        val ev = awaitPointerEvent()
+        val c = ev.changes.firstOrNull { it.id == first.id } ?: break
+        if (!c.pressed) break
+        if (ev.type == PointerEventType.Move) TouchPointer.jumpTo(c.position.x / w, c.position.y / h)
+        ev.changes.forEach { it.consume() }
+    }
+    TouchPointer.release()
+}
+
 /**
  * Laptop-style trackpad driving a real (virtual) mouse, so the game gets the system
  * cursor and true relative motion. One finger moves; tap = click; two-finger tap =
@@ -477,7 +510,8 @@ private fun Trackpad(modifier: UiModifier, service: AccessibilityService?) {
                 .background(if (g.dark) Color(0x26FFFFFF) else Color(0x80FFFFFF), shape)
                 .glassLight(shape, g.dark)
                 .border(1.dp, Brush.linearGradient(0f to g.rimTop, 0.5f to Color.Transparent, 1f to g.rimBottom), shape)
-                .pointerInput(touch) {
+                .pointerInput(touch, DeckSettings.directTouch) {
+                    if (touch && DeckSettings.directTouch) { directGestures(this); return@pointerInput }
                     if (touch) { touchGestures(this, view); return@pointerInput }
                     awaitEachGesture {
                         val first = awaitFirstDown(requireUnconsumed = false)
@@ -525,21 +559,29 @@ private fun Trackpad(modifier: UiModifier, service: AccessibilityService?) {
                 },
             contentAlignment = Alignment.Center,
         ) {
-            Text(if (touch) "Touch · move = the pointer · tap = a finger tap there · hold + move = drag · 2 fingers = swipe"
+            Text(if (touch && DeckSettings.directTouch) "Direct · this pad is the game's screen — touch, drag and swipe with one finger"
+                else if (touch) "Touch · move = the pointer · tap = a finger tap there · hold + move = drag · 2 fingers = swipe"
                 else "Trackpad · tap = click · 2 fingers: tap = right click, drag = scroll · hold + move = drag",
                 color = g.textTertiary, fontSize = 14.sp)
         }
         Row(UiModifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             // 1.3 (GitHub #36): a mouse, or finger touches (for games that ignore a mouse)
-            Tab(if (touch) "Touch" else "Mouse", if (touch) Icons.Rounded.TouchApp else Icons.Rounded.Mouse, selected = touch) {
-                DeckSettings.chooseTouchMode(!DeckSettings.touchMode)
+            // 1.4 (GitHub #65): Mouse → Touch → Direct
+            val direct = touch && DeckSettings.directTouch
+            Tab(if (direct) "Direct" else if (touch) "Touch" else "Mouse", if (direct) Icons.Rounded.Swipe else if (touch) Icons.Rounded.TouchApp else Icons.Rounded.Mouse, selected = touch) {
+                when {
+                    !DeckSettings.touchMode -> { DeckSettings.chooseTouchMode(true); DeckSettings.chooseDirect(false) }
+                    !DeckSettings.directTouch -> DeckSettings.chooseDirect(true)
+                    else -> { DeckSettings.chooseTouchMode(false); DeckSettings.chooseDirect(false) }
+                }
             }
             if (!touch) {
                 MouseButton("Left", 0, UiModifier.weight(1f).fillMaxHeight())
                 MouseButton("Middle", 2, UiModifier.weight(0.6f).fillMaxHeight())
                 MouseButton("Right", 1, UiModifier.weight(1f).fillMaxHeight())
                 AynMouseLink(UiModifier.weight(1.2f).fillMaxHeight())
-            } else Text("Touches go where the pointer is, on the game's screen — for games a mouse doesn't work in",
+            } else Text(if (direct) "Where you touch here = where the finger lands there — for swipes (menus, pages, Shorts)"
+                else "Touches go where the pointer is, on the game's screen — for games a mouse doesn't work in",
                 color = g.textTertiary, fontSize = 13.sp, modifier = UiModifier.weight(1f).align(Alignment.CenterVertically))
         }
     }
@@ -571,7 +613,7 @@ private fun AynMouseLink(modifier: UiModifier) {
             .pointerInput(Unit) {
                 detectTapGestures {
                     val want = !on
-                    InputDeckOverlay.stickMouseByDeck = want
+                    InputDeckOverlay.markStickMouse(ctx, want)
                     Thread {
                         app.wayfinder.PServiceBridge.exec("settings put system global_gamepad_to_mouse_mode ${if (want) 1 else 0}")
                         Thread.sleep(250)

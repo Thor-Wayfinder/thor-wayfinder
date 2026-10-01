@@ -9,6 +9,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -71,10 +72,23 @@ private val GlassType = Typography(
     labelLarge = Typography().labelLarge.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
 )
 
+/** [this] with [other] mixed in by [amount] (0–1). */
+private fun Color.compositeOverSelf(other: Color, amount: Float) = Color(
+    red + (other.red - red) * amount, green + (other.green - green) * amount, blue + (other.blue - blue) * amount, alpha)
+
+/** 1.4 (GitHub #66): for fixed-size surfaces (overlays) — the font size follows Android's setting up to 1.1×. */
+@Composable
+fun CappedFontScale(max: Float = 1.1f, content: @Composable () -> Unit) {
+    val d = androidx.compose.ui.platform.LocalDensity.current
+    if (d.fontScale <= max) content()
+    else CompositionLocalProvider(androidx.compose.ui.platform.LocalDensity provides
+        androidx.compose.ui.unit.Density(d.density, max), content = content)
+}
+
 @Composable
 fun ThorGlassTheme(dark: Boolean, content: @Composable () -> Unit) {
     val black = dark && app.wayfinder.AppSettings.themeMode == app.wayfinder.ThemeMode.BLACK
-    val colors = if (black) {
+    val themed = if (black) {
         // 1.3: pure black (OLED) — no aurora, frost a touch lighter so the panels still read
         GlassColors(
             dark = true,
@@ -139,7 +153,22 @@ fun ThorGlassTheme(dark: Boolean, content: @Composable () -> Unit) {
             accent = Glass.Accent, accent2 = Glass.Accent2,
         )
     }
-    val scheme = if (dark)
+    // 1.4 (GitHub #24): your own colours — flat: solid background and cards, no aurora
+    val s = app.wayfinder.AppSettings
+    val colors = if (!s.customColors) themed else {
+        val bg = Color(s.customBg); val card = Color(s.customCard); val text = Color(s.customText); val acc = Color(s.customAccent)
+        val lightBg = bg.luminance() > 0.5f
+        themed.copy(
+            dark = !lightBg, base = bg, blobs = listOf(bg), blobAlpha = 0f,
+            scrim = Brush.verticalGradient(listOf(Color.Transparent, Color.Transparent)),
+            panelFill = Brush.verticalGradient(listOf(card, card)),
+            panelFillFocused = Brush.verticalGradient(listOf(card.copy(alpha = 1f).compositeOverSelf(text, 0.10f), card.compositeOverSelf(text, 0.06f))),
+            panel = card, rimTop = text.copy(alpha = 0.22f), rimBottom = text.copy(alpha = 0.08f),
+            textPrimary = text, textSecondary = text.copy(alpha = 0.82f), textTertiary = text.copy(alpha = 0.58f),
+            accent = acc, accent2 = acc.compositeOverSelf(Color(0xFF8A7BFF), 0.35f),
+        )
+    }
+    val scheme = if (colors.dark)
         darkColorScheme(primary = colors.accent, background = colors.base, surface = Color(0xFF161B3A))
     else
         lightColorScheme(primary = colors.accent, background = colors.base, surface = Color(0xFFEAF0FF))

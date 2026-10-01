@@ -57,7 +57,7 @@ class KeyboardOverlay(private val service: AccessibilityService) {
         val v = ComposeView(ctx).apply {
             owner.attach(this)
             setContent {
-                ThorGlassTheme(dark = ime.isDark()) {
+                ThorGlassTheme(dark = ime.isDark()) { app.wayfinder.ui.CappedFontScale {
                     ThorKeyboardPanel(
                         ime.kb, overlay = true, preview = ime.preview,
                         modifier = Modifier.fillMaxSize(),
@@ -65,7 +65,7 @@ class KeyboardOverlay(private val service: AccessibilityService) {
                         moveLabel = ime.overlayMoveLabel(),
                         onMove = { ime.moveToSameScreen() },
                     )
-                }
+                }}
             }
         }
         val lp = WindowManager.LayoutParams(

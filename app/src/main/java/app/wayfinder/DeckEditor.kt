@@ -28,6 +28,7 @@ import app.wayfinder.deck.CustomKey
 import app.wayfinder.deck.DeckSettings
 import app.wayfinder.ui.FocusableGlass
 import app.wayfinder.ui.GlassPanel
+import app.wayfinder.ui.glassSurface
 import app.wayfinder.ui.GlassSegmentedControl
 import app.wayfinder.ui.LocalGlass
 import app.wayfinder.ui.SectionHeader
@@ -103,11 +104,10 @@ private fun AddCustomKey(onAdd: (CustomKey) -> Unit) {
     var label by remember { mutableStateOf("") }
     var value by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
-    var reset by remember { mutableIntStateOf(0) }
     GlassSegmentedControl(listOf("Types text", "Presses keys"), kind, Modifier.fillMaxWidth()) { kind = it; error = null }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-        EditField("Button name", reset, Modifier.weight(1f)) { label = it }
-        EditField(if (kind == 0) "Text to type" else "Keys, e.g. Ctrl+S or F5", reset, Modifier.weight(2f)) { value = it }
+        EditField("Button name", label, Modifier.weight(1f)) { label = it }
+        EditField(if (kind == 0) "Text to type" else "Keys, e.g. Ctrl+S or F5", value, Modifier.weight(2f)) { value = it }
         FocusableGlass(onClick = {
             val name = label.trim().ifEmpty { value.trim().take(12) }
             if (value.isBlank()) { error = "Type what the button should do"; return@FocusableGlass }
@@ -115,7 +115,7 @@ private fun AddCustomKey(onAdd: (CustomKey) -> Unit) {
                 CustomKey(name, code = code, meta = meta)
             }
             if (key == null) { error = "Didn't recognise “$value” — try Ctrl+S, Alt+Enter, F5, Esc"; return@FocusableGlass }
-            onAdd(key); label = ""; value = ""; error = null; reset++
+            onAdd(key); label = ""; value = ""; error = null
         }, radius = 14.dp) {
             Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.Add, null, tint = g.accent, modifier = Modifier.size(20.dp))
@@ -126,31 +126,15 @@ private fun AddCustomKey(onAdd: (CustomKey) -> Unit) {
     error?.let { Text(it, color = app.wayfinder.ui.Glass.Danger, style = MaterialTheme.typography.bodySmall) }
 }
 
-/** A plain EditText (typing works with any keyboard, including ours). */
+/** A text field the controller can reach: the D-pad passes over it, A starts typing (before: it was an EditText the
+ *  D-pad skipped). */
 @Composable
-private fun EditField(hint: String, reset: Int, modifier: Modifier, onChange: (String) -> Unit) {
+private fun EditField(hint: String, value: String, modifier: Modifier, onChange: (String) -> Unit) {
     val g = LocalGlass.current
-    val textColor = g.textPrimary.toArgb(); val hintColor = g.textTertiary.toArgb()
-    GlassPanel(modifier, radius = 14.dp) {
-        androidx.compose.ui.viewinterop.AndroidView(
-            factory = { c ->
-                android.widget.EditText(c).apply {
-                    background = null; isSingleLine = true; textSize = 16f
-                    setPadding(28, 22, 28, 22)
-                    this.hint = hint; setHintTextColor(hintColor); setTextColor(textColor)
-                    imeOptions = android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or
-                        android.view.inputmethod.EditorInfo.IME_FLAG_NO_FULLSCREEN
-                    addTextChangedListener(object : android.text.TextWatcher {
-                        override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
-                        override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) { onChange(s?.toString() ?: "") }
-                        override fun afterTextChanged(s: android.text.Editable?) {}
-                    })
-                }
-            },
-            update = { v -> v.hint = hint; if (v.tag != reset) { if (v.tag != null) v.setText(""); v.tag = reset } },
-            modifier = Modifier.fillMaxWidth(),
-        )
-    }
+    app.wayfinder.ui.ControllerTextField(value, onChange, modifier,
+        textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)),
+        placeholder = hint, surface = Modifier.glassSurface(g, androidx.compose.foundation.shape.RoundedCornerShape(14.dp), raised = false),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 12.dp))
 }
 
 private val MOD_WORDS = mapOf(

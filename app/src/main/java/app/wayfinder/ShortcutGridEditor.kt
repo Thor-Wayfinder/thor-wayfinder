@@ -38,6 +38,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
@@ -72,6 +74,21 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
     var chosen by remember { mutableStateOf(PanelShortcuts.chosen(ctx)) }
     fun save(l: List<String>) { chosen = l; PanelShortcuts.save(ctx, l) }
     var selected by remember { mutableStateOf<String?>(null) }   // tapped / focused: its description shows
+    // 1.4 (Reddit): picking what a new "Open…" tile opens — the combos' picker, in place of the grid
+    var picking by remember { mutableStateOf<String?>(null) }
+    val pickButtons = remember { HashMap<String, androidx.compose.ui.focus.FocusRequester>() }
+    var pickedFrom by remember { mutableStateOf<String?>(null) }
+    androidx.compose.runtime.LaunchedEffect(picking) {
+        val from = pickedFrom
+        if (picking == null && from != null) { kotlinx.coroutines.delay(120); runCatching { pickButtons[from]?.requestFocus() }; pickedFrom = null }
+    }
+    picking?.let { kind ->
+        androidx.activity.compose.BackHandler { picking = null }
+        Box(Modifier.fillMaxWidth().height(if (kind == "app") 520.dp else 420.dp)) {
+            OpenPicker(kind, onCancel = { picking = null }) { arg -> picking = null; if (arg !in chosen) save(chosen + arg) }
+        }
+        return
+    }
     // where each tile is on screen (window y of its centre) — read while placing the card
     val tileY = remember { HashMap<String, Float>() }
     val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
@@ -119,6 +136,15 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
             AvailableGrid(rest, columns, cellHeight, add = { save(chosen + it) }, select = pick,
                 placed = place)
         }
+        Text("Add — a tile that opens…", color = g.textPrimary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            for ((kind, label) in listOf("app" to "An app", "pair" to "An app pair", "page" to "A Wayfinder page"))
+                FocusableGlass(onClick = { pickedFrom = kind; picking = kind }, radius = 14.dp,
+                    focusRequester = pickButtons.getOrPut(kind) { androidx.compose.ui.focus.FocusRequester() }) {
+                    Text("+ $label", color = g.accent, style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+                }
+        }
         FocusableGlass(onClick = { save(PanelShortcuts.DEFAULT) }, radius = 14.dp) {
             Text("Back to the default set", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
@@ -126,11 +152,22 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
     }
 }
 
+/** A tile's icon — an app tile shows the app's own (1.4). */
+@Composable
+internal fun TileIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, pkg: String?, tint: androidx.compose.ui.graphics.Color, size: Dp) {
+    val ctx = LocalContext.current
+    val bmp = remember(pkg) {
+        pkg?.let { p -> runCatching { ctx.packageManager.getApplicationIcon(p).toBitmap(96, 96).asImageBitmap() }.getOrNull() }
+    }
+    if (bmp != null) androidx.compose.foundation.Image(bmp, null, Modifier.size(size))
+    else Icon(icon, null, tint = tint, modifier = Modifier.size(size))
+}
+
 /** What the selected tile does, with the matching Add / Remove — so touch users can read it too. */
 @Composable
 private fun DescriptionCard(id: String?, inPanel: Boolean, add: (String) -> Unit, remove: (String) -> Unit) {
     val g = LocalGlass.current
-    val info = id?.let { PanelShortcuts.CATALOG[it] }
+    val info = id?.let { PanelShortcuts.info(LocalContext.current, it) }
     app.wayfinder.ui.GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
         Row(Modifier.fillMaxWidth().height(86.dp).padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -140,7 +177,7 @@ private fun DescriptionCard(id: String?, inPanel: Boolean, add: (String) -> Unit
                     color = g.textTertiary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
                 return@Row
             }
-            Icon(info.icon, null, tint = g.accent, modifier = Modifier.size(30.dp))
+            TileIcon(info.icon, info.pkg, g.accent, 30.dp)
             Column(Modifier.weight(1f)) {
                 Text(info.name + "  ·  " + info.group.title, color = g.textPrimary, style = MaterialTheme.typography.titleSmall, maxLines = 1)
                 Text(info.what + if (inPanel) "  A picks it up to move it (D-pad, then A)." else "",
@@ -265,7 +302,7 @@ private fun AvailableGrid(ids: List<String>, columns: Int, cellHeight: Dp, add: 
 private fun EditorCell(id: String, modifier: Modifier, lifted: Boolean, badge: String, onBadge: () -> Unit,
                        onFocus: (Boolean) -> Unit, dim: Boolean = false, placed: (Float) -> Unit = {}) {
     val g = LocalGlass.current
-    val info = PanelShortcuts.CATALOG[id] ?: return
+    val info = PanelShortcuts.info(LocalContext.current, id) ?: return
     var focused by remember { mutableStateOf(false) }
     // A tile added / removed with the controller: the focus stays in this slot, which now shows
     // ANOTHER tile — no focus change, so say it again (the card kept describing the old tile)
@@ -280,7 +317,7 @@ private fun EditorCell(id: String, modifier: Modifier, lifted: Boolean, badge: S
         .then(if (lifted) Modifier.border(2.dp, g.accent, shape) else if (focused) Modifier.border(1.5.dp, g.accent.copy(alpha = 0.8f), shape) else Modifier)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp), verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(info.icon, null, tint = if (dim) g.textTertiary else g.accent, modifier = Modifier.size(20.dp))
+            TileIcon(info.icon, info.pkg, if (dim) g.textTertiary else g.accent, 20.dp)
             Text(info.name, color = if (dim) g.textSecondary else g.textPrimary, style = MaterialTheme.typography.labelMedium,
                 maxLines = 2, textAlign = TextAlign.Center)
         }

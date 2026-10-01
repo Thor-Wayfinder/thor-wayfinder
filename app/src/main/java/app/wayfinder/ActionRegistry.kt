@@ -16,7 +16,7 @@ enum class ThorAction(val title: String, val description: String) {
     RECENTS("Recent apps", "Open the multitask view"),
     BACK("Back", "Android's normal Back"),
     // Wired in later phases; present now so bindings/UI can reference them.
-    SCREENSHOT("Screenshot", "Capture the top, bottom or both screens (pick which in Screens & power)"),
+    SCREENSHOT("Screenshot", "Capture the top, bottom or both screens (pick which in Screens)"),
     TOGGLE_SECOND_SCREEN("Bottom screen off / on", "Turn the bottom screen off, or back on"),
     TOGGLE_KEEP_AWAKE("Stay awake", "The screens don't turn off on their own (press again to stop)"),
     /** 1.3: sleep without the power button (Reddit request). */
@@ -27,6 +27,19 @@ enum class ThorAction(val title: String, val description: String) {
     AYN_MOUSE("Mouse mode (AYN)", "AYN's virtual mouse on or off — then click a stick to make it the pointer"),
     /** 1.3: the game's gyro paused / back on (a combo, the AYN button, a button's long press). */
     GYRO_TOGGLE("Gyro on / off", "Pause the game's gyro, or turn it back on (set it up in Game controls → Gyro)"),
+    /** 1.4 (GitHub #58): the quick panel's screen recording, on a combo. */
+    RECORD_SCREEN("Record the screen", "Start or stop a video of the top screen (saved in Movies / Wayfinder)"),
+    /** 1.4 (Reddit): the app on the screen WITHOUT the controller. */
+    CLOSE_OTHER("Close the other screen's app", "Closes the app on the screen the controller isn't on, and goes home there"),
+    /** 1.4 (GitHub #51, Reddit): AYN's own drawer — e.g. the AYN button's hold, with the quick panel on its tap. */
+    AYN_DRAWER("AYN's drawer", "AYN's own drawer, as the AYN button opened it before Wayfinder"),
+    /** 1.4 (Reddit): a finger swipe on the controller's screen — Shorts, web pages, galleries. */
+    SWIPE_UP("Swipe up", "A finger swipe up on the controller's screen — the next video, scroll down"),
+    SWIPE_DOWN("Swipe down", "A finger swipe down on the controller's screen — the previous video, scroll up"),
+    SWIPE_LEFT("Swipe left", "A finger swipe to the left on the controller's screen — the next page or photo"),
+    SWIPE_RIGHT("Swipe right", "A finger swipe to the right on the controller's screen — the previous page or photo"),
+    /** 1.4 (GitHub #51): Home on the screen that has the controller (what Home does by default). */
+    HOME_HERE("Home on the controller's screen", "Goes home on the screen the controller works"),
     FOCUS_SWITCH_UP("Controller to the top screen", "The controller now works the top screen"),
     FOCUS_SWITCH_DOWN("Controller to the bottom screen", "The controller now works the bottom screen"),
     FOCUS_LOCK_TOGGLE("Lock the controller", "Keep the controller on its screen — touching the other one won't move it"),
@@ -49,7 +62,7 @@ enum class ThorAction(val title: String, val description: String) {
     HOME_TOP("Home on the top screen", "The top screen goes to its home screen"),
     HOME_BOTTOM("Home on the bottom screen", "The bottom screen goes to its home screen"),
     HOME_BOTH("Home on both screens", "Both screens go to their home screens"),
-    FPS_COUNTER("Frame rate (FPS)", "Show or hide the frame-rate counter (where: Screens & power)"),
+    FPS_COUNTER("Frame rate (FPS)", "Show or hide the frame-rate counter (where: Screens)"),
     GAME_CONTROLS("Game controls", "The game's buttons, gyro and macros, while you play; the same combo or B goes back to the game"),
     /** Round 8: opens an app, an app pair or a Wayfinder page — the target is on the binding
      *  ([Binding.arg], see [OpenTargets]); several can exist, each on its own combo. */
@@ -72,7 +85,9 @@ object ActionRegistry {
         ThorAction.TOP_BRIGHTER, ThorAction.TOP_DIMMER, ThorAction.BOTTOM_BRIGHTER, ThorAction.BOTTOM_DIMMER,
         ThorAction.LOUDER, ThorAction.QUIETER, ThorAction.TOP_LOUDER, ThorAction.TOP_QUIETER,
         ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER,
-        ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH -> true
+        ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH,
+        ThorAction.RECORD_SCREEN, ThorAction.CLOSE_OTHER, ThorAction.AYN_DRAWER, ThorAction.HOME_HERE,
+        ThorAction.SWIPE_UP, ThorAction.SWIPE_DOWN, ThorAction.SWIPE_LEFT, ThorAction.SWIPE_RIGHT -> true
         else -> false
     }
 }

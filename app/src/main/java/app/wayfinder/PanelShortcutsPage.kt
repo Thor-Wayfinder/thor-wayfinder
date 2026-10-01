@@ -37,30 +37,35 @@ fun PanelShortcutsPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Uni
     SubPage(myDisplayId, "Quick panel", "Press the AYN button: screen modes, brightness, volume, live stats and your shortcuts — on the bottom screen", onBack) {
         SettingCard(
             "The AYN button opens the quick panel",
-            if (AppSettings.aynButtonOurs) "Press it again (or B) to close it. Off: the AYN button opens AYN's own drawer again — nothing of AYN's is changed either way."
+            if (AppSettings.aynButtonOurs) "Press it again (or ${ButtonNames.m("B")}) to close it. Off: the AYN button opens AYN's own drawer again — nothing of AYN's is changed either way."
             else "Off — the AYN button opens AYN's drawer. Turn on to open Wayfinder's quick panel instead.",
             checked = AppSettings.aynButtonOurs, onChecked = { AppSettings.setAynButtonOursOn(it) },
         )
         if (AppSettings.aynButtonOurs) AynButtonChoices()
+        SectionHeader("Shortcuts — also editable in the panel (its Arrange button)")
+        ShortcutGridEditor(columns = 4, cellHeight = 72.dp)
+        // 1.4 (§10.2): the rest behind one row
+        MoreOptions("the panel takes the controller, app pairs") {
         // 1.3 (GitHub #31)
         SettingCard(
             "The panel takes the controller",
-            if (AppSettings.panelTakesController) "On — the D-pad and A move around the panel, B closes it. The game gets the controller back when it closes."
+            if (AppSettings.panelTakesController) "On — the D-pad and ${ButtonNames.m("A")} move around the panel, ${ButtonNames.m("B")} closes it. The game gets the controller back when it closes."
             else "Off — the panel is touch-only and the game keeps the controller while it's open. The AYN button or ✕ closes it.",
             checked = AppSettings.panelTakesController, onChecked = { AppSettings.setPanelTakesControllerOn(it) },
         )
         // App pairs are opened from the panel: they live here now (critique 2026-09-25)
         app.wayfinder.ui.GlassListRow("App pairs", value = "${Layouts.pairs.size} saved · open from the panel's “App pairs” tile",
             icon = androidx.compose.material.icons.Icons.Rounded.ViewAgenda) { go(HubPage.PAIRS) }
-        SectionHeader("Shortcuts — also editable in the panel (its Arrange button)")
-        ShortcutGridEditor(columns = 4, cellHeight = 72.dp)
+        }
     }
 
 /** 1.3 — what a tap and a hold on the AYN button do (Reddit: holding it used to turn a screen off).
  *  Also on the Combos page (1.3.1), where [canFocus] follows that page's modal rule. */
 @Composable
 internal fun AynButtonChoices(canFocus: Boolean = true) {
-    val actions = ThorAction.values().filter { ActionRegistry.isImplemented(it) && it != ThorAction.OPEN && it != ThorAction.BACK }
+    // the AYN button's two natural choices first (Wayfinder's quick panel, AYN's drawer), then every other action
+    val first = listOf(ThorAction.QUICK_MENU, ThorAction.AYN_DRAWER)
+    val actions = first + ThorAction.values().filter { ActionRegistry.isImplemented(it) && it != ThorAction.OPEN && it != ThorAction.BACK && it !in first }
     var open by remember { mutableStateOf<String?>(null) }
     val focus = Modifier.focusProperties { this.canFocus = canFocus }
     // after a pick the list closes: the controller goes back to its row (it went nowhere — 1.3.1)

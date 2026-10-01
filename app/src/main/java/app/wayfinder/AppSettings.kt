@@ -132,6 +132,19 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("focus_sticky", on).apply()
     }
 
+    /** 1.4: the controller goes with the app it was on when Wayfinder moves / swaps it ("Follows touch" and
+     *  "Stays where sent" — "Always top / bottom" stay put). New installs on; an update keeps 1.3's way (off). */
+    var focusFollowsMove by mutableStateOf(false)
+        private set
+
+    /** The controller goes with [pkg] when it moves: its own choice, else the switch. */
+    fun followsMove(pkg: String): Boolean = AppConfigStore.get(pkg).followMove ?: focusFollowsMove
+
+    fun setFocusFollowsMoveOn(on: Boolean) {
+        focusFollowsMove = on
+        if (::prefs.isInitialized) prefs.edit().putBoolean("focus_follows_move", on).apply()
+    }
+
     /** The AYN button opens Wayfinder's panel instead of AYN's drawer. */
     var aynButtonOurs by mutableStateOf(true)
         private set
@@ -213,6 +226,53 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("hub_on_top", top).apply()
     }
 
+    // ── 1.4 ──
+    /** 1.4 (GitHub #62 #63): hide Android's navigation bar again when it comes back although it's set hidden. */
+    var navGuard by mutableStateOf(true)
+        private set
+    fun setNavGuardOn(on: Boolean) { navGuard = on; if (::prefs.isInitialized) prefs.edit().putBoolean("nav_guard", on).apply() }
+
+    /** 1.4 (GitHub #52): the "Your controls" sheet on the other screen while Wayfinder is open. */
+    var controlsSheet by mutableStateOf(true)
+        private set
+    fun setControlsSheetOn(on: Boolean) { controlsSheet = on; if (::prefs.isInitialized) prefs.edit().putBoolean("controls_sheet", on).apply() }
+
+    /** 1.4 (GitHub #52): the list of combos while Home / Back / AYN is held — 0 soon · 1 after a longer hold · 2 off. */
+    var chordHint by mutableStateOf(0)
+        private set
+    fun chooseChordHint(mode: Int) { chordHint = mode.coerceIn(0, 2); if (::prefs.isInitialized) prefs.edit().putInt("chord_hint", chordHint).apply() }
+
+    /** 1.4 (GitHub #54): a blanked screen wakes on a double tap (off: any touch). */
+    var wakeDoubleTap by mutableStateOf(false)
+        private set
+    fun setWakeDoubleTapOn(on: Boolean) { wakeDoubleTap = on; if (::prefs.isInitialized) prefs.edit().putBoolean("wake_double_tap", on).apply() }
+
+    /** 1.4: this install is an UPDATE (from 1.3.x or older) — new defaults then keep what it did before. */
+    fun isUpdate(ctx: Context): Boolean = runCatching {
+        val pi = ctx.packageManager.getPackageInfo(ctx.packageName, 0)
+        pi.lastUpdateTime - pi.firstInstallTime > 60_000
+    }.getOrDefault(false)
+
+    /** 1.4 (GitHub #24): your own colours — a flat look. ARGB: background, cards, text, accent. */
+    var customColors by mutableStateOf(false)
+        private set
+    var customBg by mutableStateOf(0xFF101318.toInt())
+        private set
+    var customCard by mutableStateOf(0xFF1E232C.toInt())
+        private set
+    var customText by mutableStateOf(0xFFFFFFFF.toInt())
+        private set
+    var customAccent by mutableStateOf(0xFF3D9BFF.toInt())
+        private set
+    fun setCustomColorsOn(on: Boolean) { customColors = on; if (::prefs.isInitialized) prefs.edit().putBoolean("custom_colors", on).apply() }
+    fun setCustomColor(which: Int, argb: Int) {
+        val c = argb or 0xFF000000.toInt()
+        when (which) { 0 -> customBg = c; 1 -> customCard = c; 2 -> customText = c; else -> customAccent = c }
+        if (::prefs.isInitialized) prefs.edit().putInt("custom_c$which", c).apply()
+    }
+    /** No glass: Black, or your own colours. */
+    val flatLook: Boolean get() = themeMode == ThemeMode.BLACK || customColors
+
     /** 3-finger gesture on the bottom screen blanks/wakes it (on the fly). */
     var gestureBlankMode by mutableStateOf(BlankGesture.TAP)
         private set
@@ -238,6 +298,9 @@ object AppSettings {
         focusLockEnabled = prefs.getBoolean("focus_lock", false)
         focusLockTop = prefs.getBoolean("focus_lock_top", true)
         focusSticky = prefs.getBoolean("focus_sticky", true)
+        // decided once (kept: a later update must not flip it)
+        if (!prefs.contains("focus_follows_move")) prefs.edit().putBoolean("focus_follows_move", !isUpdate(ctx)).apply()
+        focusFollowsMove = prefs.getBoolean("focus_follows_move", false)
         fpsCounter = prefs.getBoolean("fps_counter", false)
         fpsScreens = prefs.getInt("fps_screens", 0)
         fpsCorner = prefs.getInt("fps_corner", 0)
@@ -252,6 +315,14 @@ object AppSettings {
         idleBlankSeconds = prefs.getInt("idle_blank_seconds", 30)
         gestureBlankMode = runCatching { BlankGesture.valueOf(prefs.getString("gesture_blank_mode", null) ?: "TAP") }
             .getOrDefault(BlankGesture.TAP)
+        navGuard = prefs.getBoolean("nav_guard", true)
+        customColors = prefs.getBoolean("custom_colors", false)
+        customBg = prefs.getInt("custom_c0", customBg); customCard = prefs.getInt("custom_c1", customCard)
+        customText = prefs.getInt("custom_c2", customText); customAccent = prefs.getInt("custom_c3", customAccent)
+        controlsSheet = prefs.getBoolean("controls_sheet", true)
+        chordHint = prefs.getInt("chord_hint", 0).coerceIn(0, 2)
+        wakeDoubleTap = prefs.getBoolean("wake_double_tap", false)
+        Features.init(ctx)
         initialized = true
     }
 

@@ -24,6 +24,8 @@ object Setup {
 
     /** Accessibility service on (keeps any other services the user has on). */
     fun enableService(ctx: Context) = viaRoot(ctx, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) {
+        // 1.4: already on but Android stopped it ("crashed") — off and on again
+        if (ServiceWatch.stuck(ctx)) return@viaRoot ServiceWatch.revive(ctx)
         val me = service(ctx)
         // The list can be long (pservice drops long commands): a script that appends us.
         val f = File(ctx.filesDir, "setup_a11y.sh")

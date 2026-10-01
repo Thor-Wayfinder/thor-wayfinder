@@ -47,8 +47,8 @@ import kotlinx.coroutines.delay
  *  - Guide: a browser that starts on a search for "<game> map guide"; 📌 keeps the page
  *    you land on for that game (it opens there next time).
  *  - Notes: a notepad per game, saved as you type.
- * Opened automatically by the service when the game opens on top (App profiles →
- * "Bottom-screen companion"), or by hand from App profiles.
+ * Opened automatically by the service when the game opens on top (Games →
+ * "Bottom-screen companion"), or by hand from Games.
  */
 class CompanionActivity : ComponentActivity() {
 
@@ -207,14 +207,10 @@ private fun NotesPage(pkg: String) {
     // when the companion closed or the tab changed (review 2026-09-25)
     GlassPanel(Modifier.fillMaxSize(), radius = 16.dp) {
         Box(Modifier.fillMaxSize().padding(14.dp)) {
-            if (text.isEmpty()) Text("Notes for this game — quests, codes, where you left off…",
-                color = g.textTertiary, style = MaterialTheme.typography.bodyLarge)
-            BasicTextField(
-                value = text, onValueChange = { text = it; CompanionStore.saveNotes(ctx, pkg, it) },
-                textStyle = TextStyle(color = g.textPrimary, fontSize = 17.sp),
-                cursorBrush = SolidColor(g.accent),
-                modifier = Modifier.fillMaxSize(),
-            )
+            // the D-pad passes over it; A (or a tap) starts typing
+            app.wayfinder.ui.ControllerTextField(text, { text = it; CompanionStore.saveNotes(ctx, pkg, it) }, Modifier.fillMaxSize(),
+                textStyle = TextStyle(color = g.textPrimary, fontSize = 17.sp), singleLine = false,
+                placeholder = "Notes for this game — quests, codes, where you left off… (A to write)")
         }
     }
 }

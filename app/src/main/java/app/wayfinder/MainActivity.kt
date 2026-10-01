@@ -94,6 +94,8 @@ class MainActivity : ComponentActivity() {
 
         PServiceBridge.probeAsync()
         RootHelper.probeAsync()
+        // 1.4: on in Android's settings but not running (stopped by Android) → looked at again in 15 s, revived
+        if (ServiceWatch.stuck(this)) ServiceWatch.schedule(applicationContext, 15_000)
 
         // Volume keys here = the media volume (else Android picks the ring volume when nothing plays).
         volumeControlStream = android.media.AudioManager.STREAM_MUSIC
@@ -120,7 +122,7 @@ class MainActivity : ComponentActivity() {
                 ThemeMode.LIGHT -> false
                 ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
-            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && AppSettings.themeMode != ThemeMode.BLACK)) {
+            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalRealGlass provides (realGlass.value && !AppSettings.flatLook)) {
             ThorGlassTheme(dark = dark) {
                 // Deep link: `page` extra opens a sub-page directly (e.g. "controls", "apps"),
                 // on first launch or when the Hub is already open (onNewIntent).
@@ -133,7 +135,7 @@ class MainActivity : ComponentActivity() {
                 androidx.activity.compose.BackHandler(enabled = page != HubPage.HOME) {
                     // Game controls (opened from a game): Back returns to the game
                     if (page.startsWith("play:")) { finish(); ForegroundAppService.gameControlsClosed() }
-                    else page = hubParent(page) ?: HubPage.HOME
+                    else page = hubBack(page)
                 }
                 HubNavHost(myDisplayId, page) { page = it }
             }
@@ -274,6 +276,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showCompanion() {
         if (companion != null || QuickPanelWindow.isOpen || gameControls === this) return
+        if (!AppSettings.controlsSheet) return   // 1.4 (GitHub #52)
         @Suppress("DEPRECATION")
         val myId = windowManager.defaultDisplay.displayId
         val dm = getSystemService(DisplayManager::class.java)

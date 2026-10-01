@@ -109,7 +109,8 @@ private class TourStep(
 @Composable
 fun TourPage(myDisplayId: Int, onDone: () -> Unit) {
     val ctx = LocalContext.current
-    val steps = remember { tourSteps() }
+    // 1.4: not remembered — the setup question removes the steps of parts turned off
+    val steps = tourSteps()
     var i by remember { mutableIntStateOf(0) }
     val finish = { Tour.markDone(ctx); onDone() }
     // Seen = done: it opens on its own ONCE (leaving with Home/Back mid-way used to bring
@@ -118,6 +119,7 @@ fun TourPage(myDisplayId: Int, onDone: () -> Unit) {
     BackHandler(enabled = i > 0) { i-- }
     val next = remember { FocusRequester() }
     LaunchedEffect(i) { delay(250); runCatching { next.requestFocus() } }
+    DisposableEffect(Unit) { TourFocus.toNext = { runCatching { next.requestFocus() } }; onDispose { TourFocus.toNext = null } }
     // Practice is on only while a "try it" step is in front (leaving with Home turns it off)
     val owner = LocalLifecycleOwner.current
     var resumed by remember { mutableStateOf(true) }
@@ -242,7 +244,8 @@ private fun FixRow(ok: Boolean, okText: String, todo: String, button: String, fi
         Icon(if (ok) Icons.Rounded.CheckCircle else Icons.Rounded.ErrorOutline, null,
             tint = if (ok) app.wayfinder.ui.Glass.Positive else g.accent, modifier = Modifier.size(24.dp))
         Text(if (ok) okText else todo, color = g.textPrimary, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
-        if (!ok || pressed) FocusableGlass(onClick = { pressed = true; if (!ok) fix() }, radius = 14.dp) {
+        // 1.4: A on a "Done ✓" goes on to Next (it did nothing — the controller looked stuck)
+        if (!ok || pressed) FocusableGlass(onClick = { if (ok) TourFocus.toNext?.invoke() else { pressed = true; fix() } }, radius = 14.dp) {
             Text(if (ok) "Done ✓" else button, color = if (ok) app.wayfinder.ui.Glass.Positive else g.accent,
                 style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
         }
@@ -256,6 +259,12 @@ private fun SetupChecks() {
     LaunchedEffect(Unit) { while (true) { delay(1500); tick++ } }   // re-check after the user comes back
     @Suppress("UNUSED_EXPRESSION") tick
     val pm = ctx.getSystemService(android.os.PowerManager::class.java)
+    // 1.4: everything green → the controller goes to Next (it stayed on the last "Done ✓")
+    val allOk = ForegroundAppService.isRunning && Setup.notificationsAllowed(ctx) && pm.isIgnoringBatteryOptimizations(ctx.packageName) &&
+        !AynHomeGuard.isOn(ctx) && keyboardState(ctx) == KeyboardState.ACTIVE && PServiceBridge.cachedAvailable() &&
+        layerOk()
+    var wasOk by remember { mutableStateOf(allOk) }
+    LaunchedEffect(allOk) { if (allOk && !wasOk) { delay(600); TourFocus.toNext?.invoke() }; wasOk = allOk }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         FixRow(ForegroundAppService.isRunning, "Wayfinder's service is on", "Wayfinder's service is off — it does all the work", "Turn on") {
             Setup.enableService(ctx)
@@ -276,27 +285,49 @@ private fun SetupChecks() {
         FixRow(PServiceBridge.cachedAvailable(), "Wayfinder can use the Thor's system service",
             "Wayfinder can't reach the Thor's system service yet — if this stays, turn off “Force SELinux” in the Thor's settings and restart",
             "Check again") { Thread { PServiceBridge.isAvailable() }.apply { isDaemon = true }.start() }
-        FixRow(PadLayerCtl.active, "Game controls are on (the input layer)",
+        // 1.4: with "Only games I set up" it starts in those games — nothing to fix here
+        FixRow(layerOk(), if (PadLayerCtl.mode == PadLayerCtl.Mode.NOWHERE) "Game controls are off — your choice (More → Features)" else "Game controls are on (the input layer)",
             if (PadLayerCtl.wanted) (if (ForegroundAppService.isRunning) "The input layer is starting…" else "The input layer starts once the service is on") else "The input layer is off — games' own buttons, gyro and macros won't work",
             "Turn on") { PadLayerCtl.set(ctx, true) }
     }
 }
 
+/** The input layer is fine: on, waiting for a game you set up, or off because you chose that ("Just switching screens"). */
+private fun layerOk() = PadLayerCtl.active || PadLayerCtl.mode == PadLayerCtl.Mode.SET_UP || PadLayerCtl.mode == PadLayerCtl.Mode.NOWHERE
+
 private fun practice(a: ThorAction, text: String) =
     Task(text, { ControlsStore.triggerFor(a) }, a, { a in TourPractice.done })
 
-private fun tourSteps() = listOf(
+/** 1.4: a step's own content can hand the focus to the tour's Next button. */
+private object TourFocus { var toNext: (() -> Unit)? = null }
+
+private fun tourSteps() = listOfNotNull(
     TourStep(Icons.Rounded.AutoAwesome, "Welcome to Wayfinder",
         "Two screens, one controller. Wayfinder moves apps between the screens, sends the controller where you want it, " +
             "gives every game its own buttons and puts the Thor's settings a press away — all without leaving your game.\n\n" +
             "A = next · B = back. Everything works with the controller."),
+    // 1.4: the first question
+    TourStep(Icons.Rounded.Tune, "What do you want Wayfinder for?",
+        "Wayfinder does a lot — you can keep it to the screen switcher. Nothing is lost: change it any time in More → Features.",
+        extra = {
+            var picked by remember { mutableStateOf(Features.asked) }
+            // 1.4: the controller starts on the choices (A on "Next" skipped the question); after a pick, on Next
+            val choice = remember { FocusRequester() }
+            LaunchedEffect(Unit) { if (!picked) { delay(400); runCatching { choice.requestFocus() } } }
+            SetupChoice(focus = choice) { picked = true; TourFocus.toNext?.invoke() }
+            val all = AppSettings.aynButtonOurs && Features.moreCombos && Features.deck && Features.lights && Features.gameControls
+            val none = !AppSettings.aynButtonOurs && !Features.moreCombos && !Features.deck && !Features.lights && !Features.gameControls
+            if (picked) Text(when { all -> "Everything — every part is on."; none -> "Just switching screens — the rest stays off."
+                else -> "Your own mix — see More → Features." },
+                color = app.wayfinder.ui.Glass.Positive, style = MaterialTheme.typography.bodyMedium)
+        }),
     TourStep(Icons.Rounded.Shield, "What Wayfinder uses",
         "Wayfinder needs more access than most apps. What, and why:\n" +
             "•  Accessibility — sees which app is on each screen and reads the controller; a screenshot or a tap only when you ask.\n" +
             "•  The Thor's system service — moves apps, sets brightness and sleep, runs the input layer (each game's own buttons).\n" +
             "•  Its keyboard — types into text fields. Nothing you type is stored or sent.\n" +
             "•  Game detection — the game file an emulator has open, and Cocoon, RetroArch and GameNative's game lists.\n" +
-            "Nothing is collected or sent. Only the Game guide page uses the internet: a web search for your game, when you open it.\n" +
+            "Nothing is collected or sent. The internet is used only by the Game guide page (a web search for your game, when you open it) and a daily check for a new version (you can turn it off).\n" +
             "The next step turns these on — pressing its buttons means you agree."),
     TourStep(Icons.Rounded.Tune, "Quick setup", "A few things make everything work. Anything marked ! needs one press:", extra = { SetupChecks() }),
     TourStep(Icons.Rounded.Info, "Hold Home: your combos",
@@ -307,14 +338,15 @@ private fun tourSteps() = listOf(
     TourStep(Icons.Rounded.SwapVert, "Move apps between the screens",
         "The app you're in goes to the other screen — or, with an app on each, they swap. Apps keep their place; nothing restarts. Try it.",
         tasks = listOf(practice(ThorAction.SWAP_OR_SEND, "Move / swap apps")),
-        combos = listOf(ThorAction.RECENTS to "Recent apps (browse with the D-pad or L1 / R1, A opens, Y closes)",
+        combos = listOf(ThorAction.RECENTS to "Recent apps (browse with the D-pad or L1 / R1, ${ButtonNames.m("A")} opens, ${ButtonNames.m("Y")} closes)",
             ThorAction.CLEAR_BACKGROUND to "Close background apps")),
     TourStep(Icons.Rounded.SportsEsports, "The controller follows you",
         "Send the controller to the top or bottom screen. It stays there — touching the other screen won't steal it " +
             "(the Controller page has the other ways). Try both.",
         tasks = listOf(practice(ThorAction.FOCUS_SWITCH_DOWN, "Controller to the bottom screen"),
             practice(ThorAction.FOCUS_SWITCH_UP, "Controller to the top screen"))),
-    TourStep(Icons.Rounded.Dashboard, "The quick panel",
+    // 1.4: no quick panel step when the AYN button stays AYN's ("Just switching screens")
+    if (!AppSettings.aynButtonOurs) null else TourStep(Icons.Rounded.Dashboard, "The quick panel",
         "Brightness and volume, performance, fan, 60/120 Hz, temperatures and your shortcuts — one press away, on the bottom screen.",
         extra = {
             var ours by remember { mutableStateOf(AppSettings.aynButtonOurs) }
@@ -329,8 +361,8 @@ private fun tourSteps() = listOf(
         "That's all you need to start. The rest shows up when it's useful — the first time you play a game, Wayfinder tells you how to open its buttons.",
         combos = listOf(ThorAction.GAME_CONTROLS to "Game controls: the game's own buttons, turbo, macros, gyro",
             ThorAction.KEYBOARD to "Keyboard & mouse, on the other screen",
-            ThorAction.SCREENSHOT to "Screenshot"),
-        footer = "In Wayfinder: App profiles (each app's screen, buttons, performance), App pairs, sleep, speaker tuning, stick lights. " +
+            ThorAction.SCREENSHOT to "Screenshot").filter { Features.allows(it.first) },
+        footer = "In Wayfinder: Games (each app's screen, buttons, performance), App pairs, sleep, speaker tuning, stick lights. " +
             "If a game ever acts strangely, hold Home + Back for 5 seconds to turn the input layer off. " +
             "Replay this tour from Help & status."),
 )

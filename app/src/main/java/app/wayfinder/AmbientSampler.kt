@@ -26,14 +26,27 @@ object AmbientSampler {
     }
 
     private fun loop() {
+        // 1.4 (measured: 12 screenshots a second = +0.38 W at rest): fast only while the picture changes — slower
+        // while the colour holds (2 a second), 12 a second for 1.5 s after a visible change. Most of the cost is per wake-up
+        // (4 a second still measured +0.28 W) — a downscaled capture would be the real fix (1.5).
+        var last: IntArray? = null
+        var fastUntil = 0L
         while (true) {
             val id = phys ?: run { thread = null; return }
             val t0 = System.nanoTime()
             // C <avg r g b> <left half r g b> <right half r g b> (1.3: each stick its side — GitHub #15)
-            runCatching { sample(id) }.onSuccess { c -> if (c != null) send?.invoke("C " + c.joinToString(" ") + "\n") }
-                .onFailure { Log.w(TAG, "sample: $it") }
+            runCatching { sample(id) }.onSuccess { col ->
+                if (col != null) {
+                    val prev = last
+                    if (prev == null || (0 until 9).sumOf { kotlin.math.abs(col[it] - prev[it]) } > 30)
+                        fastUntil = System.nanoTime() + 1_500_000_000L
+                    last = col
+                    send?.invoke("C " + col.joinToString(" ") + "\n")
+                }
+            }.onFailure { Log.w(TAG, "sample: $it") }
             val spent = (System.nanoTime() - t0) / 1_000_000
-            Thread.sleep((80 - spent).coerceIn(5, 80))
+            val period = if (System.nanoTime() < fastUntil) 80L else 500L
+            Thread.sleep((period - spent).coerceIn(5, period))
         }
     }
 

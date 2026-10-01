@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import app.wayfinder.ui.glassSurface
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -23,6 +24,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import app.wayfinder.ui.GlassListRow
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -38,6 +42,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
@@ -146,24 +151,20 @@ fun AppProfilesScreen(myDisplayId: Int, onEditButtons: (String) -> Unit = {}, on
                     }
                 }
                 Column(Modifier.weight(1f)) {
-                    Text("App profiles", color = g.textPrimary, style = MaterialTheme.typography.headlineMedium)
+                    Text("Games", color = g.textPrimary, style = MaterialTheme.typography.headlineMedium)
+                    // 1.4: Home + X opens the running game's own controls (not the emulator's)
                     Text(
-                        "Each app: the screen it opens on, the bottom screen, its controls, performance, lights. Nothing changes unless you set it. " +
-                            "Games inside an emulator can each have their own controls: start the game, then press " +
-                            (ControlsStore.triggerFor(ThorAction.GAME_CONTROLS)?.label() ?: "Game controls") +
-                            " and pick “Controls just for …”.",
+                        "Each game and app: its screen, performance, controller and lights. Nothing changes unless you set it. " +
+                            "In a game, " + (ControlsStore.triggerFor(ThorAction.GAME_CONTROLS)?.label() ?: "Game controls") +
+                            " opens its own buttons — a game inside an emulator gets its own too.",
                         color = g.textTertiary, style = MaterialTheme.typography.bodyMedium,
                     )
                 }
                 // find an app by name (the Wayfinder keyboard opens on the other screen)
-                androidx.compose.foundation.text.BasicTextField(
-                    query, { query = it.take(30) }, singleLine = true,
-                    textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = 16.sp),
-                    cursorBrush = androidx.compose.ui.graphics.SolidColor(g.accent),
-                    modifier = Modifier.width(200.dp).glassSurface(g, RoundedCornerShape(16.dp), raised = false)
-                        .padding(horizontal = 14.dp, vertical = 11.dp),
-                    decorationBox = { inner -> if (query.isEmpty()) Text("Find an app…", color = g.textTertiary, fontSize = 16.sp); inner() },
-                )
+                app.wayfinder.ui.ControllerTextField(query, { query = it.take(30) }, Modifier.width(200.dp),
+                    textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = 16.sp), placeholder = "Find an app…",
+                    surface = Modifier.glassSurface(g, RoundedCornerShape(16.dp), raised = false), shape = RoundedCornerShape(16.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 11.dp))
                 FocusableGlass(onClick = { picker.launch(ProfileShare.PICK_TYPES) }, radius = 16.dp) {
                     Text("Import controls", color = g.accent, style = MaterialTheme.typography.labelLarge,
                         modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
@@ -215,6 +216,9 @@ fun AppProfilesScreen(myDisplayId: Int, onEditButtons: (String) -> Unit = {}, on
  *  its popup comes back when they return, instead of dropping them at the list. */
 private var reopenAfterEdit: String? = null
 
+/** Open [pkg]'s options when the Games page shows next (the Battery page's "its own level" rows). */
+internal fun openAppNext(pkg: String) { reopenAfterEdit = pkg }
+
 @Composable
 private fun AppProfileRow(app: AppEntry, cfg: AppConfig, onOpen: () -> Unit) {
     val g = LocalGlass.current
@@ -249,10 +253,11 @@ private fun AppProfileRow(app: AppEntry, cfg: AppConfig, onOpen: () -> Unit) {
 /** What's set for this app, in a few words (the list shows it; "" = nothing set). */
 private fun AppConfig.summary(): String = listOfNotNull(
     route.takeIf { it != Route.ANY }?.let { "Opens on the ${it.label.lowercase()} screen" },
+    followMove?.let { if (it) "Controller goes with it" else "Controller stays" },
     second.takeIf { it != SecondScreenPolicy.DEFAULT }?.label(),
     buttonsMode.takeIf { it != ButtonsMode.NORMAL }?.let { "Combos ${it.label.lowercase()}" },
     face?.let { "${it.label} buttons" },
-    remap?.changes?.let { "$it remap${if (it > 1) "s" else ""}" },
+    remap?.changes?.takeIf { it > 0 }?.let { "$it remap${if (it > 1) "s" else ""}" },
     perf?.let { "Performance ${it.label.lowercase()}" },
     fan?.let { "Fan ${it.label.lowercase()}" },
     hz?.let { "$it Hz" },
@@ -336,7 +341,9 @@ private fun AppOptionsDialog(
                 .glassSurface(g, shape, raised = true),
         ) {
             // 1.3: scrolls — taller than the screen since the frame-rate row (its bottom was unreachable)
-            Column(Modifier.verticalScroll(androidx.compose.foundation.rememberScrollState()).padding(20.dp),
+            val scroll = androidx.compose.foundation.rememberScrollState()
+            val firstOption = remember { FocusRequester() }
+            Column(Modifier.verticalScroll(scroll).padding(20.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                     if (app.icon != null) Image(app.icon, null, Modifier.size(40.dp).clip(RoundedCornerShape(10.dp)))
@@ -351,13 +358,33 @@ private fun AppOptionsDialog(
                             modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                     }
                 }
-                Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-                    // Left: the screens and the hardware
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                // 1.4: only what's different for this app — the rest behind "Change something"
+                var all by remember(app.pkg) { mutableStateOf(false) }
+                val sRoute = all || cfg.route != Route.ANY; val sReopen = all || cfg.reopenOnMove != null
+                val sFollow = all || cfg.followMove != null
+                val sSecond = all || cfg.second != SecondScreenPolicy.DEFAULT
+                val sPerf = all || cfg.perf != null; val sFan = all || cfg.fan != null; val sHz = all || cfg.hz != null; val sFps = all || cfg.fps != null
+                val sCombos = all || cfg.buttonsMode != ButtonsMode.NORMAL; val sBack = all || cfg.backToGame != null
+                val sLayer = all || cfg.layer != null
+                val sLights = Features.lights && (all || cfg.lights != null); val sGuide = all || cfg.companion
+                // every setting shown: the controller goes to the first one (before: it stayed on the row that had just
+                // moved below the dialog's edge — nothing looked selected)
+                var shownAll by remember(app.pkg) { mutableStateOf(false) }
+                LaunchedEffect(all) {
+                    if (all && !shownAll) { shownAll = true; delay(120); scroll.animateScrollTo(0); runCatching { firstOption.requestFocus() } }
+                    if (!all) shownAll = false
+                }
+                Row(Modifier.focusRequester(firstOption), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                    // Left: the screens and the hardware (1.4: only when something there is shown)
+                    if (sRoute || sReopen || sFollow || sSecond || sPerf || sFan || sHz || sFps) Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        if (sRoute || sReopen || sFollow || sSecond) GroupHead("Screen")
+                        if (sRoute) {
                         OptionLabel("Opens on")
                         GlassSegmentedControl(Route.values().map { it.label }, cfg.route.ordinal, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(route = Route.values()[i]) }
                         }
+                        }
+                        if (sReopen) {
                         // 1.3.2: live move, or reopen it there (Firefox crashed after a live move)
                         OptionLabel("When it moves to the other screen: " + (if (reopensOnMove(app.pkg)) "it reopens there (tabs and state reload)"
                             else "it keeps running") + if (cfg.reopenOnMove == null && reopensOnMoveByDefault(app.pkg)) " (automatic: Firefox-based browsers reopen)" else "")
@@ -365,35 +392,66 @@ private fun AppOptionsDialog(
                             when (cfg.reopenOnMove) { null -> 0; false -> 1; true -> 2 }, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(reopenOnMove = when (i) { 1 -> false; 2 -> true; else -> null }) }
                         }
+                        }
+                        if (sFollow) {
+                        // 1.4: per game — the controller goes with it when it's moved / swapped, or stays
+                        val locked = AppSettings.focusLockEnabled && !AppSettings.focusSticky
+                        OptionLabel("The controller when ${app.label} moves: " + when {
+                            locked -> "stays (the controller is set to Always top / bottom)"
+                            AppSettings.followsMove(app.pkg) -> "goes with it"
+                            else -> "stays on its screen"
+                        } + if (cfg.followMove == null && !locked) " (usual)" else "")
+                        GlassSegmentedControl(listOf("Usual", "Goes with it", "Stays"),
+                            when (cfg.followMove) { null -> 0; true -> 1; false -> 2 }, Modifier.fillMaxWidth()) { i ->
+                            AppConfigStore.update(app.pkg) { it.copy(followMove = when (i) { 1 -> true; 2 -> false; else -> null }) }
+                        }
+                        }
+                        if (sSecond) {
                         OptionLabel("Bottom screen while ${app.label} is on top")
                         GlassSegmentedControl(listOf("Usual", "Keep on", "Off"), cfg.second.ordinal, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(second = SecondScreenPolicy.values()[i]) }
                             ForegroundAppService.reapplyPolicy()
                         }
+                        }
+                        if (sPerf || sFan || sHz || sFps) GroupHead("Performance")
+                        val tuner = Tuners.installed(LocalContext.current)
+                        if ((sPerf || (tuner == "Pulse" && (sFan || sHz))) && tuner != null) Text(Tuners.note(tuner), color = LocalGlass.current.textTertiary,
+                            style = MaterialTheme.typography.bodySmall)
+                        if (sPerf && tuner == null) {
                         OptionLabel("Performance" + if (cfg.perf == null) " — Usual = your AYN setting" else "")
-                        GlassSegmentedControl(listOf("Usual") + PerfMode.values().map { it.label }, (cfg.perf?.ordinal ?: -1) + 1, Modifier.fillMaxWidth()) { i ->
-                            AppConfigStore.update(app.pkg) { it.copy(perf = if (i == 0) null else PerfMode.values()[i - 1]) }
+                        GlassSegmentedControl(listOf("Usual") + PerfMode.ayn.map { it.label },
+                            if (cfg.perf == null) 0 else PerfMode.ayn.indexOf(cfg.perf).let { if (it < 0) -1 else it + 1 }, Modifier.fillMaxWidth()) { i ->
+                            AppConfigStore.update(app.pkg) { it.copy(perf = if (i == 0) null else PerfMode.ayn[i - 1]) }
                             ForegroundAppService.reapplyPerf()
                         }
+                        }
+                        if (sFan && tuner != "Pulse") {
                         OptionLabel("Fan")
                         GlassSegmentedControl(listOf("Usual") + FanMode.values().map { it.label }, (cfg.fan?.ordinal ?: -1) + 1, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(fan = if (i == 0) null else FanMode.values()[i - 1]) }
                             ForegroundAppService.reapplyPerf()
                         }
+                        }
+                        if (sHz && tuner != "Pulse") {
                         OptionLabel("Refresh rate")
                         GlassSegmentedControl(listOf("Usual", "60 Hz", "120 Hz"), when (cfg.hz) { 60 -> 1; 120 -> 2; else -> 0 }, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(hz = when (i) { 1 -> 60; 2 -> 120; else -> null }) }
                             ForegroundAppService.reapplyPerf()
                         }
+                        }
                         // 1.3 (GitHub #22)
+                        if (sFps) {
                         OptionLabel("Frame-rate counter")
                         GlassSegmentedControl(listOf("Usual", "Shown", "Hidden"), when (cfg.fps) { true -> 1; false -> 2; null -> 0 }, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(fps = when (i) { 1 -> true; 2 -> false; else -> null }) }
                             ForegroundAppService.reapplyFps()
                         }
+                        }
                     }
                     // Right: the controller, and the bottom-screen guide
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        GroupHead("Controller")
+                        if (sCombos) {
                         OptionLabel(when (cfg.buttonsMode) {
                             ButtonsMode.NORMAL -> "Wayfinder combos: your usual ones"
                             ButtonsMode.CUSTOM -> "Wayfinder combos: custom for ${app.label}"
@@ -408,30 +466,48 @@ private fun AppOptionsDialog(
                             AppConfigStore.update(app.pkg) { it.copy(buttonsMode = mode) }
                             if (mode == ButtonsMode.CUSTOM) { reopenAfterEdit = app.pkg; onEditButtons(app.pkg) }
                         }
+                        }
+                        if (sBack) {
                         // 1.3: Back as the game's own button (RetroArch's menu / hotkeys) — automatic for RetroArch
                         val backFree = ControlsStore.backToGame(app.pkg)
                         OptionLabel(if (backFree) "Back button: goes to ${app.label} (held too) — no Back combos here"
                             else "Back button: Wayfinder's (its taps, hold and combos)" +
-                                if (app.pkg.startsWith("com.retroarch") && cfg.backToGame == null) " — RetroArch's own hotkeys don't use Back" else "")
+                                if (cfg.backToGame == null) " — a short Back, or Back with another button held, still reaches ${app.label}" else "")
                         GlassSegmentedControl(listOf("Automatic", "Wayfinder", "The game"),
                             when (cfg.backToGame) { null -> 0; false -> 1; true -> 2 }, Modifier.fillMaxWidth()) { i ->
                             AppConfigStore.update(app.pkg) { it.copy(backToGame = when (i) { 1 -> false; 2 -> true; else -> null }) }
                         }
+                        }
+                        if (sLayer) {
+                        // 1.4 (GitHub #60): the input layer for this app
+                        val ctxL = androidx.compose.ui.platform.LocalContext.current
+                        OptionLabel("Input layer: " + when (cfg.layer) {
+                            true -> "on for ${app.label}"
+                            false -> "off — ${app.label} gets the Thor's own controller (for games that don't like the copy)"
+                            null -> if (PadLayerCtl.need(app.pkg) == true) "on (automatic)" else "automatic — ${PadLayerCtl.mode.label.lowercase()}"
+                        })
+                        GlassSegmentedControl(listOf("Automatic", "On", "Off"), when (cfg.layer) { null -> 0; true -> 1; false -> 2 }, Modifier.fillMaxWidth()) { i ->
+                            PadLayerCtl.setForApp(ctxL, app.pkg, when (i) { 1 -> true; 2 -> false; else -> null })
+                        }
+                        }
                         // the layer off = these do nothing: said FIRST (the line is cut when long)
-                        OptionLabel((if ((cfg.face != null || cfg.remap != null) && !PadLayerCtl.wanted) "Input layer off — these do nothing · " else "") +
+                        OptionLabel((if ((cfg.face != null || cfg.remap != null) && PadLayerCtl.need(app.pkg) == false) "Input layer off — these do nothing · " else "") +
                             "Game controls: " + when (cfg.face) {
                             null -> "face buttons like all apps"
                             FaceLayout.NINTENDO -> "Nintendo (A right)"
                             FaceLayout.XBOX -> "Xbox (A bottom)"
-                        } + (cfg.remap?.changes?.let { " · $it change${if (it > 1) "s" else ""}" } ?: "") +
+                        } + (cfg.remap?.changes?.takeIf { it > 0 }?.let { " · $it change${if (it > 1) "s" else ""}" } ?: "") +
                             GameProfiles.forApp(app.pkg).size.let { if (it == 0) "" else " · $it game profile${if (it > 1) "s" else ""}" })
                         // face buttons, remaps, gyro: all set in Game controls (their one home)
-                        FocusableGlass(onClick = { reopenAfterEdit = app.pkg; onEditRemap(app.pkg) }, radius = 14.dp) {
+                        // full width: a small button here was skipped by the D-pad going down
+                        FocusableGlass(onClick = { reopenAfterEdit = app.pkg; onEditRemap(app.pkg) }, radius = 14.dp, modifier = Modifier.fillMaxWidth()) {
                             Text("Open Game controls ›", color = LocalGlass.current.accent, style = MaterialTheme.typography.labelLarge,
                                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
                         }
-                        OptionLabel(if (cfg.lights == null) "Stick lights: your usual lights" else "Stick lights: ${cfg.lights.mode.label} for ${app.label}")
-                        OptionWithEdit(
+                        if (sLights || sGuide) GroupHead(if (Features.lights) "Lights & guide" else "Guide")
+                        if (sLights) {
+                        if (Features.lights) OptionLabel(if (cfg.lights == null) "Stick lights: your usual lights" else "Stick lights: ${cfg.lights.mode.label} for ${app.label}")
+                        if (Features.lights) OptionWithEdit(
                             listOf("Usual", "Own"), if (cfg.lights == null) 0 else 1,
                             editLabel = "Edit ›".takeIf { cfg.lights != null },
                             onEdit = { reopenAfterEdit = app.pkg; onEditLights(app.pkg) },
@@ -443,12 +519,32 @@ private fun AppOptionsDialog(
                             }
                             ForegroundAppService.reapplyLights()
                         }
+                        }
+                        if (sGuide) {
                         OptionLabel(if (cfg.companion) "Guide & notes on the bottom screen: open with ${app.label}"
                             else "Guide & notes on the bottom screen: off")
                         OptionWithEdit(
                             listOf("Off", "Guide & notes"), if (cfg.companion) 1 else 0,
                             editLabel = "Open now ›", onEdit = { ForegroundAppService.openCompanionNow(app.pkg) },
                         ) { i -> AppConfigStore.update(app.pkg) { it.copy(companion = i == 1) } }
+                        }
+                    }
+                }
+                GlassListRow(if (all) "Show only what's changed" else "Change something for ${app.label}",
+                    value = if (all) null else "screen, performance, combos, Back, lights, guide",
+                    icon = if (all) Icons.Rounded.ExpandLess else Icons.Rounded.Tune) { all = !all }
+                // 1.4: the games inside this app that have their own controls — each one press away
+                val games = GameProfiles.forApp(app.pkg)
+                if (games.isNotEmpty()) {
+                    GroupHead("Games in ${app.label} with their own controls")
+                    Row(Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        games.forEach { (key, p) ->
+                            FocusableGlass(onClick = { reopenAfterEdit = app.pkg; onEditRemap(key) }, radius = 14.dp) {
+                                Text("${p.title}  ›", color = g.accent, style = MaterialTheme.typography.labelLarge,
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+                            }
+                        }
                     }
                 }
                 // Two apps can be open at once, each with its own profile — say who wins.
@@ -462,6 +558,12 @@ private fun AppOptionsDialog(
     }
 }
 
+/** 1.4: a group's heading inside one app's options. */
+@Composable
+private fun GroupHead(text: String) =
+    Text(text.uppercase(), color = LocalGlass.current.accent, style = MaterialTheme.typography.labelMedium,
+        modifier = Modifier.padding(top = 8.dp))
+
 @Composable
 private fun OptionLabel(text: String) =
     Text(text, color = LocalGlass.current.textSecondary, style = MaterialTheme.typography.bodySmall,
@@ -472,7 +574,7 @@ private fun OptionLabel(text: String) =
 private fun OptionWithEdit(options: List<String>, selected: Int, editLabel: String?, onEdit: () -> Unit, onSelect: (Int) -> Unit) {
     val g = LocalGlass.current
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        GlassSegmentedControl(options, selected, Modifier.weight(1f), onSelect)
+        GlassSegmentedControl(options, selected, Modifier.weight(1f), onSelect = onSelect)
         if (editLabel != null) FocusableGlass(onClick = onEdit, radius = 14.dp) {
             Text(editLabel, color = g.accent, style = MaterialTheme.typography.labelLarge,
                 modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))

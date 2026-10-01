@@ -23,9 +23,28 @@ import app.wayfinder.lights.StickLights
  * through root (`settings put …`, `cmd …`) — the same keys their own tiles write.
  */
 object PanelShortcuts {
-    enum class Group(val title: String) { WAYFINDER("Wayfinder"), ANDROID("Android"), THOR("Thor") }
+    enum class Group(val title: String) { WAYFINDER("Wayfinder"), ANDROID("Android"), THOR("Thor"), OPEN("Your shortcut") }
 
-    class Info(val icon: ImageVector, val name: String, val what: String, val group: Group)
+    /** [pkg]: an app tile — its own icon is drawn instead of [icon]. */
+    class Info(val icon: ImageVector, val name: String, val what: String, val group: Group, val pkg: String? = null)
+
+    /** 1.4 (Reddit): a tile that opens an app, an app pair or a Wayfinder page — its id is the "Open…" target. */
+    fun isOpenTile(id: String): Boolean = id !in CATALOG && OpenTargets.valid(id) &&
+        (!id.startsWith("pair:") || Layouts.pairs.any { it.id == id.removePrefix("pair:").toLongOrNull() })
+
+    private fun appName(ctx: Context, pkg: String) = runCatching {
+        ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrNull()
+
+    /** A tile's info: the catalog's, or an "Open…" tile's (null: gone — an app uninstalled, a pair deleted). */
+    fun info(ctx: Context, id: String): Info? = CATALOG[id] ?: if (!isOpenTile(id)) null else when {
+        OpenTargets.isApp(id) -> appName(ctx, OpenTargets.appPkg(id))?.let {
+            Info(Icons.Rounded.Apps, it, "Opens $it on the screen with the controller.", Group.OPEN, OpenTargets.appPkg(id)) }
+        id.startsWith("pair:") -> Info(Icons.Rounded.ViewAgenda, OpenTargets.label(ctx, id).removePrefix("Open the pair "),
+            "Opens this app pair — each app on its screen.", Group.OPEN)
+        else -> OpenTargets.label(ctx, id).removePrefix("Open Wayfinder: ").let {
+            Info(Icons.Rounded.Explore, it, "Opens Wayfinder's “$it” page.", Group.OPEN) }
+    }
 
     /** id → what the Hub's picker shows. Ids are stored — never rename one. */
     val CATALOG: Map<String, Info> = linkedMapOf(
@@ -108,7 +127,7 @@ object PanelShortcuts {
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("thor_panel", Context.MODE_PRIVATE)
     fun chosen(ctx: Context): List<String> {
         val p = prefs(ctx)
-        val saved = p.getString("tiles", null)?.split(',')?.filter { it in CATALOG } ?: return DEFAULT
+        val saved = p.getString("tiles", null)?.split(',')?.filter { it in CATALOG || isOpenTile(it) } ?: return DEFAULT
         // New Wayfinder tiles reach panels saved before them — once (a removed tile stays removed).
         if (!p.getBoolean("offered_controls", false)) {
             p.edit().putBoolean("offered_controls", true).apply()
@@ -120,6 +139,13 @@ object PanelShortcuts {
         return saved
     }
     fun save(ctx: Context, ids: List<String>) = prefs(ctx).edit().putString("tiles", ids.joinToString(",")).apply()
+
+    /** 1.4: a tile of a part turned off (Features) isn't shown. */
+    fun allowed(id: String): Boolean = when (id) {
+        "deck" -> Features.deck
+        "controls", "gyro" -> Features.gameControls
+        else -> true
+    }
 
     /**
      * The live tiles. [close] closes the panel; [after] closes it and then runs something
@@ -158,9 +184,14 @@ object PanelShortcuts {
         val lightsOff = LightSettings.global.mode == LightMode.OFF
         return mapOf(
             // ── Wayfinder
-            "perf" to PanelTile(ic("perf"), "Performance", PerfMode.values().firstOrNull { it.value == perf }?.label ?: "—", perf > 0) {
-                // AYN may also move the fan (Standard → Quiet): refresh again once it has.
-                touch("perf"); QuickSettings.cyclePerformance(ctx); refresh(350); refresh(2000) },
+            // with ClusterTune / Pulse: the tile names it and changes nothing (AYN's Medium / High would pin the CPU at
+            // the tuner's limits) — compatibility first
+            "perf" to Tuners.installed(ctx).let { t -> PanelTile(ic("perf"), "Performance", t ?: PerfMode.ofAyn(perf)?.label ?: "—", perf > 0 && t == null) {
+                if (t != null) ForegroundAppService.pill("$t manages the CPU — Wayfinder leaves performance to it")
+                else {
+                    // AYN may also move the fan (Standard → Quiet): refresh again once it has.
+                    touch("perf"); QuickSettings.cyclePerformance(ctx); refresh(350); refresh(2000)
+                } } },
             "fan" to PanelTile(ic("fan"), "Fan", FanMode.values().firstOrNull { it.value == fan }?.label ?: "Custom", fan != 4) {
                 touch("fan"); QuickSettings.cycleFan(ctx); refresh(350) },
             "fancurve" to PanelTile(ic("fancurve"), "Fan curve", null, false) { after(300) { QuickSettings.openFanCurve(ctx) } },
@@ -245,13 +276,19 @@ object PanelShortcuts {
                 QuickSettings.exec("settings put system trigger_input_mode ${(trig + 1) % 3}"); refresh(500) },
             "landscape" to switch("landscape", "Force landscape", sys("force_landscape", 0) == 1) { "settings put system force_landscape ${if (it) 1 else 0}" },
             "vibration" to switch("vibration", "Vibration", sys("vibrate_on", 1) == 1) { "settings put system vibrate_on ${if (it) 1 else 0}" },
-            "bypass" to switch("bypass", "Direct power", sys("is_charging_separation", 0) == 1) { "settings put system is_charging_separation ${if (it) 1 else 0}" },
-            "limit80" to switch("limit80", "80 % limit", sys("percent_80_charge_limit", 0) == 1) { "settings put system percent_80_charge_limit ${if (it) 1 else 0}" },
-        )
+            // through Charging: AYN's node is checked (and written if its settings app didn't)
+            "bypass" to sys("is_charging_separation", 0).let { v -> PanelTile(ic("bypass"), "Direct power", onOff(v == 1), v == 1) {
+                Charging.set(ctx, direct = v != 1); refresh(500); refresh(2500) } },
+            "limit80" to sys("percent_80_charge_limit", 0).let { v -> PanelTile(ic("limit80"), "80 % limit", onOff(v == 1), v == 1) {
+                Charging.set(ctx, limit = v != 1); refresh(500); refresh(2500) } },
+        ) + chosen(ctx).filter { it !in CATALOG }.mapNotNull { id ->
+            // 1.4 (Reddit): the "Open…" tiles — the panel closes first so the app lands on the game's screen
+            info(ctx, id)?.let { i -> id to PanelTile(i.icon, i.name, null, false, i.pkg) { after(250) { ForegroundAppService.open(id) } } }
+        }
     }
 }
 
-class PanelTile(val icon: ImageVector, val label: String, val value: String?, val on: Boolean, val action: () -> Unit)
+class PanelTile(val icon: ImageVector, val label: String, val value: String?, val on: Boolean, val pkg: String? = null, val action: () -> Unit)
 
 object QuickSettings {
     fun exec(cmd: String) = Thread { PServiceBridge.exec(cmd) }.apply { isDaemon = true }.start()

@@ -17,7 +17,7 @@ import androidx.compose.runtime.setValue
  * on the same physical button ([ThorButton.label] is the name, [ThorButton.printed] the letter on the Thor).
  */
 object ButtonNames {
-    /** 0 Automatic · 1 as printed · 2 Xbox. */
+    /** 0 Automatic · 1 as printed · 2 Xbox · 3 PlayStation (1.4, GitHub #50: by position like Xbox, as symbols). */
     var mode by mutableIntStateOf(0)
         private set
     /** AYN's controller style is Xbox (Settings.System temp_abxy_layout_mode = 0), kept up to date. */
@@ -29,7 +29,7 @@ object ButtonNames {
         if (prefs != null) return
         val app = ctx.applicationContext
         prefs = app.getSharedPreferences("thor_settings", Context.MODE_PRIVATE)
-        mode = prefs!!.getInt("button_names", 0).coerceIn(0, 2)
+        mode = prefs!!.getInt("button_names", 0).coerceIn(0, 3)
         fun read() = runCatching { Settings.System.getInt(app.contentResolver, "temp_abxy_layout_mode", 1) == 0 }.getOrDefault(false)
         aynXbox = read()
         runCatching {
@@ -38,13 +38,20 @@ object ButtonNames {
         }
     }
 
-    fun choose(m: Int) { mode = m.coerceIn(0, 2); prefs?.edit()?.putInt("button_names", mode)?.apply() }
+    fun choose(m: Int) { mode = m.coerceIn(0, 3); prefs?.edit()?.putInt("button_names", mode)?.apply() }
 
-    /** Names the Xbox way right now. */
-    val xbox: Boolean get() = when (mode) { 1 -> false; 2 -> true; else -> aynXbox }
+    /** Names by position (the Xbox way — or PlayStation's symbols) right now. */
+    val xbox: Boolean get() = when (mode) { 1 -> false; 2, 3 -> true; else -> aynXbox }
+    /** PlayStation symbols (1.4, GitHub #50). */
+    val playStation: Boolean get() = mode == 3
 
     /** The name of a PRINTED button. */
-    fun of(b: ThorButton): String = shown(b).printed
+    fun of(b: ThorButton): String = if (playStation) psSymbol(shown(b)) ?: b.printed else shown(b).printed
+
+    /** The Xbox-position letter as PlayStation's symbol: A (bottom) ✕ · B (right) ○ · X (left) □ · Y (top) △. */
+    fun psSymbol(xboxLetter: ThorButton): String? = when (xboxLetter) {
+        ThorButton.A -> "✕"; ThorButton.B -> "○"; ThorButton.X -> "□"; ThorButton.Y -> "△"; else -> null
+    }
 
     /** The button whose printed letter is the name shown for [b] (for its glyph colour). */
     fun shown(b: ThorButton): ThorButton = if (!xbox) b else faceSwap(b)

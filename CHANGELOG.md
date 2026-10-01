@@ -1,5 +1,113 @@
 # Changelog
 
+## 1.4 — October 2026
+
+**Simpler**
+- **New: choose what Wayfinder is for** — "Just switching screens" (move and swap apps, Recents, Home on each screen;
+  the AYN button stays AYN's, no game controls) or "Everything". Asked in the tour, and once on the Hub after the
+  update. Change it any time in More → Features, part by part (combos, quick panel, game controls, keyboard & mouse,
+  stick lights). Nothing is deleted, and updating changes none of your settings.
+- **New Hub** — Screens · Controller · Games · Battery · Quick panel · Keyboard · More (sound, stick lights, appearance,
+  hints & pop-ups, features, help); the Quick panel card only while the AYN button opens it. "App profiles" is now "Games".
+- **Shorter pages** — each page shows its main settings; the rest are behind one "More options" row (search opens it
+  for you). The keyboard shows your languages, the others behind "Add a language".
+- **Combos page** — only the combos you have, in order of their first button; "+ Add a combo" lists the actions in groups. Pressing
+  a combo shows it with Change and Remove.
+- **Hints & pop-ups** (More) — turn off the "Your controls" sheet, the combo list you see while holding a button (or show it
+  later), and the Recent apps hint.
+- **One short line per setting** — the rest of the explanation is behind a small "?" (and shows while the controller is
+  on the setting). Choices with many options are one row showing the current one; press it to pick another.
+- **Game controls** — the bottom bar is "Change a button" and "More" (chords, presets, sharing, the Shift button, the
+  input layer for this game, reset), plus your changes when there are some.
+- **Back puts you where you were** — going back from a page selects the row you opened it from.
+
+**New**
+- **Swipes from the controller** — Swipe up / down / left / right on the controller's screen, for a combo or a game's
+  button (YouTube Shorts, web pages, photos).
+- **Battery** (a new Hub page) — what the Thor draws right now, the time left and the CPU's top speed in force, the
+  charging switches (they moved here from Screens) and sleep & standby.
+- **With ClusterTune or Pulse installed, Wayfinder steps aside**: no per-game performance from Wayfinder (with Pulse,
+  no per-game fan and refresh rate either), and the quick panel's Performance tile shows the tuner's name and changes
+  nothing — the two never fight over the CPU. The pages say so. (Lower CPU limits of Wayfinder's own were built and
+  measured on a Thor: they saved too little to keep — 0 to 10 % — so ClusterTune is the app for that.)
+- **Warnings for apps that do the same job** — Mjolnir (the Home button), BiFrost (the stick lights) or OdinTools
+  (per-app performance and fan) active next to Wayfinder: the Hub says what can conflict and what to do, once. Help &
+  status lists every such app found, handled or not.
+- **Input layer: where it runs** — Everywhere, Only games I set up (new installs), or Nowhere; and per app
+  Automatic / On / Off, for games that don't like the copied controller.
+- **Home + X opens the game you're playing** (its own controls, a copy of the emulator's until you change something).
+- **Two-button combos can be tapped twice, three times or held** — Home + B twice, Home + B held… each its own action.
+- **New actions:** record the screen, close the other screen's app, AYN's own drawer (keep it on the AYN button's hold
+  with the quick panel on its tap), Home on the controller's screen.
+- **PlayStation button names** — ✕ ○ □ △ in every hint (Controller → More options → Button names).
+- **Your own colours** — a flat look: background, cards, text and accent, on a colour wheel or as a hex code
+  (More → Appearance).
+- **Wake the bottom screen with a double tap** — a new option (Screens): a thumb brushing it doesn't wake it.
+- **Stop charging at 80 % and direct power** — now on the new Battery page (they were only quick-panel tiles).
+- **The controller goes with a game you move** — move or swap a game (hold Back) and the controller follows it to its
+  new screen. Controller → "Goes with a game you move" (on for new installs), and per game: Games → the game, or
+  Home + X → More ("Usual / Goes with it / Stays"). "Always top / bottom" keep the controller where they say.
+- **Quick panel tiles that open an app, an app pair or a Wayfinder page** — Quick panel → Shortcuts → "Add — a tile
+  that opens…". An app opens on the screen with the controller.
+- **Headphones & Bluetooth EQ** (More → Sound) — wired headphones, USB audio and Bluetooth each get their own sound:
+  a few presets, or shape the curve yourself (drag the points, or A then the D-pad). It follows what you plug in; the
+  speaker fix still only plays on the speakers.
+- **Stick lights can follow the screens' brightness** — the rings dim and brighten with the screens. A colour can also
+  be typed as a hex code. "Screen colour" now reads the screen less often while the colour holds (it cost about
+  0.4 W — measured), and its page says what it costs.
+- **Fewer ads in the web guide** — well-known ad and tracking networks aren't loaded.
+- **Gyro "While touching a screen"** — the gyro aims only while a finger rests on either screen.
+- **Trackpad "Direct" mode** — Keyboard & mouse: the pad is the game's screen; touch, drag and swipe with one finger
+  (the mode button goes Mouse → Touch → Direct).
+
+**Fixed**
+- RetroArch (and any game) with the input layer on: a short Back and Back with another button held (Select + Back =
+  RetroArch's menu) reach the game as the controller's own Back, and hold Back still moves / swaps it.
+- The on-screen keyboard typed the neighbouring key when you pressed A and moved quickly.
+- Games that check the keyboard is open (Tomodachi Life in Eden) took an empty name at once and asked again for ever:
+  a thin keyboard strip now stays on the game's screen while you type on the other one.
+- Recent apps froze the second time it was opened from the same app.
+- The quick panel's RAM reading disappeared after a second.
+- The navigation bar flashed in apps: Wayfinder's "keep it hidden" check only looks at the top screen, confirms first
+  and gives up if it doesn't help (and can be turned off: Screens → More options).
+- "Input layer couldn't start (exit 4)" on a Thor whose controller style was never changed; Wayfinder moved to an SD card.
+- AYN's stick mouse stayed on after a crash or an update (the pointer stuck on one screen).
+- Home + X in an emulator that keeps several games open picked the wrong game.
+- The bottom screen turned off at once when an app appeared on it (the timer counted from the last touch).
+- The controller stayed on the bottom screen when it went dark — it moves to the top.
+- Wayfinder could stay off after a restart: Android sometimes stops it while the Thor starts. Wayfinder now checks a
+  minute later and turns itself back on.
+- "Input layer couldn't start (exit 4)" on Thors where the controller doesn't restart: after two tries the layer starts
+  another way, automatically (Help & status says "compatibility mode").
+- RetroArch set to use Back held (hotkey enable, hold fast-forward) keeps Back as before with the input layer.
+- Stick lights went back to AYN's colours after closing and opening the lid.
+- With a larger font size, the combo list and the quick panel cut their text; the list now uses as many columns as fit
+  (one on the bottom screen when needed).
+- Screenshots no longer include the quick panel or Wayfinder's hints.
+- "Controller to the top screen" sometimes did nothing while the top app showed its status bar.
+- After sleeping with the quick panel open, the controller stayed on the bottom screen for a few seconds.
+- A combo's own message ("Controller unlocked"…) vanished as soon as you let go of Home.
+- The Recent apps controller hint sometimes didn't show.
+- Two-button combos with the D-pad or a stick ignored "twice / three times / held".
+- With the combo list turned off, a slow press of Home did nothing.
+- Sending an app to the top screen could leave the controller on the bottom one (the home screen that opened there
+  took it).
+- **Everything reachable with the controller**: the "?" of a setting (it opens while the controller is on the card), the
+  frame-rate card and every switch with settings under it, "+ Add a combo", "Open Game controls", "Import controls",
+  the text fields (the D-pad passes over them; A types, B stops), your own Keyboard & mouse buttons, and text under a
+  page's last button (Sleep & standby's log). Left and right no longer jump out of a page's settings; a row of choices
+  is entered on the current one.
+- "Stop charging at 80 %" said "the battery stops at 80 %" while it sat at 100 %: the limit stops charging, it doesn't
+  bring a fuller battery down. The card and the Hub now say what the charger does right now ("80 % limit", "full",
+  "on the charger"), and Wayfinder checks AYN applied the limit.
+- "Test the controller": its title was under the status bar.
+- With a large font, quick panel tiles cut their name ("Keyboard &"): it now shrinks to fit.
+- A bottom screen left black by something else (another app, AYN's own bottom-off, a brightness at 0): "Bottom screen
+  off / on" now brings it back instead of blanking it, and Help & status has "The bottom screen stays black (touch
+  still works) → Fix now".
+- The tour: the controller starts on the "What do you want Wayfinder for?" choices (A on Next skipped the question),
+  and goes on to Next once the quick setup is all done (it stayed on a "Done ✓" that did nothing).
+
 ## 1.3.2 — September 2026
 
 - **New: emoji in Wayfinder's keyboard** — a 🙂 key in the bottom row: five groups of emoji (the group key steps

@@ -149,7 +149,12 @@ object PadLayer {
     private fun trustedBinary(): String? {
         if (appUid < 0) { untrustedWhy = "no app uid"; return null }
         val user = appUid / 100_000
-        val path = "/data/user/$user/${BuildConfig.APPLICATION_ID}/files/wfpad"
+        val internal = "/data/user/$user/${BuildConfig.APPLICATION_ID}/files/wfpad"
+        // 1.4 (GitHub #39): moved to an SD card set up as internal storage, the app's files live on that card
+        val path = if (java.io.File(internal).exists()) internal else runCatching {
+            java.io.File("/mnt/expand").listFiles().orEmpty()
+                .map { java.io.File(it, "user/$user/${BuildConfig.APPLICATION_ID}/files/wfpad") }.firstOrNull { it.exists() }?.path
+        }.getOrNull() ?: internal
         val st = try { android.system.Os.stat(path) } catch (e: android.system.ErrnoException) {
             untrustedWhy = if (e.errno == android.system.OsConstants.ENOENT) "file missing (user $user)"
                 else "unreadable: ${android.system.OsConstants.errnoName(e.errno) ?: e.errno} (user $user)"
@@ -287,8 +292,13 @@ object PadLayer {
     private fun rebuildAynPad(done: CountDownLatch?): Boolean = synchronized(rebuildLock) { rebuildAynPadNow(done) }
 
     private fun rebuildAynPadNow(done: CountDownLatch?): Boolean {
-        val mode = getSetting(MODE); val flip = getSetting(FLIP)
-        if (mode !in 0..1 || flip !in 0..1) { status("error layout-unknown $mode $flip"); return false }
+        // 1.4 (GitHub #39): on a Thor whose controller style was never changed these read null — AYN's defaults
+        // then (Standard, not flipped: the same as AYN's drawer shows), written back as such afterwards
+        val mode = getSetting(MODE) ?: 1; val flip = getSetting(FLIP) ?: 0
+        if (mode !in 0..1 || flip !in 0..1) {
+            status(if (mode == 2) "error layout-unknown controller style \"Ban On Use\" (AYN drawer → Controller style → Standard or Xbox)"
+                else "error layout-unknown $mode $flip"); return false
+        }
         runCatching { marker().writeText("$mode $flip") }
         try {
             putSetting(MODE, 1 - mode!!); putSetting(FLIP, 1 - flip!!)
@@ -361,9 +371,16 @@ object PadLayer {
         }
     }
 
+    private const val FORCE_COMPAT = false   // test builds only
+    /** 1.4 (GitHub #39): AYN's pad didn't go away when its layout was flipped (twice in a row) — start without the
+     *  takeover race: copy at once, grab AYN's pad, hide it (kept until the layer stops). */
+    @Volatile var compatMode = FORCE_COMPAT
+        private set
+
     private fun runLayer() {
         val failures = ArrayDeque<Long>()
         var lostRaces = 0
+        var noSwitch = 0
         var tookNumber = false
         while (wanted) {
             val (path, name) = resolveOriginal() ?: run { Thread.sleep(1000); null } ?: continue
@@ -371,7 +388,7 @@ object PadLayer {
             // The number the copy should end up with: the lowest one no OTHER pad holds (AYN's
             // pad may sit at #2 after an earlier run; the copy takes #1 all the same).
             val wantNumber = snapshot().takeIf { it.isNotEmpty() }?.let { targetNumber(it, path) } ?: 0
-            val pb = ProcessBuilder(exe, path, "grab", CLONE_PHYS, "4000").redirectErrorStream(true)
+            val pb = ProcessBuilder(exe, path, "grab", CLONE_PHYS, if (compatMode) "0" else "4000").redirectErrorStream(true)
             val p = runCatching { pb.start() }.getOrElse { status("error start ${it.message}"); Thread.sleep(2000); null } ?: continue
             proc = p
             status("starting $name ($path, controller #$wantNumber)")
@@ -400,7 +417,8 @@ object PadLayer {
             p.inputStream.bufferedReader().forEachLine { line ->
                 val f = line.split(' ')
                 when (f[0]) {
-                    "A" -> { busyUntil.set(System.currentTimeMillis() + 15_000); Thread { if (!rebuildAynPad(created)) quitWfpad() }.apply { isDaemon = true; start() } }
+                    // 1.4 (GitHub #39): wfpad doesn't read "q" while it waits for AYN's pad — stop it for real
+                    "A" -> { busyUntil.set(System.currentTimeMillis() + 15_000); Thread { if (!rebuildAynPad(created)) { quitWfpad(); runCatching { p.destroy() } } }.apply { isDaemon = true; start() } }
                     "R" -> {
                         created.countDown()
                         tookNumber = true
@@ -427,17 +445,18 @@ object PadLayer {
                         // was worked out (an app update) and has gone since. #1 free NOW but the
                         // copy isn't #1 = the same: go again.
                         val oneFree = n > 1 && snap.none { it.gamepad && !it.isClone && it.number == 1 }
-                        if ((wantNumber > 0 && n > wantNumber) || oneFree) {
+                        // 1.4 (GitHub #39): compatibility mode has no race to lose — AYN's pad keeps its number, hidden
+                        if (!compatMode && ((wantNumber > 0 && n > wantNumber) || oneFree)) {
                             lost = true
                             status("lost-race copy is #$n, AYN's pad was #$wantNumber — retrying")
                             quitWfpad()
                         } else {
-                            lostRaces = 0
+                            lostRaces = 0; noSwitch = 0
                             nodePath?.let { hideOthers(it, snap) }
-                            status("on ${f.drop(1).dropLast(1).joinToString(" ")} · controller #$n")
+                            status("on ${f.drop(1).dropLast(1).joinToString(" ")} · controller #$n" + if (compatMode) " (compatibility mode)" else "")
                             // Not #1 while a previous copy was still listed at #1: look again once
                             // Android has let it go — #1 free by then = take it (one retake)
-                            if (n > 1) Thread {
+                            if (n > 1 && !compatMode) Thread {
                                 Thread.sleep(2500)
                                 val s2 = snapshot()
                                 val n2 = s2.firstOrNull { it.isClone && it.path == nodePath }?.number ?: 0
@@ -448,7 +467,8 @@ object PadLayer {
                             onCloneChanged?.invoke()
                         }
                     }
-                    "S" -> { busyUntil.set(System.currentTimeMillis() + 15_000); cloneNode.get()?.let { runCatching { hideOthers(it) } }; status("source ${f.drop(1).joinToString(" ")}") }
+                    "S" -> { busyUntil.set(System.currentTimeMillis() + 15_000); cloneNode.get()?.let { runCatching { hideOthers(it) } }
+                        if (!compatMode) status("source ${f.drop(1).joinToString(" ")}") }
                     "W" -> status("waiting for AYN's pad")
                     "L" -> status("latency $line")      // L n p50 p99 max (µs)
                     // withheld from the game (Home/Back held): to the app, for its shortcuts
@@ -472,6 +492,8 @@ object PadLayer {
             val why = "exit $code" + if (lastWfpad.isNotEmpty()) ": $lastWfpad" else ""
             if (lost) {
                 if (++lostRaces >= 3) { status("error lost-race-3x ($why) — layer off"); wanted = false; break }
+            } else if (code == 4 && !compatMode) {             // AYN's pad didn't go away (GitHub #39)
+                if (++noSwitch >= 2) { compatMode = true; status("AYN's pad didn't restart — compatibility mode") }
             } else if (code != 2) {                            // 2 = no AYN pad for 10 s: just retry
                 val now = System.currentTimeMillis()
                 failures.addLast(now); while (failures.isNotEmpty() && now - failures.first() > 60_000) failures.removeFirst()

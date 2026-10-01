@@ -222,10 +222,11 @@ class KeyboardController(private val sink: () -> KeySink?) {
 
     // ── controller ───────────────────────────────────────────────────────
     /** D-pad / stick step. dx, dy ∈ {-1, 0, 1}. */
-    fun moveFocus(dx: Int, dy: Int) {
+    fun moveFocus(dx: Int, dy: Int, at: Long = android.os.SystemClock.uptimeMillis()) {
         padActive = true
         if (popup != null) { if (dx != 0) movePopup(dx) ; if (dy > 0) choosePopup(null); return }
         val grid = rows()
+        val before = focus
         val (r0, c0) = focus ?: run { focus = defaultFocus(grid); return }
         if (dy != 0) {
             val r1 = (r0 + dy).coerceIn(0, grid.lastIndex)
@@ -234,13 +235,30 @@ class KeyboardController(private val sink: () -> KeySink?) {
             val row = grid[r0]
             focus = r0 to ((c0 + dx) % row.size + row.size) % row.size   // wrap around
         }
+        if (focus != before) { moves.addLast(Triple(at, page, before)); while (moves.size > 8) moves.removeFirst() }
     }
 
     fun focusedKey(): KeySpec? = focus?.let { (r, c) -> rows().getOrNull(r)?.getOrNull(c) }
 
+    /** 1.4 (GitHub #61): typing fast, A then a quick D-pad move typed the NEXT key — the key was read when A came
+     *  back up. Now the key is the one that had the focus when A went down: each move keeps the focus it left and
+     *  when (the input's own time), so even a move handled before A's down (A comes a longer way) is undone. */
+    private val moves = ArrayDeque<Triple<Long, Page, Pair<Int, Int>?>>()
+    private var armed: Pair<Page, Pair<Int, Int>>? = null
+    fun controllerArm(downAt: Long) {
+        armed = null
+        if (popup != null) return
+        // the focus at downAt = what the first move made after it left behind (else the focus now)
+        val m = moves.firstOrNull { it.first > downAt }
+        val f = if (m != null) m.third?.let { m.second to it } else focus?.let { page to it }
+        armed = f
+    }
+
     fun controllerPress() {
         popup?.let { (_, opts) -> choosePopup(opts[popupIndex]); return }
-        val k = focusedKey() ?: run { focus = defaultFocus(rows()); return }
+        val a = armed; armed = null
+        val k = (if (a != null && a.first == page) rows().getOrNull(a.second.first)?.getOrNull(a.second.second) else null)
+            ?: focusedKey() ?: run { focus = defaultFocus(rows()); return }
         press(k)
     }
 

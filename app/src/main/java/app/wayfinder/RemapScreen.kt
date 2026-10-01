@@ -46,6 +46,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.CornerRadius
@@ -89,7 +90,7 @@ import kotlin.math.hypot
  * button you press), Keyboard, Mouse, Actions — and what it does when held (normal, turbo,
  * toggle). L1 / R1 switch the popup's tabs, Y resets the control, B closes; outside the popup
  * X switches the face buttons. Everything applies only while the app has the controller.
- * Critic round 2 applied (one focus style, tabs look like tabs, "when held" at the bottom,
+ * Design: (one focus style, tabs look like tabs, "when held" at the bottom,
  * an inspector in the drawing's empty screen, hints hidden while listening).
  */
 
@@ -164,14 +165,15 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
         value = withContext(Dispatchers.IO) { runCatching {
             val pm = ctx.packageManager; val ai = pm.getApplicationInfo(appPkg, 0)
             AppEntry(pkg, pm.getApplicationLabel(ai).toString(),
-                runCatching { pm.getApplicationIcon(ai).toBitmap(96, 96).asImageBitmap() }.getOrNull())
+                runCatching { pm.getApplicationIcon(ai).toBitmap(96, 96).asImageBitmap() }.getOrNull(), GameApps.isGame(ai, appPkg))
         }.getOrNull() }
     }
     val appLabel = app?.label ?: appPkg
     val label = game?.title ?: appLabel
     // A near-solid wash inside the cards: the wallpaper showing through made pills look focused.
     val wash = if (g.dark) Color(0xFF1B1E26).copy(alpha = .62f) else Color.White.copy(alpha = .5f)
-    fun save(r: PadRemap) = Profiles.update(pkg) { it.copy(remap = r.takeIf { !r.isEmpty }) }
+    // 1.4: a change is a set-up game — the layer starts for it right away ("Only games I set up")
+    fun save(r: PadRemap) { Profiles.update(pkg) { it.copy(remap = r.takeIf { !r.isEmpty }) }; PadLayerCtl.nowFor(ctx, appPkg) }
 
     var sel by remember { mutableStateOf(MapCtl.A) }
     // 1.3: the D-pad direction being edited (its page opens the same editor as a button)
@@ -204,7 +206,9 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
     LaunchedEffect(confirmReset) { if (confirmReset) { delay(3000); confirmReset = false } }
     LaunchedEffect(popup) {
         if (popup != Popup.BIND) dirSel = null
-        if (popup == null) { listening = false; recording = false; chordListen = false; chordPair = emptyList() }
+        // 1.4 (review): Chords / the bind popup closed (to More too) — no capture left running, no half-picked pair
+        if (popup != Popup.BIND && popup != Popup.GYRO) { listening = false; recording = false }
+        if (popup != Popup.CHORDS) { chordListen = false; chordPair = emptyList() }
     }
 
     // Face buttons: two choices; picking the one all apps use = follow all apps (no override).
@@ -312,7 +316,10 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
             val b = ButtonEngine.menuButton(n)
             // B closes the popup (both halves kept, or Android's Back leaves the screen on the release)
             if (b == ThorButton.B && (open || bHeldDown == n.downTime)) {
-                if (e.type == KeyEventType.KeyDown) { bHeldDown = n.downTime; popup = if (popup == Popup.BIND && dirSel != null) Popup.DPAD else null } else bHeldDown = -1L
+                if (e.type == KeyEventType.KeyDown) { bHeldDown = n.downTime; popup = when {
+                    popup == Popup.BIND && dirSel != null -> Popup.DPAD
+                    popup == Popup.CHORDS || popup == Popup.PRESETS -> Popup.MORE   // 1.4: opened from More
+                    else -> null } } else bHeldDown = -1L
                 return@onPreviewKeyEvent true
             }
             // 1.3: the D-pad's page — press a direction to change it, X to swap with the left stick
@@ -361,7 +368,9 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                     Row(Modifier.padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, null, tint = g.accent, modifier = Modifier.size(20.dp))
-                        Text(if (inGame) "Back to game" else "App profiles", color = g.textPrimary, style = MaterialTheme.typography.labelLarge)
+                        val gamey = app?.isGame != false || game != null || GameProfiles.forApp(appPkg).isNotEmpty() || GameProfiles.runningIn(appPkg) != null
+                        Text(if (!inGame) "Games" else if (gamey) "Back to game" else "Back to $appLabel",
+                            color = g.textPrimary, style = MaterialTheme.typography.labelLarge, maxLines = 1)
                         Hint(ButtonNames.m("B"))
                     }
                 }
@@ -377,7 +386,7 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                             Text(when {
                                 game != null -> "$appLabel · this game only"
                                 GameProfiles.runningIn(appPkg) != null -> "$appLabel · all its games — switch for this game only"
-                                inGame -> "Not this game? Switch"
+                                inGame -> if (app?.isGame != false || GameProfiles.forApp(appPkg).isNotEmpty()) "Not this game? Switch" else "Not this app? Switch"
                                 else -> "Only while $label has the controller"
                             }, color = g.accent, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         }
@@ -399,12 +408,12 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                 }
             }
             Spacer(Modifier.height(8.dp))
-            if (!PadLayerCtl.wanted) {
+            if (PadLayerCtl.need(appPkg) == false) {
                 Row(Modifier.fillMaxWidth().background(Color(0x33D64545), RoundedCornerShape(14.dp)).padding(horizontal = 14.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("The input layer is off, so these changes do nothing right now.", color = g.textPrimary,
+                    Text("The input layer is off for $appLabel, so these changes do nothing right now.", color = g.textPrimary,
                         style = MaterialTheme.typography.labelLarge, modifier = Modifier.weight(1f))
-                    Pill("Turn it on", behind, fill = false) { PadLayerCtl.set(ctx, true) }
+                    Pill("Turn it on for $appLabel", behind, fill = false) { PadLayerCtl.setForApp(ctx, appPkg, true) }
                 }
                 Spacer(Modifier.height(8.dp))
             }
@@ -445,9 +454,9 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                             color = if (live != null || picking) g.accent else g.textSecondary,
                             style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis,
                         )
-                        Pill(if (picking) "Cancel" else "Find by pressing", behind, fill = false) { picking = !picking }
-                        Pill(if (remap.chords.isEmpty()) "Chords  ›" else "Chords (${remap.chords.size})  ›", behind, fill = false) { popup = Popup.CHORDS }
-                        Pill(if (remap.changes == 0) "No changes" else "${remap.changes} change${if (remap.changes > 1) "s" else ""}  ›", behind, fill = false) { popup = Popup.CHANGES }
+                        // 1.4 (§10.5): two things here — change a button, More (chords, presets, sharing…); the count when there is one
+                        Pill(if (picking) "Cancel" else "Change a button", behind, fill = false) { picking = !picking }
+                        if (remap.changes > 0) Pill("${remap.changes} change${if (remap.changes > 1) "s" else ""}  ›", behind, fill = false) { popup = Popup.CHANGES }
                         Pill("More  ›", behind, fill = false) { popup = Popup.MORE }
                     }
                 }
@@ -470,20 +479,21 @@ fun RemapScreen(myDisplayId: Int, pkg: String, onBack: () -> Unit, inGame: Boole
                         Popup.APPS -> AppsPanel(pkg, appLabel, popupFirst, onPick = { popup = null; if (it != pkg) onSwitchApp(it) },
                             onAll = { popup = null; onAllApps() }) { popup = null }
                         Popup.CHORDS -> ChordsPanel(remap, popupFirst, chordListen, chordPair, onListen = { chordListen = !chordListen },
-                            onDone = { chordPair = emptyList(); chordListen = false }, save = ::save) { popup = null }
+                            onDone = { chordPair = emptyList(); chordListen = false }, save = ::save) { popup = Popup.MORE }
                         Popup.DPAD -> DpadPopup(remap, popupFirst, ::save, onEdit = { d -> dirSel = d; tab = Tab.CONTROLLER; slot = 0; popup = Popup.BIND }) { popup = null }
                         Popup.GYRO -> GyroPopup(remap.gyro, listening, popupFirst, PadLayerCtl.wanted, onListen = { listening = !listening },
                             set = { save(remap.copy(gyro = it)) }, reset = ::resetSel, close = { popup = null })
                         Popup.CHANGES -> ChangesPanel(remap, popupFirst, ::save) { popup = null }
-                        Popup.PRESETS -> PresetsPanel(pkg, remap, popupFirst, ::save, { setFace(FaceLayout.XBOX) }) { popup = null }
+                        Popup.PRESETS -> PresetsPanel(pkg, remap, popupFirst, ::save, { setFace(FaceLayout.XBOX) }) { popup = Popup.MORE }
                         Popup.PERF -> PerfPanel(pkg, label, appPkg, popupFirst) { popup = null }
-                        Popup.MORE -> MorePanel(remap, popupFirst, onPresets = { popup = Popup.PRESETS },
+                        Popup.MORE -> MorePanel(remap, popupFirst, appPkg, appLabel, onPresets = { popup = Popup.PRESETS },
                             onShare = {
                                 popup = null
                                 if (ProfileShare.export(ctx, pkg) == null) ForegroundAppService.pill("Nothing to share yet — map some buttons first", myDisplayId, 3000)
                                 else sharing = true
                             }, onReset = { save(PadRemap()); popup = null },
-                            onShift = { b -> save(remap.copy(shift = b, shifted = if (b == null) emptyMap() else remap.shifted - b)) }) { popup = null }
+                            onShift = { b -> save(remap.copy(shift = b, shifted = if (b == null) emptyMap() else remap.shifted - b)) },
+                            onChords = { popup = Popup.CHORDS }) { popup = null }
                         null -> {}
                     }
                 }
@@ -891,7 +901,7 @@ private fun PresetsPanel(pkg: String, remap: PadRemap, first: FocusRequester, sa
 
 
 
-// ── the gyro popup (plan §6f, 3) ─────────────────────────────────────────────
+// ── the gyro popup ─────────────────────────────────────────────
 
 private val SENS_STEPS = listOf(.3f, .4f, .5f, .6f, .7f, .8f, .9f, 1f, 1.2f, 1.4f, 1.6f, 1.8f, 2f, 2.5f, 3f, 3.5f, 4f)
 private val VSCALE_STEPS = listOf(.5f, .6f, .7f, .8f, .9f, 1f, 1.1f, 1.2f, 1.3f, 1.4f, 1.5f)
@@ -928,7 +938,7 @@ private fun GyroPopup(gyro: GyroSettings, listening: Boolean, first: FocusReques
                 Pill("Close", fill = false, hint = ButtonNames.m("B"), onClick = close)
             }
         }
-        if (!layerOn) Text("Gyro needs the input layer — turn it on in Wayfinder, then Controller.",
+        if (!layerOn) Text("Gyro needs the input layer — turn it on here (More › Input layer) or in Controller → More options.",
             color = Color(0xFFD64545), style = MaterialTheme.typography.labelMedium)
         Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(14.dp)) {
             // left: what it drives, and when
@@ -980,6 +990,7 @@ private fun GyroPopup(gyro: GyroSettings, listening: Boolean, first: FocusReques
                         GyroOn.OFF_WHILE_HOLD -> "On, and off while ${gyro.button.label} is held (to re-centre your hands)."
                         GyroOn.TRIGGER_FULL -> "On while ${gyro.button.label} is pulled all the way — aim down sights, then fine-aim."
                         GyroOn.TRIGGER_HALF -> "On from a light pull of ${gyro.button.label}."
+                        GyroOn.TOUCH -> "On while a finger rests on either screen — rest a thumb on the bottom screen to aim."
                     } + (ControlsStore.triggerFor(ThorAction.KEYBOARD)?.let { "  ${it.label()} (keyboard & mouse panel) can switch it off for this game." } ?: ""),
                         color = g.textSecondary, style = MaterialTheme.typography.labelSmall)
                 }
@@ -1239,7 +1250,7 @@ private fun NavKeys(keys: List<Int>, first: FocusRequester, t: (Int) -> Unit) {
     }
 }
 
-// ── the macro tab (phase 3, plan §6g) ─────────────────────────────────────────
+// ── the macro tab ─────────────────────────────────────────
 
 private val HOLD_STEPS = listOf(10, 20, 30, 40, 50, 60, 80, 100, 120, 150, 200, 250, 300, 400, 500, 750, 1000, 1500, 2000, 3000, 5000)
 private val GAP_STEPS = listOf(0) + HOLD_STEPS
@@ -1365,7 +1376,7 @@ private fun MacroTab(cur: RemapTarget?, first: FocusRequester, recording: Boolea
     }
 }
 
-// ── which game (Game controls opened from a game, plan §6h) ─────────────────────
+// ── which game (Game controls opened from a game) ─────────────────────
 
 @Composable
 private fun AppsPanel(current: String, appLabel: String, first: FocusRequester, onPick: (String) -> Unit, onAll: () -> Unit, onClose: () -> Unit) {
@@ -1578,18 +1589,25 @@ private fun PerfPanel(key: String, label: String, appPkg: String, first: FocusRe
     val base = cfg.lights ?: (if (isGame) AppConfigStore.get(appPkg).lights else null) ?: app.wayfinder.lights.LightSettings.global
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         PanelTitle("Performance & lights · $label", onClose, first)
-        Text(if (isGame) "Only while this game runs. “Usual” = what its app uses (App profiles), else your own setting."
+        Text(if (isGame) "Only while this game runs. “Usual” = what its app uses (Games), else your own setting."
             else "While $label is on a screen. “Usual” = your own setting.",
             color = g.textSecondary, style = MaterialTheme.typography.bodySmall)
+        // 1.4: ClusterTune / Pulse installed → what they manage isn't offered here (compatibility first)
+        val tuner = Tuners.installed(androidx.compose.ui.platform.LocalContext.current)
+        if (tuner != null) Text(Tuners.note(tuner), color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+        if (tuner == null) {
         SubLabel("Performance")
-        Choice(listOf("Usual") + PerfMode.values().map { it.label }, (cfg.perf?.ordinal ?: -1) + 1) { i ->
-            set { it.copy(perf = if (i == 0) null else PerfMode.values()[i - 1]) } }
+        Choice(listOf("Usual") + PerfMode.ayn.map { it.label }, if (cfg.perf == null) 0 else PerfMode.ayn.indexOf(cfg.perf).let { if (it < 0) -1 else it + 1 }) { i ->
+            set { it.copy(perf = if (i == 0) null else PerfMode.ayn[i - 1]) } }
+        }
+        if (tuner != "Pulse") {
         SubLabel("Fan")
         Choice(listOf("Usual") + FanMode.values().map { it.label }, (cfg.fan?.ordinal ?: -1) + 1) { i ->
             set { it.copy(fan = if (i == 0) null else FanMode.values()[i - 1]) } }
         SubLabel("Refresh rate")
         Choice(listOf("Usual", "60 Hz", "120 Hz"), when (cfg.hz) { 60 -> 1; 120 -> 2; else -> 0 }) { i ->
             set { it.copy(hz = when (i) { 1 -> 60; 2 -> 120; else -> null }) } }
+        }
         // 1.3 (GitHub #25, #22): the bottom screen and the frame-rate counter, per game too
         SubLabel(if (isGame) "Bottom screen while this game is on top" else "Bottom screen while $label is on top")
         Choice(listOf("Usual", "Keep on", "Off"), cfg.second.ordinal) { i ->
@@ -1635,15 +1653,39 @@ internal fun TriggerRangeRows(r: PadRemap, set: (PadRemap) -> Unit) {
 
 /** "More ›": the less frequent things, off the header (2026-09-26). */
 @Composable
-private fun MorePanel(remap: PadRemap, first: FocusRequester, onPresets: () -> Unit, onShare: () -> Unit, onReset: () -> Unit,
-                      onShift: (ThorButton?) -> Unit, onClose: () -> Unit) {
+private fun MorePanel(remap: PadRemap, first: FocusRequester, appPkg: String, appLabel: String, onPresets: () -> Unit, onShare: () -> Unit, onReset: () -> Unit,
+                      onShift: (ThorButton?) -> Unit, onChords: () -> Unit, onClose: () -> Unit) {
     val g = LocalGlass.current
+    val ctx = androidx.compose.ui.platform.LocalContext.current
+    @Suppress("UNUSED_VARIABLE") val v = AppConfigStore.version.intValue
     var confirm by remember { mutableStateOf(false) }
     LaunchedEffect(confirm) { if (confirm) { delay(3000); confirm = false } }
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         PanelTitle("More", onClose, first)
+        Pill((if (remap.chords.isEmpty()) "Chords" else "Chords (${remap.chords.size})") + "  ›  (two buttons pressed together)", Modifier.fillMaxWidth(), onClick = onChords)
         Pill("Presets  ›  (web browsing, emulator hotkeys, Xbox face buttons, copy from another app…)", Modifier.fillMaxWidth(), onClick = onPresets)
         Pill("Share these controls  ›", Modifier.fillMaxWidth(), onClick = onShare)
+        // 1.4 (GitHub #60): the input layer for this app — Off gives it the Thor's own controller
+        SubLabel("Input layer for $appLabel")
+        val layer = AppConfigStore.get(appPkg).layer
+        Choice(listOf("Automatic", "On", "Off"), when (layer) { null -> 0; true -> 1; false -> 2 }) { i ->
+            PadLayerCtl.setForApp(ctx, appPkg, when (i) { 1 -> true; 2 -> false; else -> null }) }
+        Text(when (layer) {
+            false -> "Off: $appLabel gets the Thor's own controller — for games that don't react to the copy. These controls do nothing there."
+            true -> "On for $appLabel, whatever the setting for other apps."
+            null -> "Automatic: ${PadLayerCtl.mode.label.lowercase()} (Controller page)."
+        }, color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+        // 1.4: per game — the controller goes with it when it's moved (hold Back), or stays
+        SubLabel("The controller when $appLabel moves to the other screen")
+        val follow = AppConfigStore.get(appPkg).followMove
+        Choice(listOf("Usual", "Goes with it", "Stays"), when (follow) { null -> 0; true -> 1; false -> 2 }) { i ->
+            AppConfigStore.update(appPkg) { it.copy(followMove = when (i) { 1 -> true; 2 -> false; else -> null }) } }
+        Text(when {
+            AppSettings.focusLockEnabled && !AppSettings.focusSticky -> "The controller is set to Always top / bottom (Controller page): it stays."
+            follow == null -> "Usual: " + (if (AppSettings.focusFollowsMove) "it goes with it" else "it stays") + " (Controller page)."
+            follow -> "Move or swap $appLabel (hold Back): the controller goes to its new screen."
+            else -> "The controller stays on its screen when $appLabel moves."
+        }, color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
         // hold-to-shift (§6l): opt-in, off by default (2026-09-26)
         SubLabel("Shift button — hold it to give every button a second job")
         val opts = listOf<ThorButton?>(null) + PadRemap.SHIFTS
@@ -1663,8 +1705,13 @@ private fun MorePanel(remap: PadRemap, first: FocusRequester, onPresets: () -> U
 /** One row of choices (a loop, not nested lambdas: those sent the Compose compiler into a StackOverflow). */
 @Composable
 internal fun Choice(options: List<String>, selected: Int, pick: (Int) -> Unit) {
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        for (i in options.indices) Pill(options[i], Modifier.weight(1f), selected = i == selected) { pick(i) }
+    // 1.4: the D-pad into the row lands on the current choice (it took the nearest one)
+    val f = remember(options.size) { List(options.size) { FocusRequester() } }
+    @OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+    Row(Modifier.fillMaxWidth()
+        .focusProperties { enter = { f.getOrNull(selected) ?: FocusRequester.Default } }
+        .focusGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        for (i in options.indices) Pill(options[i], Modifier.weight(1f), selected = i == selected, focus = f[i]) { pick(i) }
     }
 }
 

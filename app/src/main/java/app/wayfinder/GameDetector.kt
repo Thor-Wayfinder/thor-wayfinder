@@ -55,7 +55,7 @@ object GameDetector {
         val own = pkg.startsWith("com.retroarch") || pkg == "app.gamenative"
         val found = (if (pkg.startsWith("com.retroarch")) retroarch(pids) else null)
             ?: (if (pkg == "app.gamenative") gameNative(pids) else null)
-            ?: (if (own) return null else openGame(pids))
+            ?: (if (own) return null else chooseGame(pkg, pids, nice))
             ?: return nice
         return found.first to (nice?.second ?: found.second)
     }
@@ -78,18 +78,70 @@ object GameDetector {
     /** A stable id from a name: lower-case letters and digits, dashes between. */
     fun idOf(s: String) = s.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(64).ifEmpty { "game" }
 
-    private fun openGame(pids: List<Int>): Pair<String, String>? {
+    /** Every game file the app keeps open (the user's files only — not an emulator's own: Eden keeps system .nca files open). */
+    private fun openGames(pids: List<Int>): List<Pair<String, String>> {
+        val out = LinkedHashMap<String, Pair<String, String>>()
         for (pid in pids) {
             val fds = File("/proc/$pid/fd").list() ?: continue
             for (fd in fds) {
                 val t = runCatching { Os.readlink("/proc/$pid/fd/$fd") }.getOrNull() ?: continue
-                // the user's files only — not an emulator's own (Eden keeps system .nca files open)
                 if ((t.startsWith("/storage/") || t.startsWith("/sdcard/") || t.startsWith("/data/media/") || t.startsWith("/mnt/")) &&
                     "/Android/data/" !in t && "/Android/obb/" !in t && EXT.containsMatchIn(t))
-                    return fileGame(t)
+                    fileGame(t).let { out[it.first] = it }
             }
         }
-        return null
+        return out.values.toList()
+    }
+
+    /** 1.4: the game file the app's task was LAUNCHED with (a launcher's intent: `dat=…game.xci`), cached per process. */
+    private val launchCache = HashMap<String, Pair<String, Pair<String, String>?>>()
+    private val DAT = Regex(""" dat=(\S+)""")
+    private fun launchedWith(pkg: String, pids: List<Int>): Pair<String, String>? {
+        val key = pids.sorted().joinToString(",")
+        launchCache[pkg]?.let { (k, v) -> if (k == key) return v }
+        val v = runCatching {
+            val p = ProcessBuilder("dumpsys", "activity", "recents").redirectErrorStream(true).start()
+            // at most 400 000 characters are read (never the whole dump), then the process is ended
+            val text = p.inputStream.bufferedReader().use { r ->
+                val buf = CharArray(400_000); var n = 0
+                while (n < buf.size) { val k = r.read(buf, n, buf.size - n); if (k < 0) break; n += k }
+                String(buf, 0, n)
+            }
+            p.destroy(); text
+        }.getOrNull()?.lineSequence()
+            ?.filter { "cmp=$pkg/" in it && " dat=" in it }
+            ?.mapNotNull { l -> DAT.find(l)?.groupValues?.get(1) }
+            ?.map { runCatching { java.net.URLDecoder.decode(it, "UTF-8") }.getOrDefault(it) }
+            ?.firstOrNull { EXT.containsMatchIn(it.substringBefore('?')) }
+            ?.let { fileGame(it.substringBefore('?')) }
+        launchCache[pkg] = key to v
+        return v
+    }
+
+    /** Per app: the process ids and the game files open at the last look — and the game a newly opened file named. */
+    private val lastOpen = HashMap<String, Pair<String, Set<String>>>()
+    private val newlyOpened = HashMap<String, Pair<String, String>>()
+
+    /** Which of the open game files is the one running (see the class comment). Null = can't tell — better than wrong. */
+    private fun chooseGame(pkg: String, pids: List<Int>, nice: Pair<String, String>?): Pair<String, String>? {
+        val open = openGames(pids)
+        // 1.4 (review): a game opened since the last look (same process) is the one now running
+        val pidKey = pids.sorted().joinToString(","); val ids = open.map { it.first }.toSet()
+        val prev = lastOpen[pkg]; lastOpen[pkg] = pidKey to ids
+        if (prev == null || prev.first != pidKey) newlyOpened.remove(pkg)
+        else if (prev.second != ids) {
+            newlyOpened.remove(pkg); launchCache.remove(pkg)
+            open.filter { it.first !in prev.second }.singleOrNull()?.let { newlyOpened[pkg] = it }
+        }
+        newlyOpened[pkg]?.let { g -> if (g.first in ids) return g else newlyOpened.remove(pkg) }
+        val launched = launchedWith(pkg, pids)
+        if (launched != null && (open.isEmpty() || open.any { it.first == launched.first })) return launched
+        if (open.size == 1) return open[0]
+        if (open.isEmpty() || nice == null) return null
+        // several open (a library kept open): the one whose name matches what Cocoon launched
+        fun words(s: String) = s.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length > 2 }.toSet()
+        val want = words(nice.second)
+        return open.map { it to (words(it.second) intersect want).size }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
     }
 
     private fun retroarch(pids: List<Int>): Pair<String, String>? {

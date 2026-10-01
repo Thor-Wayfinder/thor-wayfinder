@@ -54,6 +54,12 @@ data class AppConfig(
     val fps: Boolean? = null,
     /** 1.3.2 — moved to the other screen by reopening it (not live). null = automatic ([reopensOnMove]). */
     val reopenOnMove: Boolean? = null,
+    /** 1.4 (GitHub #60): the input layer for this app — true on, false off (the Thor's own pad), null = automatic
+     *  ([PadLayerCtl.mode]). */
+    val layer: Boolean? = null,
+    /** 1.4: the controller goes with this app when it's moved / swapped — true yes, false no, null = the
+     *  Controller page's switch ([AppSettings.focusFollowsMove]). */
+    val followMove: Boolean? = null,
 ) {
     val isDefault get() = this == AppConfig()
 
@@ -73,6 +79,8 @@ data class AppConfig(
         .apply { backToGame?.let { put("backGame", it) } }
         .apply { fps?.let { put("fps", it) } }
         .apply { reopenOnMove?.let { put("reopenMove", it) } }
+        .apply { layer?.let { put("layer", it) } }
+        .apply { followMove?.let { put("follow", it) } }
         .toString()
 
     companion object {
@@ -103,6 +111,8 @@ data class AppConfig(
                 backToGame = if (o.has("backGame")) o.optBoolean("backGame") else null,
                 fps = if (o.has("fps")) o.optBoolean("fps") else null,
                 reopenOnMove = if (o.has("reopenMove")) o.optBoolean("reopenMove") else null,
+                layer = if (o.has("layer")) o.optBoolean("layer") else null,
+                followMove = if (o.has("follow")) o.optBoolean("follow") else null,
             )
         }.getOrDefault(AppConfig())
     }

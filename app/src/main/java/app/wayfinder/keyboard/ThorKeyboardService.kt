@@ -13,6 +13,7 @@ import android.view.View
 import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -59,6 +60,9 @@ class ThorKeyboardService : InputMethodService() {
 
     /** true = keyboard drawn in the IME window; false = on the other screen (overlay). */
     private var inIme by mutableStateOf(true)
+    /** 1.4: the keyboard is on the other screen, but a thin window stays open here for an app that watches it
+     *  (Eden and the yuzu family submit the text the moment no keyboard window is visible). */
+    private var keepStrip by mutableStateOf(false)
     /** The field's text around the cursor, for the overlay's preview strip. */
     var preview by mutableStateOf(Preview("", ""))
         private set
@@ -122,7 +126,7 @@ class ThorKeyboardService : InputMethodService() {
         return ComposeView(this).apply {
             owner.attach(this)
             setContent {
-                ThorGlassTheme(dark = isDark()) {
+                ThorGlassTheme(dark = isDark()) { app.wayfinder.ui.CappedFontScale {
                     if (inIme) {
                         val h = (LocalConfiguration.current.screenHeightDp * 0.5f).dp
                         ThorKeyboardPanel(
@@ -132,9 +136,21 @@ class ThorKeyboardService : InputMethodService() {
                             moveLabel = otherDisplay()?.let { screenLabel(it) },
                             onMove = { moveToOtherScreen() },
                         )
-                    } else Spacer(Modifier.height(0.dp))
-                }
+                    } else if (keepStrip) KeyboardStrip(otherDisplay()?.let { screenLabel(it) } ?: "")
+                    else Spacer(Modifier.height(0.dp))
+                }}
             }
+        }
+    }
+
+    /** 1.4: the thin window left open for apps that watch it — says where the keys are. */
+    @androidx.compose.runtime.Composable
+    private fun KeyboardStrip(where: String) {
+        val g = app.wayfinder.ui.LocalGlass.current
+        androidx.compose.foundation.layout.Box(Modifier.fillMaxWidth().height(34.dp)
+            .background(g.base.copy(alpha = 0.92f)), contentAlignment = androidx.compose.ui.Alignment.Center) {
+            androidx.compose.material3.Text("⌨  Typing on the ${where.substringAfter(' ').lowercase()} — ↵ or ${app.wayfinder.ButtonNames.m("B")} when done",
+                color = g.textSecondary, style = androidx.compose.material3.MaterialTheme.typography.labelLarge)
         }
     }
 
@@ -165,8 +181,12 @@ class ThorKeyboardService : InputMethodService() {
         if (wantOther && showOverlay(other!!)) {
             inIme = false
             refreshPreview()
-            return false
+            // 1.4 (Tomodachi Life in Eden): an app may watch whether a keyboard WINDOW is visible — Eden submits the
+            // text the moment it isn't (an empty name, asked again, for ever). A thin window stays open here.
+            keepStrip = true
+            return super.onShowInputRequested(flags, configChange)
         }
+        keepStrip = false
         inIme = true
         return super.onShowInputRequested(flags, configChange)
     }
@@ -174,9 +194,11 @@ class ThorKeyboardService : InputMethodService() {
     override fun onStartInputView(info: EditorInfo?, restarting: Boolean) {
         super.onStartInputView(info, restarting)
         shown = true
+        if (keepStrip && overlayUp) return      // the thin window only: the keys stay on the other screen
         inIme = true
         hideOverlay()
     }
+
 
     override fun onFinishInputView(finishingInput: Boolean) {
         super.onFinishInputView(finishingInput)
@@ -188,6 +210,7 @@ class ThorKeyboardService : InputMethodService() {
         super.onFinishInput()
         hideOverlay()
         forceSameScreen = false
+        keepStrip = false
     }
 
     /** The app (or Back / B) hides the keyboard — the overlay goes too. */
@@ -228,7 +251,7 @@ class ThorKeyboardService : InputMethodService() {
         if (inIme) return
         val ic = currentInputConnection
         fun clean(t: CharSequence?) = (t?.toString() ?: "").replace('\n', ' ')
-            .let { if (isPassword()) "•".repeat(it.length) else it }
+            .let { if (isPassword() && !visiblePassword()) "•".repeat(it.length) else it }
         preview = Preview(clean(ic?.getTextBeforeCursor(80, 0)), clean(ic?.getTextAfterCursor(80, 0)))
     }
 
@@ -238,6 +261,11 @@ class ThorKeyboardService : InputMethodService() {
 
     /** Where the move button sends the keyboard from the overlay: back to the field's screen. */
     fun overlayMoveLabel(): String = screenLabel(fieldDisplay())
+
+    /** A "visible password" field: games and emulators use it to turn suggestions off — the text is meant to be seen. */
+    private fun visiblePassword(): Boolean = editor?.inputType?.let {
+        (it and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_TEXT && (it and InputType.TYPE_MASK_VARIATION) == InputType.TYPE_TEXT_VARIATION_VISIBLE_PASSWORD
+    } ?: false
 
     private fun isPassword(): Boolean {
         val t = editor?.inputType ?: return false
@@ -277,7 +305,8 @@ class ThorKeyboardService : InputMethodService() {
         if (prefs.getBoolean("tip_keyboard", false)) return
         val where = if (kbDisplay == android.view.Display.DEFAULT_DISPLAY) "top" else "bottom"
         val shown = ForegroundAppService.tip(fieldDisplay(), listOf("Wayfinder Keyboard opened on the $where screen — type with the controller"),
-            listOf("Left stick" to "pick a key", "A" to "type it", "X" to "delete", "Y" to "space", "B" to "close",
+            listOf("Left stick" to "pick a key", app.wayfinder.ButtonNames.m("A") to "type it", app.wayfinder.ButtonNames.m("X") to "delete",
+                app.wayfinder.ButtonNames.m("Y") to "space", app.wayfinder.ButtonNames.m("B") to "close",
                 "Left stick click" to "all its buttons"), 9000)
         if (shown) prefs.edit().putBoolean("tip_keyboard", true).apply()     // service not up: next time
     }
@@ -330,6 +359,10 @@ class ThorKeyboardService : InputMethodService() {
             if (kb.enterAction == EnterAction.NEWLINE) ic.commitText("\n", 1)
             else ic.performEditorAction(action)
             refreshPreview()
+            // 1.4: an action key (Done, Go, Search, Send) ends the typing — the keyboard closes too, as an app expects
+            // when it hides the keyboard itself (Eden's name field submits when the keyboard window closes)
+            if (keepStrip && kb.enterAction != EnterAction.NEWLINE && kb.enterAction != EnterAction.NEXT)
+                main.postDelayed({ if (overlayUp) close() }, 150)
         }
         override fun moveCursor(delta: Int) {
             repeat(kotlin.math.abs(delta)) { sendDownUpKeyEvents(if (delta < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT) }
@@ -360,6 +393,7 @@ class ThorKeyboardService : InputMethodService() {
     private val keyboardVisible get() =
         (overlayUp && ForegroundAppService.keyboardOverlay()?.displayId != null) || (shown && isInputViewShown)
     private var aLongFired = false
+    private var aDown = false
     private val main = android.os.Handler(android.os.Looper.getMainLooper())
     private val longPressA = Runnable { aLongFired = true; kb.controllerLongPress() }
 
@@ -419,11 +453,11 @@ class ThorKeyboardService : InputMethodService() {
         if (keyCode == KeyEvent.KEYCODE_BACK) return true                  // closes on release
         // D-pad = the text cursor; the left stick picks keys (onGenericMotionEvent).
         // (1.3, GitHub #11: or the D-pad picks keys — then the left stick is the cursor)
-        dpadDir(keyCode)?.let { (dx, dy) -> if (KeyboardSettings.dpadKeys) kb.moveFocus(dx, dy) else sendDownUpKeyEvents(keyCode); return true }
+        dpadDir(keyCode)?.let { (dx, dy) -> if (KeyboardSettings.dpadKeys) kb.moveFocus(dx, dy, event.eventTime) else sendDownUpKeyEvents(keyCode); return true }
         val b = ButtonEngine.menuButton(event) ?: return KeyEvent.isGamepadButton(keyCode)   // Xbox style: bottom = A
         if (event.repeatCount > 0) return true
         when (b) {
-            ThorButton.A -> { aLongFired = false; main.postDelayed(longPressA, 450) }
+            ThorButton.A -> { aLongFired = false; aDown = true; kb.controllerArm(event.eventTime); main.postDelayed(longPressA, 450) }
             ThorButton.B -> close()
             ThorButton.X -> kb.press(KeySpec(KeyKind.BACKSPACE))
             ThorButton.Y -> kb.press(KeySpec(KeyKind.SPACE))
@@ -446,7 +480,8 @@ class ThorKeyboardService : InputMethodService() {
         if (dpadDir(keyCode) != null) return true
         val b = ButtonEngine.menuButton(event) ?: return KeyEvent.isGamepadButton(keyCode)
         if (b == ThorButton.HOME) return false
-        if (b == ThorButton.A) { main.removeCallbacks(longPressA); if (!aLongFired) kb.controllerPress() }
+        // 1.4: only a release whose press we had (the A that opened the field came up here and typed a key)
+        if (b == ThorButton.A) { main.removeCallbacks(longPressA); if (aDown && !aLongFired) kb.controllerPress(); aDown = false }
         return true
     }
 
@@ -481,8 +516,8 @@ class ThorKeyboardService : InputMethodService() {
             dx < 0 -> KeyEvent.KEYCODE_DPAD_LEFT; dx > 0 -> KeyEvent.KEYCODE_DPAD_RIGHT
             dy < 0 -> KeyEvent.KEYCODE_DPAD_UP; else -> KeyEvent.KEYCODE_DPAD_DOWN })
         if (hx != hatX || hy != hatY) {
-            if (hx != 0 && hx != hatX) { if (swap) kb.moveFocus(hx, 0) else cursor(hx, 0) }
-            if (hy != 0 && hy != hatY) { if (swap) kb.moveFocus(0, hy) else cursor(0, hy) }
+            if (hx != 0 && hx != hatX) { if (swap) kb.moveFocus(hx, 0, event.eventTime) else cursor(hx, 0) }
+            if (hy != 0 && hy != hatY) { if (swap) kb.moveFocus(0, hy, event.eventTime) else cursor(0, hy) }
             hatX = hx; hatY = hy
         }
         val x = event.getAxisValue(MotionEvent.AXIS_X); val y = event.getAxisValue(MotionEvent.AXIS_Y)
@@ -490,7 +525,7 @@ class ThorKeyboardService : InputMethodService() {
         if (mag > 0.6f && !stickLatched) {
             stickLatched = true
             val (dx, dy) = if (kotlin.math.abs(x) > kotlin.math.abs(y)) (if (x > 0) 1 else -1) to 0 else 0 to (if (y > 0) 1 else -1)
-            if (swap) cursor(dx, dy) else kb.moveFocus(dx, dy)
+            if (swap) cursor(dx, dy) else kb.moveFocus(dx, dy, event.eventTime)
         } else if (mag < 0.3f) stickLatched = false
         return true
     }

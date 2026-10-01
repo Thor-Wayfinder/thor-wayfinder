@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -22,15 +23,15 @@ import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.GlassSegmentedControl
 import app.wayfinder.ui.LocalGlass
 
-/** Hub → Screens & power → Sleep & standby. */
+/** Hub → Battery → Sleep & standby. */
 @Composable
 fun SleepPage(myDisplayId: Int, onBack: () -> Unit) =
     SubPage(myDisplayId, "Sleep & standby", "Less drain while the screen is off, and a Thor that stays asleep in its case", onBack) {
         @Suppress("UNUSED_VARIABLE") val v = SleepSettings.version.intValue
         if (SleepSettings.otherSleepApp != null) GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
             Text(
-                "Another sleep manager is installed on this Thor. To avoid the two fighting over Wi-Fi, Bluetooth and the lid, " +
-                    "these are off here unless you turn them on — use one app for sleep, not both.",
+                "SleepManager (or another sleep app) is installed on this Thor. To avoid the two fighting over Wi-Fi, Bluetooth " +
+                    "and the lid, these are off here unless you turn them on — use one app for sleep, not both.",
                 color = LocalGlass.current.textPrimary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(16.dp),
             )
         }
@@ -47,6 +48,7 @@ fun SleepPage(myDisplayId: Int, onBack: () -> Unit) =
         SleepLidCard()
         SleepStatsCard()
         SleepLogCard()
+        SleepCreditCard(myDisplayId)
     }
 
 @Composable
@@ -62,7 +64,7 @@ private fun SleepActionsCard() {
     if (has("james.dsp") || has("me.timschneeberger.rootlessjamesdsp")) SettingCard("JamesDSP",
         "Off while asleep, on again when it wakes", checked = SleepSettings.jamesDsp, onChecked = { SleepSettings.set("jamesdsp", it) })
     if (has("com.nutomic.syncthingandroid") || has("com.github.catfriend1.syncthingandroid")) SettingCard("Syncthing",
-        "Stop syncing while asleep, restart when the network is back (ignored if Syncthing is set to always run)",
+        "Stop syncing while asleep, restart when the network is back. Ignored if Syncthing is set to always run.",
         checked = SleepSettings.syncthing, onChecked = { SleepSettings.set("syncthing", it) })
 }
 
@@ -95,13 +97,35 @@ private fun SleepWhenCard() {
 private fun SleepLidCard() {
     @Suppress("UNUSED_VARIABLE") val v = SleepSettings.version.intValue   // redraw on change (GitHub #5)
     SettingCard("Keep it asleep with the lid closed",
-        "If it wakes in its case (a button, the power key, a notification) it goes straight back to sleep — checked again every few seconds, and if it runs hot in there, music stops and performance drops to Standard. Not while docked on an external display.",
+        "If it wakes in its case, it goes straight back to sleep. A button, the power key or a notification can wake it; it's checked every few seconds, and if it runs hot in there, music stops and performance drops to Standard. Not while docked on an external display.",
         checked = SleepSettings.lidProtection, onChecked = { SleepSettings.set("lid", it) })
     SettingCard("Pause music and videos when the lid closes",
         "Closing the lid stops what's playing (it doesn't start again by itself when you open it)",
         checked = SleepSettings.pauseOnLid, onChecked = { SleepSettings.set("lid_pause", it) })
     SettingCard("Sleep when the external display disconnects", "Unplugging from the dock or TV puts the Thor to sleep",
         checked = SleepSettings.sleepOnDisplayGone, onChecked = { SleepSettings.set("display_gone", it) })
+}
+
+/** Credit (GitHub #70): the ideas of this page come from SleepManager, by Baggio94. */
+@Composable
+private fun SleepCreditCard(myDisplayId: Int) {
+    val g = LocalGlass.current
+    val ctx = LocalContext.current
+    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Credit: SleepManager", color = g.textPrimary, style = MaterialTheme.typography.titleMedium)
+            Text("The ideas behind this page come from SleepManager, by Baggio94 — the community's sleep app for the Thor: " +
+                "closed-lid protection, false-wake handling, the dock, turning Wi-Fi, Bluetooth, Tailscale, Syncthing and " +
+                "JamesDSP off while asleep, the conditions and delays, putting back only what was on, and the standby " +
+                "statistics. Thank you! Wayfinder's version is written from scratch: no SleepManager code was copied. If you " +
+                "want a dedicated sleep app, SleepManager does all this and more.",
+                color = g.textSecondary, style = MaterialTheme.typography.bodySmall)
+            app.wayfinder.ui.GlassListRow("SleepManager on GitHub", value = "github.com/Baggio94/SleepManager",
+                icon = androidx.compose.material.icons.Icons.Rounded.Favorite) {
+                openLink(ctx, "https://github.com/Baggio94/SleepManager", myDisplayId)
+            }
+        }
+    }
 }
 
 @Composable

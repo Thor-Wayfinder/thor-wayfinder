@@ -36,7 +36,7 @@ import app.wayfinder.ui.LocalGlass
 import kotlinx.coroutines.delay
 
 /**
- * Brightness and volume, the same way everywhere (Screens & power, quick panel):
+ * Brightness and volume, the same way everywhere (Screens, quick panel):
  * three sliders each — Both screens, Top, Bottom. "Both" keeps the difference between the
  * screens; Top / Bottom set it. The volume buttons and Home + R2 / L2 act like "Both".
  */

@@ -14,11 +14,12 @@ press away — all without leaving your game.
 
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
-> [!WARNING]
-> **Using ClusterTune?** Many users reported instability and crashes when ClusterTune (CPU frequency limits) is used
-> together with Wayfinder. Both change how the Thor's CPU runs, and they can fight each other. Please don't use them
-> together for now: turn ClusterTune's limits off (or uninstall it) and use Wayfinder's own Performance settings. If your
-> Thor was unstable with both, restart it after removing ClusterTune.
+> [!NOTE]
+> **Using ClusterTune or Pulse?** Since 1.4, when one of them is installed Wayfinder leaves the CPU to it: no per-game
+> performance from Wayfinder (with Pulse, no per-game fan or refresh rate either), and the quick panel's Performance tile
+> steps aside — the two never fight over the clocks. Wayfinder also warns you when another app does the same job as one
+> of its parts (Mjolnir, BiFrost, OdinTools). If your Thor was unstable with ClusterTune before 1.4, restart it after
+> updating.
 
 ## Highlights
 
@@ -28,7 +29,8 @@ https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 - **Keyboard & mouse** (Home + Y) on the other screen: PC keys, a trackpad (with a Touch mode), your own pad, the
   game's guide
 - **Quick panel** (AYN button) over your game: brightness, volume, performance, fan, 45 shortcut tiles
-- **Per-app profiles**: screen, performance, fan, refresh rate, lights, controls
+- **Per game and app**: screen, performance, fan, refresh rate, lights, controls
+- **Just what you need**: only screen switching, or everything — choose part by part
 - No root, no PC: one-press setup
 
 ## Screenshots
@@ -58,7 +60,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <details>
 <summary><b>Two screens</b></summary>
 
-- Move / swap apps between screens (Back · hold) — live: the app keeps running and keeps its state
+- Move / swap apps between screens (Back · hold) — live: the app keeps running and keeps its state; the controller
+  can go with the game you move (per game too)
 - A glass slide animation when an app moves
 - "Opens on": each app opens on its own screen; apps that break when moved live (Firefox) reopen on the other
   screen instead
@@ -75,12 +78,14 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <details>
 <summary><b>Bottom screen & power</b></summary>
 
-- Bottom screen off with a 3-finger tap (tap again for on) or a 3-finger swipe down
+- Bottom screen off with a 3-finger tap (tap again for on) or a 3-finger swipe down; wake it with a double tap
+  (optional) so a thumb brushing it doesn't
 - Auto-off when the bottom screen is unused (15 s – 2 min)
 - Per-app bottom-screen rule (keep on / off)
 - Screen modes: both / top only / bottom only
 - Stay awake
 - Do not disturb while playing — never touches a Do not disturb you turned on yourself
+- A Battery page: what the Thor draws right now, stop charging at 80 % and direct power (with what the charger is doing now), sleep
 
 </details>
 
@@ -93,6 +98,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 - Speaker fix: EQ, +15 dB with a limiter and a stereo widener — EQ on / off to compare, never on headphones.
   EQ curve: the community preset by **Joey (Retro Handhelds)** — thank you!
 - Volume boost: up to +12 dB with a limiter, on the speakers, headphones and Bluetooth
+- Headphones & Bluetooth EQ: wired, USB and Bluetooth each their own sound — presets or a curve you shape; follows
+  what you plug in
 - 60 / 120 Hz, per app or per game
 - FPS counter on either or both screens, in any corner, + battery and temperatures — per app or per game
 
@@ -101,7 +108,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <details>
 <summary><b>Controller</b></summary>
 
-- Combos on Home / Back: tap, double, triple, hold, + a button — 30+ actions, volume and brightness per screen included
+- Combos on Home / Back: tap, double, triple, hold, + a button (tapped, twice, three times or held) — 30+ actions:
+  volume and brightness per screen, swipes on the screen, record the screen, close the other screen's app…
 - Stick flicks as combo buttons (Home + right stick up / down), and any button can start a combo
 - Combo editor: press the buttons to record a combo
 - Hold Home: a cheat sheet of every combo (let go without pressing anything: nothing happens)
@@ -116,14 +124,15 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 - Test the controller: stick drift → a suggested deadzone for every game
 - Games see one clean controller that stays controller #1; Home + Back held 5 s = emergency off
 - Bluetooth and USB controllers work alongside — only the Thor's own controls are taken over
-- Button names on screen as printed or the Xbox way (or following AYN's controller style)
+- Button names on screen as printed, the Xbox way or PlayStation symbols (or following AYN's controller style)
+- The input layer runs everywhere, only in the games you set up, or nowhere — and on / off per game
 
 </details>
 
 <details>
 <summary><b>Game controls (Home + X)</b></summary>
 
-- Remap per app, and per game inside emulators — "Which game?" switcher, "Find by pressing"
+- Remap per app, and per game inside emulators — "Which game?" switcher, "Change a button" by pressing it
 - Automatic game detection (RetroArch, other emulators, GameNative, Cocoon)
 - A button can become a button, the D-pad, keys, the mouse, Android Back, nothing, a macro or a Wayfinder action
 - Several buttons at once, turbo, toggle, long / double press
@@ -150,7 +159,7 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 - Trackpad gestures (2-finger tap = right click, 2-finger drag = scroll, hold + move = drag), sticky
   Ctrl / Shift / Alt / Win
 - Touch mode: the trackpad moves a pointer on the game's screen and taps, drags and swipes there like a finger —
-  for games that ignore a mouse
+  for games that ignore a mouse; Direct mode: the trackpad is the game's screen
 - The right pad picked automatically per app
 - Stick-as-mouse mode
 - My pad: your own keys and text snippets; a simpler keyboard page
@@ -167,7 +176,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
   the game never pauses under it
 - The panel takes the controller, or leaves it to the game (touch only)
 - Brightness, volume, live stats, screen modes
-- 45 shortcut tiles: Wayfinder, Android and AYN switches (bypass charging, 80 % charge limit, L2 / R2 mode…)
+- 45 shortcut tiles: Wayfinder, Android and AYN switches (bypass charging, 80 % charge limit, L2 / R2 mode…),
+  plus tiles that open an app, an app pair or a Wayfinder page
 - Arrange tiles like a home screen; show, hide and reorder the cards
 - "Now playing": keep performance, fan, refresh rate and the bottom screen for this game
 - Optional media and details cards
@@ -175,9 +185,10 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 </details>
 
 <details>
-<summary><b>Per app (App profiles)</b></summary>
+<summary><b>Per game and app (Games)</b></summary>
 
-- Screen, bottom screen, performance, fan, refresh rate, combos, controls, lights, guide
+- Screen, bottom screen, performance, fan, refresh rate, combos, controls, input layer, lights, guide —
+  each shows only what you changed
 - Two apps open: performance, fan and refresh rate take the more demanding one; buttons and lights
   follow the app that has the controller
 
@@ -187,7 +198,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <summary><b>Guide & notes</b></summary>
 
 - A game guide (small browser, pin a page) and your notes — per game, even inside an emulator; on the bottom
-  screen, in the Home + Y deck, or beside the game when no screen is free (an action and a tile)
+  screen, in the Home + Y deck, or beside the game when no screen is free (an action and a tile); well-known ad
+  networks aren't loaded
 
 </details>
 
@@ -195,8 +207,8 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <summary><b>Stick lights</b></summary>
 
 - AYN default, off, colour, breathing, strobe, spectrum, screen colour
-- Per app / per game, speed, brightness (down to 1 %), a colour for each stick; screen colour split left / right, taken from
-  the top screen, the bottom screen or the controller's screen
+- Per app / per game, speed, brightness (down to 1 %, or following the screens'), a colour for each stick (wheel or hex);
+  screen colour split left / right, taken from the top screen, the bottom screen or the controller's screen
 
 </details>
 
@@ -224,11 +236,13 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 <details>
 <summary><b>Look & setup</b></summary>
 
-- Light / dark / black (OLED) / system theme, see-through glass, blur, your wallpaper or the aurora backdrop
+- Light / dark / black (OLED) / system theme, see-through glass, blur, your wallpaper or the aurora backdrop — or
+  your own flat colours
 - The Hub on either screen — with the Hub on top, the bottom screen shows your combos
 - A status strip: where the controller is, the app on each screen, battery, brightness
 - Settings search
-- A welcome tour with practice mode
+- A welcome tour with practice mode; choose what Wayfinder is for (just screen switching, or everything) — More →
+  Features, part by part
 - One-press setup — no root, no Shizuku, no PC
 - Backup & restore
 - Help, troubleshooting, a system-access check, open-source licenses, the version number
@@ -256,9 +270,9 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 Every release lists the APK's **SHA-256** and the **signing certificate's SHA-256**. Check them before installing:
 
 ```
-certutil -hashfile wayfinder-1.3.2.apk SHA256            (Windows)
-sha256sum wayfinder-1.3.2.apk                             (Linux / macOS)
-apksigner verify --print-certs wayfinder-1.3.2.apk        (the certificate)
+certutil -hashfile wayfinder-1.4.apk SHA256              (Windows)
+sha256sum wayfinder-1.4.apk                               (Linux / macOS)
+apksigner verify --print-certs wayfinder-1.4.apk          (the certificate)
 ```
 
 </details>
@@ -290,7 +304,7 @@ The source is published so anyone can audit it.
 - Native binaries shipped in `app/src/main/assets/fx/` are built from `fx/`:
   `tools/build_wfpad.sh` (the input layer; `tools/build_wfpad.sh test` runs its unit tests on a Thor) and
   `tools/build_fx.sh` (the speaker widener) — Windows + Git Bash, NDK in the default SDK folder. SHA-256 of the shipped copies:
-  - `wfpad` — `deebfd178ec016a077c8480950b4b87f977977aa3743e2bcfa1623f13461127d`
+  - `wfpad` — `a08e13ea3a0bd90b9b5c8e2d7ea4c3594720f0522eb31133c46472aaac78b7b8`
   - `libwfwide.so` — `f64974296927c51c1645b5c56af38504ef5e364d34df7620c07c0ce8a08d6b8a`
 
   Rebuilt from this source with NDK 27.2.12479018 and those scripts, both come out byte-identical.
@@ -309,6 +323,15 @@ Wayfinder is an independent project, not affiliated with, endorsed or sponsored 
 named here. AYN, Thor and Odin are trademarks of AYN; Nintendo, Xbox, RetroArch, PPSSPP, Dolphin, DuckStation,
 GameNative, Cocoon, Spotify, Steam, Shizuku, Tailscale, Syncthing and other names are trademarks of their
 respective owners, used only to describe compatibility.
+
+</details>
+
+<details>
+<summary><b>Credits</b></summary>
+
+- **Sleep & standby** — the ideas come from [SleepManager](https://github.com/Baggio94/SleepManager) by Baggio94
+  (closed-lid protection, false-wake handling, sleep actions and conditions, standby statistics). Wayfinder's version is
+  written from scratch: no SleepManager code was copied. Thank you!
 
 </details>
 
