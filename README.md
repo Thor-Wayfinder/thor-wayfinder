@@ -266,9 +266,9 @@ Tap a section to open it. Step-by-step help for each is in the [wiki](https://gi
 Every release lists the APK's **SHA-256** and the **signing certificate's SHA-256**. Check them before installing:
 
 ```
-certutil -hashfile wayfinder-1.4.apk SHA256              (Windows)
-sha256sum wayfinder-1.4.apk                               (Linux / macOS)
-apksigner verify --print-certs wayfinder-1.4.apk          (the certificate)
+certutil -hashfile wayfinder-1.4.1.apk SHA256              (Windows)
+sha256sum wayfinder-1.4.1.apk                               (Linux / macOS)
+apksigner verify --print-certs wayfinder-1.4.1.apk          (the certificate)
 ```
 
 </details>
