@@ -1580,6 +1580,8 @@ class ForegroundAppService : AccessibilityService() {
         LinkedVolume.start(this)                        // Volume keys move both screens
         Layouts.init(this)                              // BEFORE anything records a layout
         PerfProfiles.restoreIfLeftOver(this)            // Undo an override left by a crash
+        // 1.4.1 (GitHub #79): the user's saturation back after AYN's own boot value (twice: AYN applies it late)
+        handler.postDelayed({ Saturation.restore(this) }, 20_000); handler.postDelayed({ Saturation.restore(this) }, 60_000)
         PerfProfiles.keepCustomFan(this)                // 1.3: a Custom fan survives performance changes
         ButtonNames.init(this)                          // 1.3 (GitHub #27)
         SleepEngine.start(this)                         // Sleep & standby

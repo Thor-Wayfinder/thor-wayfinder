@@ -280,12 +280,18 @@ fun ControllerTextField(
     val field = remember { androidx.compose.ui.focus.FocusRequester() }
     val gate = remember { androidx.compose.ui.focus.FocusRequester() }
     val keyboard = androidx.compose.ui.platform.LocalSoftwareKeyboardController.current
+    // 1.4.1: the text with its cursor — typing starts at the END (Compose starts at 0: a hex code typed before the old one)
+    var tfv by remember { mutableStateOf(androidx.compose.ui.text.input.TextFieldValue(value, androidx.compose.ui.text.TextRange(value.length))) }
+    if (tfv.text != value) tfv = androidx.compose.ui.text.input.TextFieldValue(value, androidx.compose.ui.text.TextRange(value.length))
     fun stop() {
         if (!editing) return
         editing = false; keyboard?.hide(); runCatching { gate.requestFocus() }
     }
     androidx.compose.runtime.LaunchedEffect(editing) {
-        if (editing) { kotlinx.coroutines.delay(40); runCatching { field.requestFocus() } }
+        if (editing) {
+            tfv = tfv.copy(selection = androidx.compose.ui.text.TextRange(tfv.text.length))
+            kotlinx.coroutines.delay(40); runCatching { field.requestFocus() }
+        }
     }
     // the keyboard closed (its B / ↵ / close key): the typing ends here too — one B, not two
     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
@@ -300,7 +306,7 @@ fun ControllerTextField(
     Box(modifier.then(surface)
         .border(if (ring) 2.dp else 0.dp, if (ring) g.accent else Color.Transparent, shape)) {
         androidx.compose.foundation.text.BasicTextField(
-            value, onValueChange, singleLine = singleLine, textStyle = textStyle,
+            tfv, { v -> tfv = v; if (v.text != value) onValueChange(v.text) }, singleLine = singleLine, textStyle = textStyle,
             cursorBrush = androidx.compose.ui.graphics.SolidColor(g.accent),
             keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
                 imeAction = if (singleLine) androidx.compose.ui.text.input.ImeAction.Done else androidx.compose.ui.text.input.ImeAction.Default),

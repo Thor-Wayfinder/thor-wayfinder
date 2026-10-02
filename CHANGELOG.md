@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.4.1 — October 2026
+
+**Fixed**
+- **Wayfinder closed when you pressed ⌫ at the start of a text field** with the Wayfinder Keyboard (for example the hex
+  code of your own colours). The same could close other apps' text fields: ⌫ with nothing before the cursor now does
+  nothing.
+- **Typing in a filled-in field started at the beginning** (a hex code typed before the old one): editing now starts at
+  the end.
+- **Colour saturation went back to 110 % after a restart** on some Thors: Wayfinder now puts your own value back once it
+  has started.
+
 ## 1.4 — October 2026
 
 **Simpler**

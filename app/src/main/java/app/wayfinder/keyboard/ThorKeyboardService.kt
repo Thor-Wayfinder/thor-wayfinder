@@ -349,8 +349,14 @@ class ThorKeyboardService : InputMethodService() {
         override fun commit(text: String) { currentInputConnection?.commitText(text, 1); refreshPreview() }
         override fun deleteBackward() {
             val ic = currentInputConnection ?: return
-            if (!ic.getSelectedText(0).isNullOrEmpty()) ic.commitText("", 1)
-            else ic.deleteSurroundingTextInCodePoints(1, 0)
+            if (!ic.getSelectedText(0).isNullOrEmpty()) { ic.commitText("", 1); refreshPreview(); return }
+            // 1.4.1 (GitHub #77): nothing before the cursor = nothing to delete — asking anyway crashed Compose text fields
+            // (they delete from -1); an app that doesn't say gets a plain Delete key, as a hardware keyboard sends
+            val before = ic.getTextBeforeCursor(1, 0)
+            when {
+                before == null -> sendDownUpKeyEvents(android.view.KeyEvent.KEYCODE_DEL)
+                before.isNotEmpty() -> ic.deleteSurroundingTextInCodePoints(1, 0)
+            }
             refreshPreview()
         }
         override fun enter() {

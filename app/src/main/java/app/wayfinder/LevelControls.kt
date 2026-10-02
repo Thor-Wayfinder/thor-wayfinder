@@ -162,6 +162,7 @@ fun GlassLookSliders(onBlur: () -> Unit) {
  */
 @Composable
 fun SaturationSlider() {
+    val ctx = androidx.compose.ui.platform.LocalContext.current
     var sat by remember { mutableStateOf<Float?>(null) }
     LaunchedEffect(Unit) {
         sat = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -173,7 +174,7 @@ fun SaturationSlider() {
     LevelRow(null, "Saturation", compact = false, value = s?.let { "${(it * 100).toInt()} %" },
         pos = s?.let { ((it - 0.5f) / 0.8f).coerceIn(0f, 1f) }, step = 0.05f / 0.8f) { p ->
         val v = (Math.round((0.5f + p * 0.8f) * 20) / 20f)   // 5 % steps
-        sat = v; Saturation.apply(v)
+        sat = v; Saturation.apply(v); Saturation.keep(ctx, v)
     }
 }
 
@@ -190,6 +191,17 @@ object Saturation {
             applied = w
             PServiceBridge.exec("service call SurfaceFlinger 1022 f $w; setprop persist.sys.sf.color_saturation $w")
         }
+    }
+
+    // 1.4.1 (GitHub #79): on some Thors something (AYN's firmware) puts its own saturation back at boot — Wayfinder
+    // keeps the user's value and applies it again once it has started
+    private fun prefs(ctx: android.content.Context) = ctx.getSharedPreferences("thor_settings", android.content.Context.MODE_PRIVATE)
+    fun keep(ctx: android.content.Context, v: Float) = prefs(ctx).edit().putFloat("saturation", v).apply()
+    /** Service start: the user's own saturation again, if they ever set one. */
+    fun restore(ctx: android.content.Context) {
+        val v = prefs(ctx).getFloat("saturation", -1f)
+        if (v < 0.5f || v > 1.3f) return
+        applied = -1f; apply(v)
     }
 }
 
