@@ -27,28 +27,40 @@ data class KbLayout(
 ) {
     val locale: Locale get() = Locale.forLanguageTag(languages.first())
 
-    /** The small hint on a key: a digit, or this language's own first accent (never noise like ð on English). */
-    fun hintFor(key: String): String? {
-        val own = alternates[key].orEmpty().split(' ').firstOrNull { it.isNotBlank() }
-        val shared = SHARED_ALTERNATES[key].orEmpty().split(' ').firstOrNull { it.isNotBlank() }
-        return own ?: shared?.takeIf { it.length == 1 && it[0].isDigit() }
-    }
+    /**
+     * The small hint on the key [key] at ([row], [col]) of the letter rows. Build 18 (KB4): the top row's first ten keys
+     * read 1…0 by position, as on every phone keyboard (AZERTY's "a" is 1 — the letters' own digits scrambled it:
+     * 1 2 é 4 5 6 ù î ô 0); any other key shows this language's own first accent, or nothing (never noise like ð on
+     * English). A long-press offers the hint first ([alternatesFor]).
+     */
+    fun hintFor(key: String, row: Int, col: Int): String? =
+        topRowDigit(row, col) ?: alternates[key].orEmpty().split(' ').firstOrNull { it.isNotBlank() }
 
-    /** Long-press options for [key] (lower-case), language-specific first, no duplicates. */
-    fun alternatesFor(key: String): List<String> {
+    /**
+     * Long-press options for [key] (lower-case) at ([row], [col]): the top row's digit (by position) first, then this
+     * language's own, then the shared accents — no duplicates. No position = no digit. So the hint ([hintFor]) is always
+     * the first option, the one a hold lights (build 18 review, KB4: with the digit after AZERTY e's own five accents, the
+     * "3" its hint showed sat past the boxes the bar has room for — about three beside its buttons on the bottom screen).
+     */
+    fun alternatesFor(key: String, row: Int = -1, col: Int = -1): List<String> {
         val own = alternates[key].orEmpty().split(' ').filter { it.isNotBlank() }
         val shared = SHARED_ALTERNATES[key].orEmpty().split(' ').filter { it.isNotBlank() }
-        return (own + shared).distinct().filter { it != key }
+        return (listOfNotNull(topRowDigit(row, col)) + own + shared).distinct().filter { it != key }
     }
 }
 
+/** Build 18 (KB4): the digit of the top letter row's key [col] — the first ten keys read 1…0 (a longer row's last keys,
+ *  QWERTZ's ü, have none); null on any other row. */
+fun topRowDigit(row: Int, col: Int): String? = if (row == 0 && col in 0..9) "1234567890"[col].toString() else null
+
 private fun rows(vararg r: String) = r.map { row -> row.trim().split(Regex("\\s+")) }
 
-/** Latin accents any Latin layout can reach by long-press; digits on the top row. */
+/** Latin accents any Latin layout can reach by long-press. The top row's digits come by position ([topRowDigit]), not
+ *  by letter (build 18, KB4: AZERTY's q gave 1 and its w 2). */
 private val SHARED_ALTERNATES = mapOf(
-    "q" to "1", "w" to "2", "e" to "3 é è ê ë ē ę ė", "r" to "4", "t" to "5 þ",
-    "y" to "6 ý ÿ", "u" to "7 ù ú û ü ū", "i" to "8 í ì î ï ī į ı", "o" to "9 ó ò ô ö õ ø œ ō",
-    "p" to "0", "a" to "à á â ä æ ã å ā ą", "s" to "ß ś š", "d" to "ð", "g" to "ğ",
+    "e" to "é è ê ë ē ę ė", "t" to "þ",
+    "y" to "ý ÿ", "u" to "ù ú û ü ū", "i" to "í ì î ï ī į ı", "o" to "ó ò ô ö õ ø œ ō",
+    "a" to "à á â ä æ ã å ā ą", "s" to "ß ś š", "d" to "ð", "g" to "ğ",
     "l" to "ł", "z" to "ž ź ż", "c" to "ç ć č", "n" to "ñ ń",
     "." to ", ? ! ' \" : ; - … @ #", "," to "; : …",
 )
@@ -67,8 +79,8 @@ val ALL_LAYOUTS: List<KbLayout> = listOf(
     KbLayout(
         "fr_FR", "Français (AZERTY)", "FR", listOf("fr"),
         rows("a z e r t y u i o p", "q s d f g h j k l m", "w x c v b n '"),
-        alternates = mapOf("e" to "é è ê ë €", "a" to "1 à â æ", "c" to "ç", "u" to "ù û ü", "i" to "î ï", "o" to "ô œ",
-            "z" to "2", "y" to "6 ÿ", "'" to "’ « » \""),
+        alternates = mapOf("e" to "é è ê ë €", "a" to "à â æ", "c" to "ç", "u" to "ù û ü", "i" to "î ï", "o" to "ô œ",
+            "y" to "ÿ", "'" to "’ « » \""),
         currency = "€",
     ),
     KbLayout(
@@ -84,7 +96,7 @@ val ALL_LAYOUTS: List<KbLayout> = listOf(
     KbLayout(
         "de", "Deutsch (QWERTZ)", "DE", listOf("de"),
         rows("q w e r t z u i o p ü", "a s d f g h j k l ö ä", "y x c v b n m"),
-        alternates = mapOf("s" to "ß", "a" to "ä", "o" to "ö", "u" to "ü", "z" to "6", "y" to "ý"),
+        alternates = mapOf("s" to "ß", "a" to "ä", "o" to "ö", "u" to "ü", "y" to "ý"),
         currency = "€",
     ),
     KbLayout(

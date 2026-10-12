@@ -46,6 +46,15 @@ object DeckSettings {
     var directTouch by mutableStateOf(false)
         private set
     fun chooseDirect(on: Boolean) { directTouch = on; prefs.edit().putBoolean("direct_touch", on).apply() }
+    /** Build 18 (GitHub #65): Direct shows the pointer on the game's screen; off = touches only, nothing drawn over the game. */
+    var directPointer by mutableStateOf(true)
+        private set
+    fun chooseDirectPointer(on: Boolean) { directPointer = on; prefs.edit().putBoolean("direct_pointer", on).apply() }
+    /** b18h (GitHub #49, #99): how far the trackpad moves the pointer in Mouse and Touch, 1–10 ([PointerSpeed]; not Direct).
+     *  A new key: absent = [PointerSpeed.DEFAULT], the speed before it. The deck reads it at each gesture's start. */
+    var pointerSpeed by mutableStateOf(PointerSpeed.DEFAULT)
+        private set
+    fun choosePointerSpeed(s: Int) { pointerSpeed = PointerSpeed.clamp(s); prefs.edit().putInt("pointer_speed", pointerSpeed).apply() }
     private val perApp = HashMap<String, String>()
 
     fun init(ctx: Context) {
@@ -55,6 +64,8 @@ object DeckSettings {
         simpleKeys = prefs.getBoolean("simple_keys", false)
         touchMode = prefs.getBoolean("touch_mode", false)
         directTouch = prefs.getBoolean("direct_touch", false)
+        directPointer = prefs.getBoolean("direct_pointer", true)
+        pointerSpeed = PointerSpeed.clamp(runCatching { prefs.getInt("pointer_speed", PointerSpeed.DEFAULT) }.getOrDefault(PointerSpeed.DEFAULT))
         lastPad = prefs.getString("last_pad", PAD_PC) ?: PAD_PC
         runCatching {
             val o = JSONObject(prefs.getString("per_app", "{}") ?: "{}")

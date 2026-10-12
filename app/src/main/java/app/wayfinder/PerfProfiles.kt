@@ -44,6 +44,20 @@ object PerfProfiles {
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("thor_perf", Context.MODE_PRIVATE)
 
+    /** dev build 17 (WP9): the user's own AYN settings — what "Usual (<value>)" is for an app without its own (Game controls'
+     *  Performance popup): the ones remembered while an app's are applied ([apply]'s base_*), else the current ones. Reads
+     *  only; null = not known. */
+    data class Usual(val perf: PerfMode?, val fan: FanMode?, val hz: Int?)
+    fun usual(ctx: Context): Usual {
+        val p = prefs(ctx); val cr = ctx.contentResolver
+        fun sys(k: String) = runCatching { Settings.System.getInt(cr, k) }.getOrNull()
+        val perf = (p.getInt("base_perf", -1).takeIf { it >= 0 } ?: sys("performance_mode"))?.let { PerfMode.ofAyn(it) }
+        val fan = (p.getInt("base_fan", -1).takeIf { it >= 0 } ?: sys("fan_mode"))?.let { v -> FanMode.values().firstOrNull { it.value == v } }
+        val hz = (if (p.contains("base_peak")) p.getFloat("base_peak", 60f)
+            else runCatching { Settings.System.getFloat(cr, "peak_refresh_rate") }.getOrNull())?.toInt()?.takeIf { it > 0 }
+        return Usual(perf, fan, hz)
+    }
+
     /** A fan value we're writing ourselves (profiles, the fan tile), and until when — [keepCustomFan]
      *  leaves exactly that change alone (AYN's own Smart / Quiet after a performance change is not it). */
     @Volatile private var ownFan = -1

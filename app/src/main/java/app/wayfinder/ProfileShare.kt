@@ -61,7 +61,7 @@ object ProfileShare {
     class Report {
         var actions = 0; var keys = 0; var macrosOff = 0; var emptied = 0
         fun lines(): List<String> = buildList {
-            if (actions > 0) add("$actions Wayfinder action${s(actions)} removed (shared files carry controller mapping only)")
+            if (actions > 0) add("$actions Wayfinder action${s(actions)} removed (shared files carry game controls only)")
             if (keys > 0) add("$keys system key${s(keys)} removed (only regular keyboard keys are allowed)")
             if (macrosOff > 0) add("$macrosOff macro${s(macrosOff)} kept but OFF — check the steps, then turn ${if (macrosOff == 1) "it" else "them"} on")
             if (emptied > 0) add("$emptied button${s(emptied)} left unmapped (nothing safe remained)")
@@ -72,7 +72,7 @@ object ProfileShare {
     /** One parsed, cleaned file — not saved yet. */
     class Incoming(
         val pkg: String, val appName: String, val game: String?, val title: String,
-        val face: FaceLayout?, val remap: PadRemap, val report: Report,
+        val face: FaceStyle?, val remap: PadRemap, val report: Report,
     ) {
         /** The profile it goes to: the game's (created if new) or the app's. */
         val key get() = if (game != null) GameProfiles.key(pkg, game) else pkg
@@ -80,15 +80,19 @@ object ProfileShare {
 
     // ── export ─────────────────────────────────────────────────────────────
 
-    /** The file for profile [key] (app or `pkg#game`), without the actions (never shared). */
+    /** The file for profile [key] (app or `pkg#game`; dev build 16 (WP6): or a controller's own controls there,
+     *  `<app | game>@<controller>` — the file is for that app or game, without the controller), without the actions (never
+     *  shared). null = nothing to share, or a controller's every-game controls (a file is for one app). */
     fun export(ctx: Context, key: String): Pair<String, ByteArray>? {
+        val base = if (PadProfiles.isPad(key)) PadProfiles.baseOf(key) else key
+        if (base == PadProfiles.EVERY) return null
         val cfg = Profiles.get(key)
         val remap = cfg.remap?.let { strip(it, Report(), keepMacrosOn = true) }
         if ((remap == null || remap.isEmpty) && cfg.face == null) return null
-        val pkg = GameProfiles.pkgOf(key)
-        val game = key.substringAfter('#', "").takeIf { GameProfiles.isGame(key) }
+        val pkg = GameProfiles.pkgOf(base)
+        val game = base.substringAfter('#', "").takeIf { GameProfiles.isGame(base) }
         val appName = label(ctx, pkg)
-        val title = if (game != null) GameProfiles.get(key)?.title ?: game else appName
+        val title = if (game != null) GameProfiles.get(base)?.title ?: game else appName
         val o = JSONObject().put("format", FORMAT).put("version", VERSION)
             .put("app", pkg).put("appName", appName).put("title", title)
             .apply { game?.let { put("game", it) } }
@@ -161,7 +165,7 @@ object ProfileShare {
             ?: clean(o.optString("appName")).takeIf { it.isNotEmpty() }?.let { "$it ($pkg)" } ?: pkg
         // a game's title comes from the file; an app's name never does (the installed label wins)
         val title = if (game == null) appName else clean(o.optString("title")).ifEmpty { game }
-        val face = FaceLayout.values().firstOrNull { it.name == o.optString("face") }
+        val face = FaceStyle.parse(o.optString("face"))
         val report = Report()
         // PadRemap.fromJson validates every token; then the safety filter on top
         val remap = PadRemap.fromJson(o.optJSONObject("remap"))?.let { strip(it, report, keepMacrosOn = false) } ?: PadRemap()
@@ -213,7 +217,8 @@ object ProfileShare {
         // a long / double press whose second output was removed falls back to normal
         val fire = r.fire.filter { (k, f) -> !f.hasAlt || k in alt }
         val shifted = r.shifted.mapNotNull { (k, v) -> keep(v)?.let { k to it } }.toMap()
-        return r.copy(buttons = buttons, alt = alt, chords = chords, fire = fire, shifted = shifted)
+        // dev build 16 (WP4): a shared file never carries a controller's own parts (an import lands on a Thor key)
+        return r.copy(buttons = buttons, alt = alt, chords = chords, fire = fire, shifted = shifted, pads = emptyMap(), padFire = emptyMap())
     }
 
     private val PKG = Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")

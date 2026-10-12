@@ -241,6 +241,14 @@ data class PadRemap(
     /** 1.3 (GitHub #19): left / right inverted (old camera controls). */
     val invertLeftX: Boolean = false,
     val invertRightX: Boolean = false,
+    /** dev build 16 (WP4): a connected controller's parts by evdev code → evdev code (0xffff nothing) where the part or what
+     *  it becomes isn't one of the Thor's buttons (Home 0x13c, SL 0x132, SR 0x135) — run by its reader as written
+     *  (`k0x132=0x13c`). Only in a controller's own controls ([PadProfiles]); the Thor's are [forThor]-stripped. A Thor
+     *  button with a Thor target stays in [buttons] (the drawing and the bind popup edit it there). Codes, not targets: no
+     *  [ThorButton] exists for SL / SR, and the app's engine plays only the Thor's codes (ExtEngine.handle). */
+    val pads: Map<Int, Int> = emptyMap(),
+    /** How such a part — or a D-pad direction its reader fires (the older own controls) — fires: 1 turbo · 2 toggle. */
+    val padFire: Map<Int, Int> = emptyMap(),
 ) {
     val isEmpty get() = this == PadRemap()
     val trigRanged get() = trigStart != 0 || trigFull != 100
@@ -248,7 +256,50 @@ data class PadRemap(
         listOf(swapSticks, invertLeftY, invertRightY, dpadStick, digitalTriggers, gyro.isOn,
             !stickL.isDefault, !stickR.isDefault, trigRanged, shift != null, !jobL.isDefault, !jobR.isDefault,
             invertLeftX, invertRightX).count { it } +
-            (if (shift != null) shifted.size else 0)
+            (if (shift != null) shifted.size else 0) +
+            pads.size + padFire.keys.count { BY_CODE[it]?.let { b -> b in fire } != true }
+
+    // ── dev build 16 (WP4): a controller's own parts (WP5's drawing, WP6's rows read and write them here) ──
+    /** What pad part [code] becomes in [pads] (a code; 0xffff nothing) — null = not there: itself, or a Thor button's job in
+     *  [buttons]. */
+    fun part(code: Int): Int? = pads[code]
+    /** [part] as a target the pages can name: a Thor button or D-pad direction (Home too), [RemapTarget.None] — null =
+     *  itself, or SL / SR (no [ThorButton]: [part] says which). */
+    fun partTarget(code: Int): RemapTarget? = pads[code]?.let { d ->
+        when {
+            d == 0xffff -> RemapTarget.None
+            BY_CODE[d] != null -> RemapTarget.Button(BY_CODE.getValue(d))
+            d == HOME_CODE -> RemapTarget.Button(ThorButton.HOME)
+            else -> null
+        }
+    }
+    /** How pad part [code] fires in [padFire] (turbo / toggle) — null = normally, or a Thor button's [fire]. */
+    fun partFire(code: Int): Fire? = when (padFire[code]) { 1 -> Fire.TURBO; 2 -> Fire.TOGGLE; else -> null }
+    /** Part [code] becomes [dest] (null or itself = itself): a Thor button becoming a Thor button (or nothing) goes to
+     *  [buttons], anything else to [pads] — the other map's entry for it is cleared. Codes not a controller's: unchanged. */
+    fun withPart(code: Int, dest: Int?): PadRemap {
+        if (code !in PAD_CODES || (dest != null && dest != 0xffff && dest !in PAD_CODES)) return this
+        val b = BY_CODE[code]
+        val d = dest?.takeIf { it != code }
+        val inButtons = b != null && d != null && (d == 0xffff || BY_CODE[d] != null)
+        val t: RemapTarget? = if (!inButtons) null else if (d == 0xffff) RemapTarget.None else RemapTarget.Button(BY_CODE.getValue(d!!))
+        return copy(
+            buttons = when { b == null -> buttons; t != null -> buttons + (b to t); else -> buttons - b },
+            pads = if (d == null || inButtons) pads - code else pads + (code to d))
+    }
+    /** How part [code] fires (1 turbo · 2 toggle · null normally): a Thor button (not the D-pad) in [fire], anything else in
+     *  [padFire] (its reader fires it). */
+    fun withPartFire(code: Int, f: Int?): PadRemap {
+        if (code !in PAD_CODES) return this
+        val v = f?.takeIf { it in 1..2 }
+        val b = BY_CODE[code]?.takeIf { !it.isDpad }
+        return if (b != null) copy(fire = if (v == null) fire - b else fire + (b to Fire.values()[v]), padFire = padFire - code)
+        else copy(padFire = if (v == null) padFire - code else padFire + (code to v))
+    }
+    /** The Thor's controls: no controller part in them (wfpad would refuse the whole profile: the Thor's pad has no SL). */
+    fun forThor() = if (pads.isEmpty() && padFire.isEmpty()) this else copy(pads = emptyMap(), padFire = emptyMap())
+    /** A controller's own controls: no Thor gyro in them (its motion aim is its own, ExtPadsCtl.gyroFor). */
+    fun forPad() = if (gyro == GyroSettings()) this else copy(gyro = GyroSettings())
 
     /** This button is played by the app (ExtEngine): a target the engine can't do alone, a
      *  long / double press, or a chord member. The engine sends its presses as "X" lines. */
@@ -273,6 +324,8 @@ data class PadRemap(
         .apply { if (trigRanged) put("ts", trigStart).put("tf", trigFull) }
         .apply { shift?.let { put("sh", it.name) }; if (shifted.isNotEmpty()) put("shl", JSONObject().apply { shifted.forEach { (k, v) -> put(k.name, v.token()) } }) }
         .apply { if (!jobL.isDefault) put("jl", jobL.toJson()); if (!jobR.isDefault) put("jr", jobR.toJson()) }
+        .apply { if (pads.isNotEmpty()) put("pk", JSONObject().apply { pads.forEach { (k, v) -> put("0x${k.toString(16)}", v) } }) }
+        .apply { if (padFire.isNotEmpty()) put("pf", JSONObject().apply { padFire.forEach { (k, v) -> put("0x${k.toString(16)}", v) } }) }
 
     /** Tokens for the mapping engine (fx/wfmap.h `wf_parse`). */
     fun engineTokens(): String = buildList {
@@ -287,12 +340,15 @@ data class PadRemap(
             } ?: continue
             add("k0x${s.toString(16)}=$d")
         }
+        // dev build 16 (WP4): a controller's parts that aren't the Thor's, as written (a Thor button's job in [buttons] wins)
+        for ((s, d) in pads.toSortedMap()) if (BY_CODE[s]?.let { it in buttons } != true) add("k0x${s.toString(16)}=0x${d.toString(16)}")
         // turbo / toggle on what the game gets (the app's buttons: the app does it — "X" lines)
         for ((src, f) in fire) {
             if (byApp(src) || f.hasAlt || src.isDpad) continue
             CODE[src]?.let { add("f0x${it.toString(16)}=${f.ordinal}") }
         }
-        if (fire.isNotEmpty() && turboHz != 12) add("tr=${turboHz.coerceIn(2, 30)}")
+        for ((s, f) in padFire.toSortedMap()) if (BY_CODE[s]?.let { fire.containsKey(it) } != true) add("f0x${s.toString(16)}=$f")
+        if ((fire.isNotEmpty() || padFire.isNotEmpty()) && turboHz != 12) add("tr=${turboHz.coerceIn(2, 30)}")
         if (swapSticks) add("sw=1")
         if (dpadStick) add("dl=1")
         if (invertLeftY) add("il=1")
@@ -333,6 +389,11 @@ data class PadRemap(
          *  take (`p <code> <0|1>`), and a source's id. */
         fun outCode(b: ThorButton): Int? = CODE[b] ?: DPAD[b]
         val BY_CODE = (CODE + DPAD).entries.associate { (k, v) -> v to k }
+        /** dev build 16 (WP4): a controller's parts that aren't the Thor's buttons — Home, SL, SR (evdev codes). */
+        const val HOME_CODE = 0x13c
+        val PAD_PARTS = mapOf(HOME_CODE to "HO", 0x132 to "SL", 0x135 to "SR")
+        /** Every part a controller's own controls can name ([pads], [padFire]): the Thor's buttons, the D-pad, [PAD_PARTS]. */
+        val PAD_CODES: Set<Int> = (CODE.values + DPAD.values + PAD_PARTS.keys).toSet()
 
         fun fromJson(o: JSONObject?): PadRemap? {
             o ?: return null
@@ -379,7 +440,18 @@ data class PadRemap(
                         if (src in BUTTONS) RemapTarget.fromToken(m.getString(k))?.let { put(src, it) }
                     } } } ?: emptyMap(),
                 jobL = StickJob.fromJson(o.optJSONObject("jl")), jobR = StickJob.fromJson(o.optJSONObject("jr")),
-                invertLeftX = o.optBoolean("xl"), invertRightX = o.optBoolean("xr")).takeIf { !it.isEmpty }
+                invertLeftX = o.optBoolean("xl"), invertRightX = o.optBoolean("xr"),
+                // dev build 16 (WP4): a controller's parts — only valid ones (values also come from files)
+                pads = codes(o.optJSONObject("pk")) { s, d -> s in PAD_CODES && (d in PAD_CODES || d == 0xffff) && s != d },
+                padFire = codes(o.optJSONObject("pf")) { s, f -> s in PAD_CODES && f in 1..2 }).takeIf { !it.isEmpty }
+        }
+        /** "0x…" keys → int values, kept where [ok]. */
+        private fun codes(j: JSONObject?, ok: (Int, Int) -> Boolean): Map<Int, Int> = buildMap {
+            j?.keys()?.forEach { k ->
+                val c = k.takeIf { it.startsWith("0x") }?.drop(2)?.toIntOrNull(16) ?: return@forEach
+                val v = j.optInt(k, -1)
+                if (ok(c, v)) put(c, v)
+            }
         }
     }
 }

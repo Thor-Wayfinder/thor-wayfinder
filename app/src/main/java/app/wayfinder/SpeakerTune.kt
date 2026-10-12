@@ -67,7 +67,19 @@ object SpeakerTune {
     private val prefs by lazy { app.getSharedPreferences("thor_audio", Context.MODE_PRIVATE) }
     private var started = false
     @Volatile private var installing = false
-    @Volatile private var installFailed = false
+    /** The stereo widener couldn't be added this time. Build 18 (B11, MORE-03): Compose state, so the Sound page offers
+     *  "Try again" in place of a Stereo width slider that does nothing ([retryWidener]). */
+    var installFailed by mutableStateOf(false)
+        private set
+    /** Build 18 (widener review): [installFailed] because of a layer that isn't Wayfinder's ([AudioFx.failedOutside]) — the
+     *  notice adds that a restart of the Thor clears it. */
+    var failedOutside by mutableStateOf(false)
+        private set
+    /** Build 18 (widener review): the watchdog's one re-install of a widener the audio server stopped listing. */
+    private val reinstall = OnceRetry()
+    /** The watchdog's look at the audio server (blocking: off the main thread), one at a time. */
+    private val checker = java.util.concurrent.Executors.newSingleThreadExecutor()
+    private var checking = false
 
     /** Settings only (the UI can read and change them before the service runs; the
      *  service's [start] applies them). */
@@ -98,7 +110,7 @@ object SpeakerTune {
 
     fun setOn(on: Boolean) {
         enabled = on
-        if (on) installFailed = false
+        if (on) { installFailed = false; failedOutside = false; reinstall.reset() }
         prefs.edit().putBoolean("speaker_tune", on).apply()
         // Two EQs stacked would be wrong: hand over from the external DSP app, and back.
         // Its state can't be read, so it's paused when the fix starts and never switched back on
@@ -106,6 +118,9 @@ object SpeakerTune {
         if (on) externalDsp(false)
         apply()
     }
+
+    /** Build 18 (B11, MORE-03): the widener once more (its install failed — no retry loop runs by itself). */
+    fun retryWidener() { installFailed = false; failedOutside = false; reinstall.reset(); apply() }
 
     fun setEq(on: Boolean) {
         eqOn = on
@@ -151,7 +166,8 @@ object SpeakerTune {
                 Log.i(TAG, "stereo widener ${if (ok) "in place" else "not available"}")
                 main.post {
                     installing = false
-                    if (!ok) { installFailed = true; apply(); return@post }   // no retry loop: next time the fix is switched on
+                    // no retry loop: next time the fix is switched on (or Try again). Build 18 (widener review): and why
+                    if (!ok) { installFailed = true; failedOutside = AudioFx.failedOutside; apply(); return@post }
                     // The audio server restarted: effects made before it are dead — make ours again.
                     main.postDelayed({
                         dp?.let { runCatching { it.release() } }; dp = null
@@ -265,9 +281,27 @@ object SpeakerTune {
                     wide?.let { runCatching { it.release() } }; wide = null
                     apply()
                 }
+                // build 18 (widener review): in place = the audio server lists it. Another tool's overlay winning an audio
+                // restart drops it without a word — asked off the main thread (it blocks while the server restarts)
+                if (AudioFx.installed && !checking) {
+                    checking = true
+                    checker.execute {
+                        val lost = runCatching { AudioFx.lost() }.getOrDefault(false)
+                        main.post { checking = false; if (lost && AudioFx.installed && !installing) widenerLost() }
+                    }
+                }
             }
             main.postDelayed(this, WATCH_MS)
         }
+    }
+
+    /** Build 18 (widener review): the audio server stopped listing the widener — forget it and add it again, ONCE ([reinstall]);
+     *  lost again: the notice and its Try again (no loop). */
+    private fun widenerLost() {
+        AudioFx.forget()                    // apply() lets go of our dead effect (syncWide) and adds it again
+        if (reinstall.take()) Log.w(TAG, "the stereo widener isn't loaded any more: adding it again (once)")
+        else { Log.w(TAG, "the stereo widener isn't loaded any more (again): not re-adding it"); installFailed = true; failedOutside = false }
+        apply()
     }
 
     private fun onStatus(fx: DynamicsProcessing): String {
@@ -307,4 +341,13 @@ object SpeakerTune {
             .putExtra("rootlessjamesdsp.enabled", on))
         Log.i(TAG, "external DSP ${if (on) "back on" else "off"} ($p)")
     }
+}
+
+/** Build 18 (widener review): one automatic attempt, then none until the user asks again ([reset]: Try again, the fix
+ *  switched on) — never a retry loop. Pure (JVM test). */
+internal class OnceRetry {
+    private var used = false
+    /** true: try now (the one automatic attempt); false: it was used. */
+    fun take(): Boolean = if (used) false else { used = true; true }
+    fun reset() { used = false }
 }

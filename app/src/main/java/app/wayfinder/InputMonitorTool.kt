@@ -63,6 +63,7 @@ object InputMonitorTool {
         // Input layer (phase 0): a previous helper may have died with AYN's pad disabled, its
         // layout switched, or at controller #2 — PadLayer.startup() puts all that back.
         PadLayer.send = FpsSampler.send
+        ExtPads.send = FpsSampler.send
         PadLayer.appUid = appUid
         PadLayer.onCloneChanged = { streams.forEach { (i, s) -> if (devices.getOrNull(i) == "@controller") runCatching { s.close() } } }
         runCatching { PadLayer.startup() }
@@ -83,6 +84,7 @@ object InputMonitorTool {
             } catch (_: Exception) {}
             Log.i("ThorInputTool", "app socket closed → exit")
             RootInjector.release()
+            runCatching { ExtPads.stopForExit() }
             runCatching { PadLayer.stopForExit() }
             // Wayfinder UNINSTALLED (not just restarting): its data folder disappears a moment after
             // its process is killed. Nothing of it may stay behind: the copy of the controller goes,

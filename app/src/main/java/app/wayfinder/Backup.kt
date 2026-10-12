@@ -124,7 +124,7 @@ object Backup {
                 .put("app", k.substringBefore('#')).put("game", k.substringAfter('#', ""))
                 .put("title", gp.optString("title")).put("remap", gp.optJSONObject("remap")).put("face", gp.optString("face")))
         }
-        if (list.isEmpty()) return null to "This backup can't be fully restored here (it wasn't made by this installation of Wayfinder), and it has no controller mappings to take."
+        if (list.isEmpty()) return null to "This backup can't be fully restored here (it wasn't made by this installation of Wayfinder), and it has no game controls to take."
         return Incoming(false, made, null, list.take(500), report) to null
     }
 

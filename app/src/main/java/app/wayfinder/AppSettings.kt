@@ -16,6 +16,12 @@ enum class Backdrop { WALLPAPER, AURORA }
 /** On-the-fly blank gesture: 3-finger TAP toggles; 3-finger SWIPE down blanks / up wakes. */
 enum class BlankGesture { OFF, TAP, SWIPE }
 
+/** Build 18 (GitHub #98): where screen recordings are saved — [rel] under /sdcard. Two constant folders only: the path goes
+ *  straight into a root shell line, so it is never typed. Names are stored — never rename one. */
+enum class RecordFolder(val rel: String, val label: String) {
+    MOVIES("Movies/Wayfinder", "Movies / Wayfinder"), SHOTS("Pictures/Screenshots", "Pictures / Screenshots")
+}
+
 /**
  * Lightweight app-wide settings backed by SharedPreferences and exposed as
  * Compose snapshot state (single process, so a singleton is fine). Call [init]
@@ -108,6 +114,15 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putString("shot_target", t.name).apply()
     }
 
+    /** Build 18 (GitHub #98): where the screen recording goes (Movies / Wayfinder, or with the screenshots). */
+    var recordFolder by mutableStateOf(RecordFolder.MOVIES)
+        private set
+
+    fun chooseRecordFolder(f: RecordFolder) {
+        recordFolder = f
+        if (::prefs.isInitialized) prefs.edit().putString("record_folder", f.name).apply()
+    }
+
     /** Lock — keep the controller on one screen; touching the other won't move it. */
     var focusLockEnabled by mutableStateOf(false)
         private set
@@ -186,6 +201,17 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("panel_takes_controller", on).apply()
     }
 
+    /** b18i (D1, 2026-10-10): Game controls opens on the screen the game isn't on when the game fills one, so the game keeps
+     *  running (Android keeps an app on another screen resumed; covered by the page, Eden and GameNative paused). Off (the
+     *  default, today's way): where the Hub lives. One screen or docked: where the Hub lives either way. */
+    var controlsOtherScreen by mutableStateOf(false)
+        private set
+
+    fun setControlsOtherScreenOn(on: Boolean) {
+        controlsOtherScreen = on
+        if (::prefs.isInitialized) prefs.edit().putBoolean("controls_other_screen", on).apply()
+    }
+
     fun chooseAynHold(a: ThorAction?) {
         aynHold = a
         if (::prefs.isInitialized) prefs.edit().putString("ayn_hold", a?.name).apply()
@@ -210,6 +236,20 @@ object AppSettings {
     fun setFpsPlacement(screens: Int = fpsScreens, corner: Int = fpsCorner) {
         fpsScreens = screens; fpsCorner = corner
         if (::prefs.isInitialized) prefs.edit().putInt("fps_screens", screens).putInt("fps_corner", corner).apply()
+    }
+    /** Build 18 (GitHub #86): its text size (0 small 11 sp · 1 normal 13 sp, the look before · 2 large 16 sp) and the compact
+     *  style (square, tight, flush in the corner). */
+    var fpsSize by mutableStateOf(1)
+        private set
+    var fpsCompact by mutableStateOf(false)
+        private set
+    fun setFpsSizeTo(size: Int) {
+        fpsSize = size.coerceIn(0, 2)
+        if (::prefs.isInitialized) prefs.edit().putInt("fps_size", fpsSize).apply()
+    }
+    fun setFpsCompactOn(on: Boolean) {
+        fpsCompact = on
+        if (::prefs.isInitialized) prefs.edit().putBoolean("fps_compact", on).apply()
     }
 
     fun setFpsCounterOn(on: Boolean) {
@@ -254,15 +294,18 @@ object AppSettings {
     }.getOrDefault(false)
 
     /** 1.4 (GitHub #24): your own colours — a flat look. ARGB: background, cards, text, accent. */
+    /** Build 18 (B15, MORE-D01): Your own colours' first values — background, cards, text, accent ("Reset colours" puts
+     *  them back). The keys and the values read at start are unchanged. */
+    val CUSTOM_DEFAULTS = listOf(0xFF101318.toInt(), 0xFF1E232C.toInt(), 0xFFFFFFFF.toInt(), 0xFF3D9BFF.toInt())
     var customColors by mutableStateOf(false)
         private set
-    var customBg by mutableStateOf(0xFF101318.toInt())
+    var customBg by mutableStateOf(CUSTOM_DEFAULTS[0])
         private set
-    var customCard by mutableStateOf(0xFF1E232C.toInt())
+    var customCard by mutableStateOf(CUSTOM_DEFAULTS[1])
         private set
-    var customText by mutableStateOf(0xFFFFFFFF.toInt())
+    var customText by mutableStateOf(CUSTOM_DEFAULTS[2])
         private set
-    var customAccent by mutableStateOf(0xFF3D9BFF.toInt())
+    var customAccent by mutableStateOf(CUSTOM_DEFAULTS[3])
         private set
     fun setCustomColorsOn(on: Boolean) { customColors = on; if (::prefs.isInitialized) prefs.edit().putBoolean("custom_colors", on).apply() }
     fun setCustomColor(which: Int, argb: Int) {
@@ -270,6 +313,9 @@ object AppSettings {
         when (which) { 0 -> customBg = c; 1 -> customCard = c; 2 -> customText = c; else -> customAccent = c }
         if (::prefs.isInitialized) prefs.edit().putInt("custom_c$which", c).apply()
     }
+    /** dev build 17 (WP8): your own colours for the theme builder (ui/GlassTheme.kt glassColorsFor) — null while off. */
+    fun customColours(): app.wayfinder.ui.CustomColours? =
+        if (!customColors) null else app.wayfinder.ui.CustomColours(customBg, customCard, customText, customAccent)
     /** No glass: Black, or your own colours. */
     val flatLook: Boolean get() = themeMode == ThemeMode.BLACK || customColors
 
@@ -295,6 +341,7 @@ object AppSettings {
         glassBlur = prefs.getFloat("glass_blur", 0.5f)
         app.wayfinder.ui.GlassLensConfig.enabled = refraction
         shotTarget = runCatching { ShotTarget.valueOf(prefs.getString("shot_target", null) ?: "TOP") }.getOrDefault(ShotTarget.TOP)
+        recordFolder = runCatching { RecordFolder.valueOf(prefs.getString("record_folder", null) ?: "MOVIES") }.getOrDefault(RecordFolder.MOVIES)
         focusLockEnabled = prefs.getBoolean("focus_lock", false)
         focusLockTop = prefs.getBoolean("focus_lock_top", true)
         focusSticky = prefs.getBoolean("focus_sticky", true)
@@ -307,10 +354,13 @@ object AppSettings {
         recentsHint = prefs.getInt("recents_hint", 0).coerceIn(0, 2)
         recentsHintAt = prefs.getInt("recents_hint_at", 0).coerceIn(0, 4)
         fpsLevel = prefs.getInt("fps_level", 0).coerceIn(0, 2)
+        fpsSize = prefs.getInt("fps_size", 1).coerceIn(0, 2)
+        fpsCompact = prefs.getBoolean("fps_compact", false)
         aynButtonOurs = prefs.getBoolean("ayn_button_ours", true)
         aynTap = runCatching { ThorAction.valueOf(prefs.getString("ayn_tap", null) ?: "QUICK_MENU") }.getOrDefault(ThorAction.QUICK_MENU)
         aynHold = runCatching { ThorAction.valueOf(prefs.getString("ayn_hold", null)!!) }.getOrNull()
         panelTakesController = prefs.getBoolean("panel_takes_controller", true)
+        controlsOtherScreen = prefs.getBoolean("controls_other_screen", false)   // b18i (D1): new key, absent = off
         idleBlankEnabled = prefs.getBoolean("idle_blank_enabled", false)
         idleBlankSeconds = prefs.getInt("idle_blank_seconds", 30)
         gestureBlankMode = runCatching { BlankGesture.valueOf(prefs.getString("gesture_blank_mode", null) ?: "TAP") }

@@ -22,8 +22,9 @@ object PadLayerCtl {
     @Volatile var wanted = true
         private set
 
-    /** 1.4 (2026-09-30): where the layer runs. */
-    enum class Mode(val label: String) { EVERYWHERE("Everywhere"), SET_UP("Only games I set up"), NOWHERE("Nowhere") }
+    /** 1.4 (2026-09-30): where the layer runs. Build 18 (C10, VD-20 / V16): "Games you set up" (one voice — the app
+     *  speaks to you; it was "Only games I set up"). Stored by [name]: the label changes nothing saved. */
+    enum class Mode(val label: String) { EVERYWHERE("Everywhere"), SET_UP("Games you set up"), NOWHERE("Nowhere") }
     @Volatile var mode = Mode.EVERYWHERE
         private set
     private const val MODE_KEY = "layer_mode"
@@ -166,10 +167,32 @@ object PadLayerCtl {
     fun apply(ctx: Context) {
         init(ctx)
         if (wanted) binary(ctx)?.let {
+            InputMonitor.send("G name ${if (ExtPadsCtl.thorNamed(ctx)) 1 else 0}")   // before "G on": one start
             InputMonitor.send("G on")   // the helper finds the binary itself
             InputMonitor.send("G map $profile")
             GyroEngine.resync()
         } else InputMonitor.send("G off")
+    }
+
+    /** Build 18 (GitHub #83): "Turn Wayfinder off" — the layer stops now (AYN's own controller comes back, no copy left)
+     *  and the mode is kept: the next service's [follow] turns it on again once an app that wants it has the controller. */
+    fun pauseForOff(ctx: Context) {
+        init(ctx)
+        wanted = false; candidate = null; pausedForOff = true
+        InputMonitor.send("G off")
+        Log.w(TAG, "input layer off (Wayfinder turned off)")
+    }
+    @Volatile private var pausedForOff = false
+
+    /** Build 18 (review): Wayfinder on again in the same process after [pauseForOff] (or its turning off refused): the layer
+     *  wants what the mode and the last app say, as [setMode] does — over Wayfinder's own pages [follow] leaves it as it is,
+     *  and the Hub said "Off — game controls paused". [send]: tell the helper now (else its connect does). */
+    fun resumeAfterOff(ctx: Context, send: Boolean = false) {
+        if (!pausedForOff) return
+        init(ctx)
+        pausedForOff = false
+        wanted = need(lastApp) ?: (mode == Mode.EVERYWHERE); candidate = null
+        if (send) apply(ctx)
     }
 
     /** The next [setProfile] is sent even if unchanged (1.3). */
@@ -182,7 +205,7 @@ object PadLayerCtl {
         if (spec == profile && !forceNext) return false
         forceNext = false
         profile = spec
-        layoutOverride = Regex("(^| )L=([nx])").find(spec)?.groupValues?.get(2)?.single()
+        layoutOverride = FaceRules.layoutOf(spec)                // dev build 15 (WP2): the one parser (the helper's too)
         if (wanted) InputMonitor.send("G map $spec")
         if (BuildConfig.DEBUG) Log.d(TAG, "profile: $spec")
         return true

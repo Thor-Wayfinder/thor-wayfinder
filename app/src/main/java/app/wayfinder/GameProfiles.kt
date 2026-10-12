@@ -13,7 +13,7 @@ import java.util.concurrent.ConcurrentHashMap
  * `<pkg>#<game-id>` (the id from [GameDetector]); a game without one uses its app's profile.
  */
 data class GameProfile(
-    val title: String, val face: FaceLayout? = null, val remap: PadRemap? = null,
+    val title: String, val face: FaceStyle? = null, val remap: PadRemap? = null,
     // round 8 (2026-09-25): a game can also have its own performance, fan, refresh rate and stick
     // lights (null = its app's, else the user's) — edited in Game controls, or kept from the panel
     val perf: PerfMode? = null, val fan: FanMode? = null, val hz: Int? = null,
@@ -22,24 +22,29 @@ data class GameProfile(
      *  (null = its app's, else the usual). */
     val second: SecondScreenPolicy? = null,
     val fps: Boolean? = null,
+    /** Controllers: player 1 while this game runs — true a connected controller, false the
+     *  Thor, null = its app's choice. */
+    val extFirst: Boolean? = null,
 ) {
     fun toJson(): String = JSONObject().put("title", title)
         .apply { face?.let { put("face", it.name) } }
         .apply { remap?.takeIf { !it.isEmpty }?.let { put("remap", it.toJson()) } }
         .apply { perf?.let { put("perf", it.name) }; fan?.let { put("fan", it.name) }; hz?.let { put("hz", it) } }
         .apply { lights?.let { put("lights", it.toJson()) } }
-        .apply { second?.let { put("second", it.name) }; fps?.let { put("fps", it) } }.toString()
+        .apply { second?.let { put("second", it.name) }; fps?.let { put("fps", it) } }
+        .apply { extFirst?.let { put("extFirst", it) } }.toString()
     companion object {
         fun fromJson(s: String): GameProfile? = runCatching {
             val o = JSONObject(s)
-            GameProfile(o.getString("title"), o.optString("face").takeIf { it.isNotEmpty() }?.let { f -> FaceLayout.values().firstOrNull { it.name == f } },
+            GameProfile(o.getString("title"), FaceStyle.parse(o.optString("face")),
                 PadRemap.fromJson(o.optJSONObject("remap")),
                 runCatching { PerfMode.valueOf(o.optString("perf")) }.getOrNull(),
                 runCatching { FanMode.valueOf(o.optString("fan")) }.getOrNull(),
                 o.optInt("hz", 0).takeIf { it == 60 || it == 120 },
                 app.wayfinder.lights.LightProfile.fromJson(o.optJSONObject("lights")),
                 runCatching { SecondScreenPolicy.valueOf(o.optString("second")) }.getOrNull()?.takeIf { it != SecondScreenPolicy.DEFAULT },
-                if (o.has("fps")) o.optBoolean("fps") else null)
+                if (o.has("fps")) o.optBoolean("fps") else null,
+                if (o.has("extFirst")) o.optBoolean("extFirst") else null)
         }.getOrNull()
     }
 }
@@ -58,7 +63,7 @@ object GameProfiles {
 
     fun key(pkg: String, game: String) = "$pkg#$game"
     fun isGame(key: String) = '#' in key
-    fun pkgOf(key: String) = key.substringBefore('#')
+    fun pkgOf(key: String) = key.substringBefore('@').substringBefore('#')   // (a controller's own: "<key>@<controller>")
     fun get(key: String): GameProfile? = cache[key]
     /** This app's game profiles: key → profile. */
     fun forApp(pkg: String): List<Pair<String, GameProfile>> = cache.entries.filter { pkgOf(it.key) == pkg }
@@ -73,12 +78,14 @@ object GameProfiles {
         cache.remove(key); prefs?.edit()?.remove(key)?.apply()
         AppConfigStore.version.intValue++
     }
-    /** 1.3: [key]'s profile has nothing of its own left (its app's controls, no settings): removed. */
+    /** 1.3: [key]'s profile has nothing of its own left (its app's controls, no settings): removed. dev build 16 (WP4): a
+     *  controller's own controls for the game no longer keep it — they play without it (the running game, X7), and a plain
+     *  copy kept alive would freeze the Thor's controls for that game at the copy (its app's changes stop reaching it). */
     fun removeIfPlain(key: String) {
         val p = cache[key] ?: return
         val a = AppConfigStore.get(pkgOf(key))
         fun r(x: PadRemap?) = x?.takeIf { !it.isEmpty }
-        if (p.perf == null && p.fan == null && p.hz == null && p.lights == null && p.second == null && p.fps == null &&
+        if (p.perf == null && p.fan == null && p.hz == null && p.lights == null && p.second == null && p.fps == null && p.extFirst == null &&
             p.face == a.face && r(p.remap) == r(a.remap)) remove(key)
     }
     /** 1.4: game profiles with nothing of their own (an untouched copy left when Game controls closed by a crash or
@@ -102,6 +109,10 @@ object GameProfiles {
 
     fun onDetected(pkg: String, game: String?, title: String?) {
         val r = if (game != null && title != null) Running(pkg, game, title) else null
+        // dev build 15 (C5): a game starting — the player order may still change before it takes its controllers.
+        // Review C-APP-1: not the same game seen again after its app left the screen (Home and back) — [starts]
+        // outlives [forgetExcept]; the helper's own "no game" answer ends it (before the early return below)
+        if (starts.onAnswer(pkg, r?.game)) startedAt[pkg] = android.os.SystemClock.uptimeMillis()
         val before = running[pkg]
         if (r == before) return
         if (r == null) running.remove(pkg) else running[pkg] = r
@@ -119,10 +130,17 @@ object GameProfiles {
         val gone = running.keys.filter { it !in onScreens }
         if (gone.isNotEmpty()) { gone.forEach { running.remove(it) }; AppConfigStore.version.intValue++ }
     }
+    private val startedAt = ConcurrentHashMap<String, Long>()
+    private val starts = GameStarts()
+    /** When a game was last detected starting in [pkg] (uptime ms; 0 = never). */
+    fun gameStartedAt(pkg: String): Long = startedAt[pkg] ?: 0L
     /** The detected game of [pkg], if it's running now. */
     fun runningIn(pkg: String): Running? = running[pkg]
     /** The profile the controls use for [pkg]: its game's, if the game has one, else the app's. */
     fun activeKey(pkg: String): String = runningIn(pkg)?.let { key(pkg, it.game) }?.takeIf { cache.containsKey(it) } ?: pkg
+    /** dev build 16 (WP4, X7): the game running in [pkg] ("pkg#id"), whether the Thor has a profile for it or not — else
+     *  [pkg]. What connected controllers' own controls are looked up by ([PadControls]). */
+    fun runningKey(pkg: String): String = runningIn(pkg)?.let { key(pkg, it.game) } ?: pkg
 
     /** What applies to [pkg] now: each of its running game's own settings, else the app's. */
     fun effective(pkg: String): AppConfig {
@@ -136,16 +154,33 @@ object GameProfiles {
 /** The controls page edits an app's profile or a game's (same fields: face + remap). */
 object Profiles {
     fun get(key: String): AppConfig =
-        if (GameProfiles.isGame(key)) GameProfiles.get(key)?.let {
+        if (PadProfiles.isPad(key)) PadProfiles.get(key)            // a connected controller's own controls
+        else if (GameProfiles.isGame(key)) GameProfiles.get(key)?.let {
             AppConfig(face = it.face, remap = it.remap, perf = it.perf, fan = it.fan, hz = it.hz, lights = it.lights,
                 second = it.second ?: SecondScreenPolicy.DEFAULT, fps = it.fps)
         } ?: AppConfig()
         else AppConfigStore.get(key)
     fun update(key: String, change: (AppConfig) -> AppConfig) {
-        if (!GameProfiles.isGame(key)) { AppConfigStore.update(key, change); return }
+        if (PadProfiles.isPad(key)) { PadProfiles.update(key, change); return }
+        // dev build 16 (WP4): the Thor's controls never carry a controller's parts (wfpad would refuse the whole profile)
+        fun thor(c: AppConfig) = c.remap?.let { r -> c.copy(remap = r.forThor().takeIf { !it.isEmpty }) } ?: c
+        if (!GameProfiles.isGame(key)) { AppConfigStore.update(key) { thor(change(it)) }; return }
         val p = GameProfiles.get(key) ?: return
-        val c = change(get(key))
+        val c = thor(change(get(key)))
         GameProfiles.set(key, p.copy(face = c.face, remap = c.remap, perf = c.perf, fan = c.fan, hz = c.hz, lights = c.lights,
             second = c.second.takeIf { it != SecondScreenPolicy.DEFAULT }, fps = c.fps))
+    }
+}
+
+/** Review C-APP-1 (dev build 15, C5): which of the helper's "D" answers are a game STARTING in an app — the game it
+ *  last answered for that app, kept when the app leaves the screen (the order card's "a game just started" window must
+ *  not open again when Eden comes back from Home with the same game running). The helper's "no game" answer for that
+ *  app forgets it: that game started again later is a start. Pure (JVM unit test). */
+internal class GameStarts {
+    private val last = ConcurrentHashMap<String, String>()
+    /** [game] null = "no game in [pkg]". True = a game started in [pkg]. */
+    fun onAnswer(pkg: String, game: String?): Boolean {
+        if (game == null) { last.remove(pkg); return false }
+        return last.put(pkg, game) != game
     }
 }

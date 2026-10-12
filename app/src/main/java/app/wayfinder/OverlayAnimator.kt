@@ -135,8 +135,9 @@ class OverlayAnimator(private val service: AccessibilityService) {
                     val metrics = dctx.resources.displayMetrics
                     // The WHOLE screen, in its real orientation. Display metrics leave out the system
                     // bars (the card stopped short of full screen) and, from this service,
-                    // maximumWindowMetrics answered the TOP screen's size for the bottom one.
-                    val real = android.graphics.Point().also { @Suppress("DEPRECATION") display.getRealSize(it) }
+                    // maximumWindowMetrics answered the TOP screen's size for the bottom one. b18g (GitHub #49): from
+                    // ScreenSize, never the process configuration (it follows the focused screen).
+                    val real = ScreenSize.real(service, displayId) ?: android.graphics.Point()
                     val cap = captures[displayId]
                     Log.d(TAG, "layer $displayId: capture ${cap?.width}x${cap?.height}, real ${real.x}x${real.y}, metrics ${metrics.widthPixels}x${metrics.heightPixels}")
                     val w = (cap?.width ?: real.x).toFloat()

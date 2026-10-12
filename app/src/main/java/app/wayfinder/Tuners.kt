@@ -35,7 +35,7 @@ object Tuners {
     fun note(name: String) = if (name == "Pulse") "Pulse is installed: it manages the CPU, GPU, fan and refresh rate, so " +
         "Wayfinder's per-game performance, fan and refresh rate are off — the two never fight. Use Pulse for those."
         else "$name is installed: it manages the CPU, so Wayfinder's per-game performance is off — the two never fight. " +
-        "Use $name's own profiles; fan and refresh rate here still work."
+        "Use $name's own settings; fan and refresh rate here still work."
 
     private val POLICIES = intArrayOf(0, 3, 7)
     /** The CPU's top speeds in force now (kHz, small · middle · big), whoever set them; null when unreadable. */

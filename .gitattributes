@@ -7,3 +7,4 @@ gradlew text eol=lf
 *.jar binary
 *.so binary
 app/src/main/assets/fx/wfpad binary
+app/src/main/assets/fx/wfhid binary

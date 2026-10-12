@@ -14,6 +14,9 @@ press away — all without leaving your game.
 
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
+> [!TIP]
+> **Try the 1.5 beta:** Bluetooth and USB controllers, Game controls for each one, and more — [1.5-beta1 pre-release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/tag/v1.5-beta1). 1.4.1 stays the recommended version.
+
 > [!NOTE]
 > **ClusterTune, Pulse, SleepManager and other Thor apps:** Since 1.4, Wayfinder leaves the CPU to ClusterTune and Pulse, so they can stay installed together. With SleepManager, Wayfinder's sleep actions and lid guard stay off unless you turn them on. And if another app does the same job as a part of Wayfinder (Mjolnir, BiFrost, OdinTools), the Hub tells you what to do. If ClusterTune and Wayfinder gave you trouble before, restart your Thor once after updating.
 
@@ -298,12 +301,15 @@ The source is published so anyone can audit it.
 - Android Studio (its JBR, JDK 17+) with the Android SDK; the native parts need the NDK (27.2.12479018).
 - `./gradlew :app:assembleDebug` — a debug build (use `-Pminify` for a build shrunk like the release).
 - Native binaries shipped in `app/src/main/assets/fx/` are built from `fx/`:
-  `tools/build_wfpad.sh` (the input layer; `tools/build_wfpad.sh test` runs its unit tests on a Thor) and
-  `tools/build_fx.sh` (the speaker widener) — Windows + Git Bash, NDK in the default SDK folder. SHA-256 of the shipped copies:
-  - `wfpad` — `a08e13ea3a0bd90b9b5c8e2d7ea4c3594720f0522eb31133c46472aaac78b7b8`
+  `tools/build_wfpad.sh` (the input layer; `tools/build_wfpad.sh test` runs its unit tests on a Thor),
+  `tools/build_wfhid.sh` (the Bluetooth / USB controller reader; `tools/build_wfhid.sh test` runs its unit tests on a
+  Thor) and `tools/build_fx.sh` (the speaker widener) — Windows + Git Bash, NDK in the default SDK folder. SHA-256 of the
+  shipped copies:
+  - `wfpad` — `f549b129862f68f52dda8d3945111e415f940985d283a2a33854b41c1becc429`
+  - `wfhid` — `b0b23e943ad4026e5799ada10fa4ef44ecab42e0e8a05949522b930bd21681a8`
   - `libwfwide.so` — `f64974296927c51c1645b5c56af38504ef5e364d34df7620c07c0ce8a08d6b8a`
 
-  Rebuilt from this source with NDK 27.2.12479018 and those scripts, both come out byte-identical.
+  Rebuilt from this source with NDK 27.2.12479018 and those scripts, all three come out byte-identical.
 - Release builds are signed by the maintainer (`tools/release.ps1`); the key is never in this repository.
 - Some code comments refer to the maintainer's private design notes; they aren't needed to build or understand the code.
 

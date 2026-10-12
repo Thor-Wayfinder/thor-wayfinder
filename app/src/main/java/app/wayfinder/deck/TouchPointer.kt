@@ -14,6 +14,7 @@ import android.util.Log
 import android.view.Gravity
 import android.view.View
 import android.view.WindowManager
+import app.wayfinder.ScreenSize
 
 /**
  * 1.3 (GitHub #36) — the deck's trackpad in Touch mode: a pointer on the game's screen, and real
@@ -34,6 +35,9 @@ object TouchPointer {
     var x = 960f; private set
     var y = 540f; private set
     val isShown get() = view != null
+    /** Build 18 (GitHub #65): Direct without the pointer — the overlay stays (INVISIBLE keeps its size for [place]),
+     *  only the dot isn't drawn. Gestures need just [service] and [display], so they work the same. */
+    @Volatile private var dotHidden = false
 
     // a finger held down (hold + move): the stroke continues in small pieces
     private var stroke: GestureDescription.StrokeDescription? = null
@@ -46,10 +50,13 @@ object TouchPointer {
         hide()
         val d = svc.getSystemService(DisplayManager::class.java).getDisplay(displayId) ?: return
         val ctx = svc.createDisplayContext(d)
-        // 1.3.2 (GitHub #49): the display's REAL size — this context's window metrics answered the deck's
-        // (bottom) screen for the top one, so the pointer stopped ~60 % across the game
-        val real = android.graphics.Point().also { @Suppress("DEPRECATION") d.getRealSize(it) }
-        if (real.x > 0 && real.y > 0) { w = real.x.toFloat(); h = real.y.toFloat() }
+        // b18g (GitHub #49): the size from ScreenSize, never from d. d carries this service's Resources, so its real
+        // size was the process configuration's max bounds, and that follows the focused screen: the bottom screen's
+        // 1240 px for the top one, the pointer (and Direct, and the swipe) stopped at x 1239 of 1920. 1.3.2 changed
+        // the call, not that source. One W line per show (release keeps it): the new answer beside the old one.
+        val real = ScreenSize.real(svc, displayId)
+        Log.w(TAG, "size $displayId: ${ScreenSize.report(svc, displayId, real)}")
+        if (real != null) { w = real.x.toFloat(); h = real.y.toFloat() }
         if (display != displayId) { x = w / 2; y = h / 2 }
         service = svc; display = displayId
         val size = (40 * ctx.resources.displayMetrics.density).toInt()
@@ -67,6 +74,7 @@ object TouchPointer {
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; title = "WayfinderTouchPointer" }
+        dot.visibility = if (dotHidden) View.INVISIBLE else View.VISIBLE
         val manager = ctx.getSystemService(WindowManager::class.java)
         try {
             manager.addView(dot, p); view = dot; wm = manager; lp = p; place()
@@ -77,6 +85,12 @@ object TouchPointer {
         release()
         view?.let { v -> runCatching { wm?.removeViewImmediate(v) } }
         view = null; wm = null; lp = null
+    }
+
+    /** Hides or shows the dot (now, and on the next [show]); the touches don't change. */
+    fun setDotHidden(hidden: Boolean) {
+        dotHidden = hidden
+        main.post { view?.visibility = if (dotHidden) View.INVISIBLE else View.VISIBLE }
     }
 
     private fun place() {

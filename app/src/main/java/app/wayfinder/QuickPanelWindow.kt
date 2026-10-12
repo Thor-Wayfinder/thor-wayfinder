@@ -1,7 +1,6 @@
 package app.wayfinder
 
 import android.content.Context
-import android.content.Intent
 import android.media.AudioManager
 import android.provider.Settings
 import androidx.compose.foundation.clickable
@@ -12,7 +11,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -34,7 +35,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -43,12 +48,18 @@ import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import app.wayfinder.ui.FocusableGlass
+import app.wayfinder.ui.ButtonKind
+import app.wayfinder.ui.ButtonSize
+import app.wayfinder.ui.GlassButton
 import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.GlassScreen
 import app.wayfinder.ui.GlassSegmentedControl
 import app.wayfinder.ui.GlassSlider
+import app.wayfinder.ui.GlassSwitchRow
 import app.wayfinder.ui.LocalGlass
+import app.wayfinder.ui.requestAfterLayout
 import app.wayfinder.ui.ThorGlassTheme
+import app.wayfinder.ui.Radii
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -79,7 +90,7 @@ object QuickPanelWindow {
     private var closing = false
     private var shownAt = 0L
 
-    /** Lifecycle + saved state for Compose, and a Back dispatcher for the panel's BackHandlers. */
+    /** Lifecycle + saved state for Compose, and a Back dispatcher for the panel's BackLayers (dev build 16: ui/BackLayer.kt). */
     private class PanelOwner : androidx.activity.OnBackPressedDispatcherOwner {
         val base = app.wayfinder.keyboard.ComposeOwner()
         override val lifecycle get() = base.lifecycle
@@ -89,14 +100,26 @@ object QuickPanelWindow {
     /** The window's root: B / Back go to the panel's Back handlers (edit mode…), else close it;
      *  a touch outside the side sheet closes it (as the activity's "finish on touch outside" did). */
     private class Root(ctx: Context, val back: () -> Unit, val outside: () -> Unit) : android.widget.FrameLayout(ctx) {
+        // dev build 16 (WP7): the Hub's stick / D-pad adapter (latched per controller, touch mode left first) — Android's own
+        // one-latch adapter skipped tiles with two controllers; and R3 / Start must not "click" a tile here either
+        private val nav = app.wayfinder.ui.PadNav({ getChildAt(0) }, { dispatchKeyEvent(it) })
+        private val padFallback = app.wayfinder.ui.PadFallbackFilter()
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
             if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_BUTTON_B || event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
                 if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) back()
                 return true
             }
+            // dev build 14 (critic 2): a connected controller's MODE (its Home is the game's) — unhandled, Android makes it Home
+            if (event.keyCode == KeyEvent.KEYCODE_BUTTON_MODE) return true
+            if (padFallback.shouldDrop(event)) return true   // R3/L3/Start must not "click"
             return super.dispatchKeyEvent(event)
         }
+        override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean = nav.onMotion(ev) || super.dispatchGenericMotionEvent(ev)
+        override fun onWindowFocusChanged(hasWindowFocus: Boolean) { super.onWindowFocusChanged(hasWindowFocus); if (!hasWindowFocus) nav.stop() }
+        override fun onDetachedFromWindow() { nav.stop(); super.onDetachedFromWindow() }
         override fun dispatchTouchEvent(ev: android.view.MotionEvent): Boolean {
+            // build 18 (E2); device pass (P2-3): at the touch's own time — the service's focus-probe tap is no finger
+            if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) app.wayfinder.ui.InputMode.noteTouch(ev.eventTime)
             val out = ev.x < 0 || ev.y < 0 || ev.x > width || ev.y > height
             if (out) { if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) outside(); return true }
             return super.dispatchTouchEvent(ev)
@@ -127,8 +150,11 @@ object QuickPanelWindow {
         // Narrow screen (the bottom one): full screen, the app under it frosted (live blur).
         // 1.3.2: the display's REAL size — this context's cached metrics sometimes answered the TOP screen's
         // 1920 px for the bottom one: the panel then took its side-sheet form there (no blur, its own backdrop)
+        // b18g (GitHub #49): the width from ScreenSize. On display 0, d carries the service's Resources, so its real
+        // width was the process configuration's (the bottom screen's 537 dp with the bottom screen focused: the
+        // full-screen form on the top). The density stays d's own (the display's, either way).
         val m = android.util.DisplayMetrics().also { @Suppress("DEPRECATION") d.getRealMetrics(it) }
-        val sheet = m.widthPixels / m.density > 700
+        val sheet = (ScreenSize.real(service, display)?.x ?: m.widthPixels) / m.density > 700
         val takes = AppSettings.panelTakesController
         val blur = !sheet && android.os.Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
         val owner = PanelOwner()
@@ -148,7 +174,8 @@ object QuickPanelWindow {
                     app.wayfinder.ui.LocalRealGlass provides (blur && !AppSettings.flatLook),
                     androidx.activity.compose.LocalOnBackPressedDispatcherOwner provides owner,
                 ) {
-                    ThorGlassTheme(dark = dark) { app.wayfinder.ui.CappedFontScale { PanelContent(close = { close() }) } }
+                    // dev build 16 (WP7): one Back path on the panel's dispatcher, its sheets, the hand's names (dev build 15, WP2)
+                    ThorGlassTheme(dark = dark) { app.wayfinder.ui.CappedFontScale { app.wayfinder.ui.WindowRoot { PanelContent(close = { close() }) } } }
                 }
             }
         }
@@ -215,12 +242,15 @@ private enum class ScreenMode(val label: String) { BOTH("Both screens on"), TOP(
 @Composable
 private fun PanelContent(close: () -> Unit) {
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { delay(150); runCatching { first.requestFocus() } }
+    LaunchedEffect(Unit) { first.requestAfterLayout() }       // dev build 16 (WP7): after the first layout, no 150 ms
     PanelBody(first, close)
 }
 
 @Composable
 private fun PanelBody(first: FocusRequester, close: () -> Unit) {
+    // build 18 (E2, pF12): where the header row ends (window px) — Arrange's floating description never covers it
+    val headerBottom = remember { intArrayOf(-1) }
+    val headerEnd = remember { { headerBottom[0].takeIf { it >= 0 } } }
     GlassScreen(span = app.wayfinder.ui.AuroraSpan.BOTTOM) { Box(Modifier.fillMaxSize()) {
         Column(
             Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 8.dp).verticalScroll(rememberScrollState()),
@@ -228,11 +258,22 @@ private fun PanelBody(first: FocusRequester, close: () -> Unit) {
         ) {
             // Edit mode arranges the shortcut tiles in place (like a home screen); B / Done leaves it.
             var editing by remember { mutableStateOf(false) }
-            androidx.activity.compose.BackHandler(enabled = editing) { editing = false }
-            PanelHeader(close, editing) { editing = !editing }
-            if (editing) {
-                CardsEditor()
-                ShortcutGridEditor(columns = 4, cellHeight = 64.dp)
+            // build 18 (E2, pF09): leaving edit mode (B, Done) puts the focus back on Arrange — it was lost off screen
+            val arrangeFocus = remember { FocusRequester() }
+            val wasEditing = remember { booleanArrayOf(false) }
+            LaunchedEffect(editing) {
+                if (!editing && wasEditing[0]) arrangeFocus.requestAfterLayout()
+                wasEditing[0] = editing
+            }
+            Box(Modifier.onGloballyPositioned { headerBottom[0] = (it.positionInWindow().y + it.size.height).toInt().coerceAtLeast(0) }) {
+                PanelHeader(close, editing, arrangeFocus) { editing = !editing }
+            }
+            // dev build 16 (WP7): a layer — what opens inside it (the "Open…" picker, a lifted tile) closes first
+            if (editing) app.wayfinder.ui.BackLayer(onBack = { editing = false }) {
+                androidx.compose.runtime.CompositionLocalProvider(LocalHeaderBottom provides headerEnd) {
+                    CardsEditor()
+                    ShortcutGridEditor(columns = 4, cellHeight = 64.dp)
+                }
             } else {
                 // round 8: the cards the user picked, in their order (pencil → arrange)
                 for ((id, shown) in PanelCards.cards) if (shown) when (id) {
@@ -246,6 +287,8 @@ private fun PanelBody(first: FocusRequester, close: () -> Unit) {
             }
         }
         if (PanelShortcuts.pairsOpen) PanelPairsDialog(close) { PanelShortcuts.pairsOpen = false }
+        // build 18 (GitHub #71): the Screenshot tile asks which screen
+        if (PanelShortcuts.shotAskOpen) PanelShotSheet(close) { PanelShortcuts.shotAskOpen = false }
     } }
 }
 
@@ -278,11 +321,30 @@ private fun NowPlaying() {
         eff.hz?.takeIf { !pulse }?.let { "$it Hz" }).joinToString(" · ")
     var keptAt by remember { mutableStateOf(-1) }
     val kept = keptAt == PanelShortcuts.touchCount
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    // build 18 (E3, pF07): "Keep for …" only for a change that differs from what the app had when the panel opened —
+    // 60 → 120 → 60 Hz offered to keep 60 Hz. Root writes land a moment later: read again after each change
+    var now by remember { mutableStateOf(Triple(QuickPanelWindow.startPerf, QuickPanelWindow.startFan, QuickPanelWindow.startPeak)) }
+    LaunchedEffect(PanelShortcuts.touchCount) {
+        if (PanelShortcuts.touched.isEmpty()) return@LaunchedEffect
+        for (wait in listOf(450L, 700L, 1200L)) {
+            delay(wait)
+            now = withContext(Dispatchers.IO) {
+                val cr = ctx.contentResolver
+                Triple(runCatching { Settings.System.getInt(cr, "performance_mode") }.getOrDefault(QuickPanelWindow.startPerf),
+                    runCatching { Settings.System.getInt(cr, "fan_mode") }.getOrDefault(QuickPanelWindow.startFan),
+                    runCatching { Settings.System.getFloat(cr, "peak_refresh_rate") }.getOrDefault(QuickPanelWindow.startPeak))
+            }
+        }
+    }
+    val keep = PanelRules.keepable(PanelShortcuts.touched.toList(), now.first, now.second, now.third,
+        QuickPanelWindow.startPerf, QuickPanelWindow.startFan, QuickPanelWindow.startPeak)
+    GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Column(Modifier.weight(1f)) {
-                Text("Now playing: $title" + if (game != null) " · $label" else "", color = g.textPrimary,
+                // build 18 (E10, V04 / FTU-10): the app's name alone — "Now playing: RetroArch" sat under the media card's
+                // "Nothing playing" (the card is "This app's settings")
+                Text(title + if (game != null) " · $label" else "", color = g.textPrimary,
                     style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Text(when {
                     ownText.isNotEmpty() -> "Its own: $ownText"
@@ -290,7 +352,7 @@ private fun NowPlaying() {
                     else -> "Your usual performance, fan and refresh rate"
                 }, color = g.textSecondary, style = MaterialTheme.typography.bodySmall, maxLines = 1)
             }
-            if (PanelShortcuts.touched.isNotEmpty() && !kept) FocusableGlass(onClick = {
+            if (keep.isNotEmpty() && !kept) FocusableGlass(onClick = {
                 val cr = ctx.contentResolver
                 val perf = runCatching { Settings.System.getInt(cr, "performance_mode") }.getOrDefault(0)
                 val fan = runCatching { Settings.System.getInt(cr, "fan_mode") }.getOrDefault(4)
@@ -298,7 +360,7 @@ private fun NowPlaying() {
                 val k = game?.let { GameProfiles.create(pkg, it.game, it.title) } ?: pkg
                 PerfProfiles.setBaselineIfMissing(ctx, QuickPanelWindow.startPerf, QuickPanelWindow.startFan,
                     QuickPanelWindow.startMin, QuickPanelWindow.startPeak)
-                val t = PanelShortcuts.touched
+                val t = keep
                 val bottomOff = ForegroundAppService.screenMode() == 1
                 Profiles.update(k) { c -> c.copy(
                     perf = if ("perf" in t && Tuners.installed(ctx) == null) PerfMode.ofAyn(perf) else c.perf,
@@ -308,7 +370,7 @@ private fun NowPlaying() {
                     second = if ("bottomoff" in t) (if (bottomOff) SecondScreenPolicy.BLANK else SecondScreenPolicy.DEFAULT) else c.second) }
                 ForegroundAppService.reapplyPerf(); ForegroundAppService.reapplyPolicy()
                 keptAt = PanelShortcuts.touchCount; PanelShortcuts.bottomKept()
-            }, radius = 14.dp) {
+            }, radius = Radii.Control) {
                 Text("Keep for $title", color = g.accent, style = MaterialTheme.typography.labelLarge, maxLines = 1,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
@@ -317,7 +379,7 @@ private fun NowPlaying() {
                 if (GameProfiles.isGame(key)) GameProfiles.removeIfPlain(key)
                 ForegroundAppService.reapplyPerf(); ForegroundAppService.reapplyPolicy(); PanelShortcuts.touched.clear(); keptAt = -1
                 PanelShortcuts.bottomKept()
-            }, radius = 14.dp) {
+            }, radius = Radii.Control) {
                 Text("Use my usual", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
                     modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
             }
@@ -330,66 +392,119 @@ private fun NowPlaying() {
 private fun CardsEditor() {
     val g = LocalGlass.current
     val ctx = LocalContext.current
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Cards — what the panel shows, top to bottom", color = g.textPrimary, style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f))
-                SmallButton("Back to the default") { PanelCards.reset(ctx) }
+            Text("Cards — what the panel shows, top to bottom", color = g.textPrimary, style = MaterialTheme.typography.titleSmall)
+            val cards = PanelCards.cards.toList()
+            for ((i, card) in cards.withIndex()) androidx.compose.runtime.key(card.first) {
+                val (id, shown) = card
+                CardRow(id, shown, first = i == 0, last = i == cards.lastIndex)
             }
-            for ((id, shown) in PanelCards.cards.toList()) androidx.compose.runtime.key(id) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(PanelCards.NAMES[id] ?: id, color = if (shown) g.textPrimary else g.textTertiary,
-                        style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f), maxLines = 1,
-                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
-                    SmallButton("Up") { PanelCards.move(ctx, id, -1) }
-                    SmallButton("Down") { PanelCards.move(ctx, id, +1) }
-                    SmallButton(if (shown) "Shown" else "Hidden", on = shown) { PanelCards.toggle(ctx, id) }
-                }
-            }
+            // build 18 (E2, pF10): two presses, and after the list — it was the first focus after Done, one press from a reset
+            app.wayfinder.ui.ConfirmButton("Back to the default", "Press again to reset the cards", { PanelCards.reset(ctx) },
+                size = ButtonSize.COMPACT)
         }
     }
 }
 
+/**
+ * Build 18 (E10, V15): one card of the Cards editor — its switch (a "Shown / Hidden" button read as a state word), then Up and
+ * Down. At an end the one that can't move it is dimmed and the D-pad skips it (it did nothing); a move onto an end first puts
+ * the controller on the other button (the pressed one turns unfocusable under the press: the focus was lost).
+ */
 @Composable
-private fun SmallButton(text: String, on: Boolean = false, onClick: () -> Unit) {
-    val g = LocalGlass.current
-    FocusableGlass(onClick = onClick, radius = 12.dp) {
-        Text(text, color = if (on) g.accent else g.textSecondary, style = MaterialTheme.typography.labelLarge,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+private fun CardRow(id: String, shown: Boolean, first: Boolean, last: Boolean) {
+    val ctx = LocalContext.current
+    val upFocus = remember { FocusRequester() }
+    val downFocus = remember { FocusRequester() }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        GlassSwitchRow(PanelCards.NAMES[id] ?: id, shown, { PanelCards.toggle(ctx, id) }, Modifier.weight(1f), compact = true)
+        // dev build 17 (WP8): the shared compact buttons (was SmallButton)
+        GlassButton("Up", {
+            if (PanelCards.cards.indexOfFirst { it.first == id } == 1) runCatching { downFocus.requestFocus() }
+            PanelCards.move(ctx, id, -1)
+        }, Modifier.focusProperties { canFocus = !first }, kind = ButtonKind.QUIET, size = ButtonSize.COMPACT,
+            focusRequester = upFocus, enabled = !first)
+        GlassButton("Down", {
+            if (PanelCards.cards.indexOfFirst { it.first == id } == PanelCards.cards.lastIndex - 1) runCatching { upFocus.requestFocus() }
+            PanelCards.move(ctx, id, +1)
+        }, Modifier.focusProperties { canFocus = !last }, kind = ButtonKind.QUIET, size = ButtonSize.COMPACT,
+            focusRequester = downFocus, enabled = !last)
     }
 }
 
-/** Round 8 widget — the details the header has no room for: clocks, temperatures, battery time left. */
+/** Round 8 widget — the details the header has no room for: clocks, temperatures, battery time left. Build 18 (GitHub #89,
+ *  #87): two rows of three — the power drawn, the fan and the memory too (the header drops its watts, then RAM, when
+ *  short of room: #55). */
 @Composable
 private fun DetailsCard() {
-    val g = LocalGlass.current
     val ctx = LocalContext.current
     val stats = remember { HwStats(ctx) }
     var s by remember { mutableStateOf<HwSnapshot?>(null) }
+    var plug by remember { mutableStateOf<Charging.Now?>(null) }
+    var watts by remember { mutableStateOf<Float?>(null) }
     var hoursLeft by remember { mutableStateOf<Float?>(null) }
+    var fanMode by remember { mutableStateOf<Int?>(null) }
     LaunchedEffect(Unit) {
+        // the Battery page's way (BatteryPage NowCard): what the Thor draws, averaged, and the energy left ÷ that draw
+        val samples = ArrayDeque<Float>()
         while (true) {
             s = withContext(Dispatchers.IO) { stats.sample() }
-            hoursLeft = withContext(Dispatchers.IO) {
-                // energy left (Wh) = full charge (µAh) × voltage × level ÷ the power drawn now
-                val snap = s ?: return@withContext null
-                val full = runCatching { java.io.File("/sys/class/power_supply/battery/charge_full").readText().trim().toLong() }.getOrNull()
-                val uv = runCatching { java.io.File("/sys/class/power_supply/battery/voltage_now").readText().trim().toLong() }.getOrNull()
-                val w = snap.watts?.takeIf { it > 0.3f && !snap.charging }
-                if (full == null || uv == null || w == null || snap.battery == null) null
-                else (full / 1e6f) * (uv / 1e6f) * snap.battery / 100f / w
-            }
+            val now = withContext(Dispatchers.IO) { Charging.now(ctx) }
+            if (now.plugged != plug?.plugged) samples.clear()     // plugged in / out: a new average, not the old one
+            plug = now
+            val w = withContext(Dispatchers.IO) { Charging.drawWatts(ctx) }
+            if (w == null) samples.clear() else { samples.addLast(w); if (samples.size > 5) samples.removeFirst() }
+            watts = samples.takeIf { it.isNotEmpty() }?.average()?.toFloat()
+            val e = if (!now.plugged) withContext(Dispatchers.IO) { Charging.energyWh() } else null
+            hoursLeft = watts?.let { ww -> e?.let { if (ww > 0.3f) it / ww else null } }
+            fanMode = withContext(Dispatchers.IO) { runCatching { Settings.System.getInt(ctx.contentResolver, "fan_mode") }.getOrNull() }
             delay(2000)
         }
     }
     val v = s
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-            Readout("CPU", listOfNotNull(v?.cpuGhz?.let { "%.1f GHz".format(it) }, v?.cpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "))
-            Readout("GPU", listOfNotNull(v?.gpuMhz?.let { "$it MHz" }, v?.gpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "))
-            Readout("Battery", listOfNotNull(v?.batteryTemp?.let { "%.0f°".format(it) },
-                if (v?.charging == true) Charging.now(ctx).phrase ?: "charging" else hoursLeft?.let { h -> "about ${h.toInt()} h ${((h % 1) * 60).toInt()} min left" }).joinToString(" · "))
+    // the fan: its mode (as its tile names it) and how hard it's driven now — the mode alone if its PWM can't be read
+    val fan = listOfNotNull(fanMode?.let { m -> FanMode.values().firstOrNull { it.value == m }?.label ?: "Custom" },
+        v?.fanPct?.let { "$it %" }).joinToString(" · ")
+    val battery = listOfNotNull(v?.batteryTemp?.let { "%.0f°".format(it) },
+        plug?.takeIf { it.plugged }?.let { it.phrase ?: "charging" }
+            ?: hoursLeft?.let { h -> "${h.toInt()} h ${((h % 1) * 60).toInt()} min left" }).joinToString(" · ")
+    GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
+        ReadoutRows(listOf(
+            listOf("CPU" to listOfNotNull(v?.cpuGhz?.let { "%.1f GHz".format(it) }, v?.cpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "),
+                "GPU" to listOfNotNull(v?.gpuMhz?.let { "$it MHz" }, v?.gpuTemp?.let { "%.0f°".format(it) }).joinToString(" · "),
+                "Fan" to fan),
+            listOf("Battery" to battery, "Power" to (watts?.let { "%.1f W".format(it) } ?: ""),
+                "RAM" to (v?.ramUsedGb?.let { u -> "%.1f / %.0f GB".format(u, v.ramTotalGb ?: 0f) } ?: "")),
+        ), widest = listOf(listOf("3.2 GHz · 99°", "680 MHz · 99°", "Custom · 100 %"), listOf("45° · 23 h 59 min left", "19.9 W", "15.9 / 16 GB")))
+    }
+}
+
+/**
+ * Build 18 (GitHub #89): rows of [Readout]s at one size — the size at which the widest row of [widest] (each readout's widest
+ * value, so nothing jumps when a value changes) fits; with large text it shrinks, no smaller than the header's readable
+ * floor (then a value clips).
+ */
+@Composable
+private fun ReadoutRows(rows: List<List<Pair<String, String>>>, widest: List<List<String>>) {
+    val measurer = rememberTextMeasurer()
+    val density = LocalDensity.current
+    val labelStyle = MaterialTheme.typography.labelMedium      // build 18 (E3, pF25): was labelSmall
+    val valueStyle = MaterialTheme.typography.labelLarge
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 6.dp)) {
+        val gap = 10f   // breathing room between readouts, dp
+        fun widthOf(label: String, value: String): Float = with(density) {
+            maxOf(measurer.measure(label, labelStyle).size.width, measurer.measure(value, valueStyle).size.width).toDp().value
+        }
+        val fit = rows.indices.minOf { r ->
+            val total = rows[r].indices.sumOf { i -> widthOf(rows[r][i].first, widest[r].getOrElse(i) { rows[r][i].second }).toDouble() }.toFloat()
+            (maxWidth.value - gap * rows[r].size) / total
+        }
+        val scale = fit.coerceIn((0.72f / density.fontScale).coerceAtMost(0.72f), 1f)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            for (row in rows) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                row.forEach { (k, value) -> Readout(k, value, scale) }
+            }
         }
     }
 }
@@ -409,11 +524,11 @@ private fun MediaCard() {
         n?.app?.let { p -> runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(p, 0)).toString() }.getOrDefault(p) }
     }
     fun press(code: Int) { MediaNow.key(ctx, code); tick++ }
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
         Row(Modifier.padding(horizontal = 14.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Column(Modifier.weight(1f)) {
-                Text(n?.title ?: "Nothing playing", color = if (n == null) g.textTertiary else g.textPrimary,
+                Text(n?.title ?: "No music or video", color = if (n == null) g.textTertiary else g.textPrimary,   // build 18 (E10, V04)
                     style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 if (n != null) Text(listOfNotNull(n.artist, appLabel).joinToString(" · "), color = g.textSecondary,
                     style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
@@ -421,14 +536,18 @@ private fun MediaCard() {
             // its own controls always work (media keys don't reach playback on another device)
             if (n != null) FocusableGlass(onClick = {
                 ForegroundAppService.open(OpenTargets.app(n.app)); QuickPanelWindow.close()
-            }, radius = 14.dp) {
+            }, radius = Radii.Control) {
                 Text("Open", color = g.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             }
-            for ((code, icon, what) in listOf(
+            // build 18 (E10, V17): nothing playing — only Play (it resumes the last player); Previous / Next did nothing and sat in
+            // the D-pad's path
+            val keys = if (n == null) listOf(Triple(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, Icons.Rounded.PlayArrow, "Resume the last player"))
+            else listOf(
                 Triple(KeyEvent.KEYCODE_MEDIA_PREVIOUS, Icons.Rounded.SkipPrevious, "Previous"),
-                Triple(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, if (n?.playing == true) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play or pause"),
+                Triple(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, if (n.playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow, "Play or pause"),
                 Triple(KeyEvent.KEYCODE_MEDIA_NEXT, Icons.Rounded.SkipNext, "Next"),
-            )) FocusableGlass(onClick = { press(code) }, radius = 14.dp) {
+            )
+            for ((code, icon, what) in keys) FocusableGlass(onClick = { press(code) }, radius = Radii.Control) {
                 Icon(icon, what, tint = g.textPrimary, modifier = Modifier.padding(8.dp).size(24.dp))
             }
         }
@@ -436,7 +555,7 @@ private fun MediaCard() {
 }
 
 @Composable
-private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> Unit) {
+private fun PanelHeader(close: () -> Unit, editing: Boolean, arrangeFocus: FocusRequester, toggleEdit: () -> Unit) {
     // One row: the time, the live readouts, edit shortcuts, Wayfinder, close.
     val g = LocalGlass.current
     val ctx = LocalContext.current
@@ -453,7 +572,7 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
     val s = v
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(time, color = g.textPrimary, style = MaterialTheme.typography.titleLarge)
-        GlassPanel(Modifier.weight(1f), radius = 14.dp) {
+        GlassPanel(Modifier.weight(1f), radius = Radii.Control) {
             // With the default text size (or bigger) and a 12-hour clock the four readouts overflowed —
             // "Battery" wrapped letter by letter or was cut off (1.1). Their real text is measured and
             // shrunk just enough to fit; only below a readable minimum does the last one (RAM) step aside.
@@ -471,7 +590,7 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
                 "RAM" to if (short) "15.9 GB" else "15.9/16 GB", "Battery" to if (short) "100 %" else "100 % · −19.9 W")
             val measurer = rememberTextMeasurer()
             val density = LocalDensity.current
-            val labelStyle = MaterialTheme.typography.labelSmall
+            val labelStyle = MaterialTheme.typography.labelMedium      // build 18 (E3, pF25): was labelSmall
             val valueStyle = MaterialTheme.typography.labelLarge
             BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 4.dp)) {
                 val gap = 10f   // breathing room between readouts, dp
@@ -496,7 +615,7 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
                 }
             }
         }
-        FocusableGlass(onClick = toggleEdit, radius = 14.dp) {
+        FocusableGlass(onClick = toggleEdit, radius = Radii.Control, focusRequester = arrangeFocus) {
             if (editing) Text("Done", color = g.accent, style = MaterialTheme.typography.labelLarge, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
             // a word, not a bare pencil: nobody knew what it did (2026-09-26)
             else Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
@@ -505,12 +624,13 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
                 Text("Arrange", color = g.textSecondary, style = MaterialTheme.typography.labelLarge)
             }
         }
-        FocusableGlass(onClick = {
-            ctx.startActivity(Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)); close()
-        }, radius = 14.dp) {
-            Icon(Icons.Rounded.Settings, "Open Wayfinder", tint = g.accent, modifier = Modifier.padding(8.dp).size(22.dp))
+        // build 18 (E10, V20): it leaves the panel for Wayfinder — a compass in the text colour (a blue gear read as the panel's
+        // own settings, which are Arrange's, and drew the eye)
+        // device pass (d3 N2): the Hub's home, as the "Wayfinder" tile — it brought back whatever was open (Game controls)
+        FocusableGlass(onClick = { PanelShortcuts.openWayfinder(ctx); close() }, radius = Radii.Control) {
+            Icon(Icons.Rounded.Explore, "Open Wayfinder", tint = g.textSecondary, modifier = Modifier.padding(8.dp).size(22.dp))
         }
-        FocusableGlass(onClick = close, radius = 14.dp) {
+        FocusableGlass(onClick = close, radius = Radii.Control) {
             Icon(Icons.Rounded.Close, "Close", tint = g.textSecondary, modifier = Modifier.padding(8.dp).size(22.dp))
         }
     }
@@ -519,10 +639,11 @@ private fun PanelHeader(close: () -> Unit, editing: Boolean, toggleEdit: () -> U
 @Composable
 private fun Readout(label: String, value: String, scale: Float = 1f) {
     val g = LocalGlass.current
-    val small = MaterialTheme.typography.labelSmall
+    // build 18 (E3, pF25): the captions were tiny and faint (labelSmall, tertiary)
+    val small = MaterialTheme.typography.labelMedium
     val large = MaterialTheme.typography.labelLarge
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(label, color = g.textTertiary, style = small.copy(fontSize = small.fontSize * scale), maxLines = 1, softWrap = false)
+        Text(label, color = g.textSecondary, style = small.copy(fontSize = small.fontSize * scale), maxLines = 1, softWrap = false)
         Text(value.ifEmpty { "—" }, color = g.textPrimary, style = large.copy(fontSize = large.fontSize * scale), maxLines = 1,
             softWrap = false, overflow = TextOverflow.Clip)
     }
@@ -556,13 +677,14 @@ private fun Modifier.focusRequesterSafe(r: FocusRequester) = this.focusRequester
 
 @Composable
 private fun LevelsCard() {
-    // Brightness | Volume side by side, three sliders each (Both / Top / Bottom).
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        GlassPanel(Modifier.weight(1f), radius = 18.dp) {
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { PanelLevelTitle(Icons.Rounded.LightMode, "Brightness"); BrightnessSliders(compact = true) }
+    // Brightness | Volume side by side, three sliders each (Both / Top / Bottom). Build 18 (E10, V21): one height — one card
+    // opened made them lopsided
+    Row(Modifier.height(IntrinsicSize.Max), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        GlassPanel(Modifier.weight(1f).fillMaxHeight(), radius = Radii.Card) {
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { PanelLevelTitle(Icons.Rounded.LightMode, "Brightness"); BrightnessSliders(compact = true, sideExit = true) }
         }
-        GlassPanel(Modifier.weight(1f), radius = 18.dp) {
-            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { PanelLevelTitle(Icons.Rounded.VolumeUp, "Volume"); VolumeSliders(compact = true) }
+        GlassPanel(Modifier.weight(1f).fillMaxHeight(), radius = Radii.Card) {
+            Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { PanelLevelTitle(Icons.Rounded.VolumeUp, "Volume"); VolumeSliders(compact = true, sideExit = true) }
         }
     }
 }
@@ -601,21 +723,29 @@ private fun TilesGrid(close: () -> Unit) {
 @Composable
 private fun TileView(t: PanelTile, modifier: Modifier) {
     val g = LocalGlass.current
-    FocusableGlass(onClick = t.action, modifier = modifier.height(64.dp), radius = 16.dp) {
-        Column(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp), verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally) {
+    // build 18 (E10, V05): an "on" tile is washed with the accent under its glass (its value was the only accent: blue words
+    // barely read on the glass)
+    FocusableGlass(onClick = t.action, modifier = modifier.height(64.dp), radius = Radii.Row,
+        well = if (t.on) g.accent.copy(alpha = 0.14f) else androidx.compose.ui.graphics.Color.Unspecified) {
+        Column(Modifier.fillMaxSize().alpha(if (t.disabled) 0.5f else 1f).padding(horizontal = 4.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
             TileIcon(t.icon, t.pkg, if (t.on) g.accent else g.textSecondary, 20.dp)
-            // 1.4: a label too wide for the tile (large font: "Keyboard &…") shrinks to fit instead of being cut
+            // QA2: a label too wide for the tile (large font: "Keyboard &…") shrinks to fit instead of being cut. Build 18 (E2,
+            // pF11): the catalog's names are longer ("Close background apps") — a tile without a value line wraps them on two
+            // lines first; one with a value keeps one line (the 64 dp tile has no room for three)
             androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
                 val m = androidx.compose.ui.text.rememberTextMeasurer()
                 val base = MaterialTheme.typography.labelMedium
                 val w = m.measure(t.label, base).size.width.toFloat()
                 val room = with(androidx.compose.ui.platform.LocalDensity.current) { maxWidth.toPx() }
-                val scale = if (w > room && w > 0f) (room / w).coerceAtLeast(0.7f) else 1f
+                val lines = if (t.value == null && w > room) 2 else 1
+                val scale = if (w > room * lines && w > 0f) (room * lines / w).coerceAtLeast(0.7f) else 1f
                 Text(t.label, color = g.textPrimary, style = base.copy(fontSize = base.fontSize * scale, letterSpacing = base.letterSpacing * scale),
-                    maxLines = 1, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = TextAlign.Center)
+                    maxLines = lines, softWrap = lines > 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis, textAlign = TextAlign.Center)
             }
-            if (t.value != null) Text(t.value, color = if (t.on) g.accent else g.textTertiary, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+            // the value in the secondary text colour, semi-bold when on (the icon keeps the accent)
+            if (t.value != null) Text(t.value, color = g.textSecondary, style = MaterialTheme.typography.labelSmall, maxLines = 1,
+                fontWeight = if (t.on) androidx.compose.ui.text.font.FontWeight.SemiBold else null)
         }
     }
 }

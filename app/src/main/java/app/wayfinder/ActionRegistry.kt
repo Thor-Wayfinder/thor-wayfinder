@@ -16,8 +16,10 @@ enum class ThorAction(val title: String, val description: String) {
     RECENTS("Recent apps", "Open the multitask view"),
     BACK("Back", "Android's normal Back"),
     // Wired in later phases; present now so bindings/UI can reference them.
-    SCREENSHOT("Screenshot", "Capture the top, bottom or both screens (pick which in Screens)"),
+    SCREENSHOT("Screenshot", "Capture the top, bottom or both screens (pick which in ${Say.path(NavCards.SCREENSHOTS)})"),
     TOGGLE_SECOND_SCREEN("Bottom screen off / on", "Turn the bottom screen off, or back on"),
+    /** Build 18 (GitHub #91): the top screen's blank (the quick panel's "Bottom screen only"), on a combo. */
+    TOGGLE_TOP_SCREEN("Top screen off / on", "Turn the top screen off, or back on — a tap on it wakes it too"),
     TOGGLE_KEEP_AWAKE("Stay awake", "The screens don't turn off on their own (press again to stop)"),
     /** 1.3: sleep without the power button (Reddit request). */
     SLEEP("Sleep", "Both screens off, like a press on the power button"),
@@ -26,9 +28,9 @@ enum class ThorAction(val title: String, val description: String) {
     /** 1.3 (GitHub #17): AYN's virtual mouse on / off. */
     AYN_MOUSE("Mouse mode (AYN)", "AYN's virtual mouse on or off — then click a stick to make it the pointer"),
     /** 1.3: the game's gyro paused / back on (a combo, the AYN button, a button's long press). */
-    GYRO_TOGGLE("Gyro on / off", "Pause the game's gyro, or turn it back on (set it up in Game controls → Gyro)"),
-    /** 1.4 (GitHub #58): the quick panel's screen recording, on a combo. */
-    RECORD_SCREEN("Record the screen", "Start or stop a video of the top screen (saved in Movies / Wayfinder)"),
+    GYRO_TOGGLE("Gyro on / off", "Pause the game's gyro, or turn it back on (set it up in ${Say.path(NavCards.GC_GYRO)})"),
+    /** 1.4 (GitHub #58): the quick panel's screen recording, on a combo. Build 18 (GitHub #98): its folder is a choice. */
+    RECORD_SCREEN("Record the screen", "Start or stop a video of the top screen (where it's saved: ${Say.path(NavCards.SCREENSHOTS)})"),
     /** 1.4 (Reddit): the app on the screen WITHOUT the controller. */
     CLOSE_OTHER("Close the other screen's app", "Closes the app on the screen the controller isn't on, and goes home there"),
     /** 1.4 (GitHub #51, Reddit): AYN's own drawer — e.g. the AYN button's hold, with the quick panel on its tap. */
@@ -63,11 +65,26 @@ enum class ThorAction(val title: String, val description: String) {
     HOME_BOTTOM("Home on the bottom screen", "The bottom screen goes to its home screen"),
     HOME_BOTH("Home on both screens", "Both screens go to their home screens"),
     FPS_COUNTER("Frame rate (FPS)", "Show or hide the frame-rate counter (where: Screens)"),
-    GAME_CONTROLS("Game controls", "The game's buttons, gyro and macros, while you play; the same combo or B goes back to the game"),
+    // dev build 16 (theme F): no button letter in a fixed text — the combo is the way back on every controller
+    GAME_CONTROLS("Game controls", "The game's buttons, gyro and macros, while you play; the same combo goes back to the game"),
     /** Round 8: opens an app, an app pair or a Wayfinder page — the target is on the binding
      *  ([Binding.arg], see [OpenTargets]); several can exist, each on its own combo. */
     OPEN("Open an app, a pair or a page", "Your own combos that open something (Combos page, bottom)"),
+    /** Build 18 (GitHub #83): the accessibility service off (disableSelf) — one press in Wayfinder turns it back on. */
+    WAYFINDER_OFF("Turn Wayfinder off", "Its accessibility service off until you turn it back on in Wayfinder — for games that refuse to run beside one"),
+    /** Build 18 (GitHub #81): a combo that does nothing — e.g. a Home tap that must never leave the game. */
+    NOTHING("Nothing", "The press does nothing"),
     ;
+}
+
+/** Build 18 (E1, D22 / pF20): the name where a full title wraps — the combos sheet's one-line cards. Pure; every action
+ *  without a shorter name is its [ThorAction.title] (the 3 fingers' "3 fingers: tap" is the sheet's, not an action's). */
+val ThorAction.shortTitle: String get() = when (this) {
+    ThorAction.TOGGLE_SECOND_SCREEN -> "Bottom screen off/on"
+    ThorAction.TOGGLE_TOP_SCREEN -> "Top screen off/on"
+    ThorAction.FOCUS_SWITCH_UP -> "Controller to top"
+    ThorAction.FOCUS_SWITCH_DOWN -> "Controller to bottom"
+    else -> title
 }
 
 /** Thin façade so callers don't reach into the service directly. */
@@ -87,7 +104,8 @@ object ActionRegistry {
         ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER,
         ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH,
         ThorAction.RECORD_SCREEN, ThorAction.CLOSE_OTHER, ThorAction.AYN_DRAWER, ThorAction.HOME_HERE,
-        ThorAction.SWIPE_UP, ThorAction.SWIPE_DOWN, ThorAction.SWIPE_LEFT, ThorAction.SWIPE_RIGHT -> true
+        ThorAction.SWIPE_UP, ThorAction.SWIPE_DOWN, ThorAction.SWIPE_LEFT, ThorAction.SWIPE_RIGHT,
+        ThorAction.TOGGLE_TOP_SCREEN, ThorAction.WAYFINDER_OFF, ThorAction.NOTHING -> true
         else -> false
     }
 }

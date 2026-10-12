@@ -53,10 +53,12 @@ object RootInjector {
             "Q" -> p.drop(1).mapNotNull { it.toIntOrNull() }.forEach { d ->
                 ScreenBrightness.get(d)?.let { FpsSampler.send?.invoke("B $d $it\n") }
             }
-            "F" -> FpsSampler.watch(p.getOrNull(1), p.getOrNull(2))      // F <top pkg|-> <bottom pkg|->  (FPS counter)
+            // F <top pkg|-> <bottom pkg|-> [<keep top 0|1> <keep bottom 0|1>]  (FPS counter; b18j: a slot kept on one surface)
+            "F" -> FpsSampler.watch(p.getOrNull(1), p.getOrNull(2), p.getOrNull(3) == "1", p.getOrNull(4) == "1")
             "A" -> AmbientSampler.watch(p.getOrNull(1))                  // A <physical display id> | A -  (screen colour)
             "G" -> PadLayer.command(p)                                   // G on <wfpad path> | G off  (input layer)
-            "S" -> PadLayer.setScreen(p.getOrNull(1) == "1")             // S 1 | S 0  (screens on / off: GitHub #40)
+            "S" -> { PadLayer.setScreen(p.getOrNull(1) == "1"); ExtPads.screenOn = p.getOrNull(1) == "1" }   // S 1 | S 0  (GitHub #40)
+            "E" -> ExtPads.command(ExtRules.eWords(line))                // E on | off | map | learn | center  (external controllers)
             // D <pkg> → "D <pkg> [<game-id> <title>]": which game it runs (per-game profiles);
             // off the command thread (it may copy a database), one at a time
             "D" -> p.getOrNull(1)?.let { pkg -> detector.execute { FpsSampler.send?.invoke(GameDetector.answer(pkg) + "\n") } }

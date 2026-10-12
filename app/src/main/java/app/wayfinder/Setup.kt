@@ -22,20 +22,31 @@ object Setup {
     private fun service(ctx: Context) = "${ctx.packageName}/${ForegroundAppService::class.java.name}"
     private fun keyboard(ctx: Context) = "${ctx.packageName}/.keyboard.ThorKeyboardService"
 
-    /** Accessibility service on (keeps any other services the user has on). */
-    fun enableService(ctx: Context) = viaRoot(ctx, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) {
-        // 1.4: already on but Android stopped it ("crashed") — off and on again
-        if (ServiceWatch.stuck(ctx)) return@viaRoot ServiceWatch.revive(ctx)
-        val me = service(ctx)
-        // The list can be long (pservice drops long commands): a script that appends us.
-        val f = File(ctx.filesDir, "setup_a11y.sh")
-        f.writeText("""
-            |cur=${'$'}(settings get secure enabled_accessibility_services)
-            |case "${'$'}cur" in *$me*) ;; null|"") settings put secure enabled_accessibility_services $me ;; *) settings put secure enabled_accessibility_services "${'$'}cur:$me" ;; esac
-            |settings put secure accessibility_enabled 1
-            |echo OK
-            |""".trimMargin())
-        PServiceBridge.exec("sh ${f.absolutePath}")?.trim() == "OK"
+    /** Build 18 (GitHub #83): the user turned Wayfinder off ("Turn Wayfinder off") — the Hub's setup button then turns it
+     *  back on in those words. Cleared when it's turned on again, here or by the service itself. */
+    private const val OFF_KEY = "off_by_user"
+    private fun prefs(ctx: Context) = ctx.applicationContext.getSharedPreferences("thor_settings", Context.MODE_PRIVATE)
+    fun offByUser(ctx: Context): Boolean = prefs(ctx).getBoolean(OFF_KEY, false)
+    fun markOffByUser(ctx: Context) = prefs(ctx).edit().putBoolean(OFF_KEY, true).apply()
+    fun clearOffByUser(ctx: Context) { if (offByUser(ctx)) prefs(ctx).edit().remove(OFF_KEY).apply() }
+
+    /** Accessibility service on (keeps any other services the user has on). Build 18: no longer "off by the user". */
+    fun enableService(ctx: Context) {
+        clearOffByUser(ctx)
+        viaRoot(ctx, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) {
+            // 1.4: already on but Android stopped it ("crashed") — off and on again
+            if (ServiceWatch.stuck(ctx)) return@viaRoot ServiceWatch.revive(ctx)
+            val me = service(ctx)
+            // The list can be long (pservice drops long commands): a script that appends us.
+            val f = File(ctx.filesDir, "setup_a11y.sh")
+            f.writeText("""
+                |cur=${'$'}(settings get secure enabled_accessibility_services)
+                |case "${'$'}cur" in *$me*) ;; null|"") settings put secure enabled_accessibility_services $me ;; *) settings put secure enabled_accessibility_services "${'$'}cur:$me" ;; esac
+                |settings put secure accessibility_enabled 1
+                |echo OK
+                |""".trimMargin())
+            PServiceBridge.exec("sh ${f.absolutePath}")?.trim() == "OK"
+        }
     }
 
     /** Off Android's battery optimisation (so it isn't stopped in the background). */

@@ -26,7 +26,7 @@ object AmbientSampler {
     }
 
     private fun loop() {
-        // 1.4 (measured: 12 screenshots a second = +0.38 W at rest): fast only while the picture changes — slower
+        // QA2 (measured: 12 screenshots a second = +0.38 W at rest): fast only while the picture changes — slower
         // while the colour holds (2 a second), 12 a second for 1.5 s after a visible change. Most of the cost is per wake-up
         // (4 a second still measured +0.28 W) — a downscaled capture would be the real fix (1.5).
         var last: IntArray? = null

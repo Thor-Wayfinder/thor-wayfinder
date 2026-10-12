@@ -41,16 +41,16 @@ object OtherApps {
         SleepSettings.otherSleepApp?.let { p ->
             add(App(p, runCatching { ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(p, 0)).toString() }
                 .getOrDefault("SleepManager"), true,
-                "Wayfinder's sleep actions and lid guard stay off unless you turn them on (Battery → Sleep & standby).", HubPage.SLEEP))
+                "Wayfinder's sleep actions and lid guard stay off unless you turn them on (${Nav.place(HubPage.SLEEP)}).", HubPage.SLEEP))
         }
         val mj = "xyz.blacksheep.mjolnir"
         if (installed(ctx, mj) && (a11yOn(ctx, mj) || isHome(ctx, mj))) add(App(mj, "Mjolnir", false,
             "Both act on the Home button, so one press can do two things. Use one for Home: turn Mjolnir's Home routing " +
-                "off, or move Wayfinder's Home combos to another button (Controller → Combos).", HubPage.CONTROLS))
+                "off, or move Wayfinder's Home combos to another button (${Nav.place(HubPage.CONTROLS)}).", HubPage.CONTROLS))
         val bf = "com.moonbench.bifrost"
         if (installed(ctx, bf) && a11yOn(ctx, bf) && LightSettings.global.mode != LightMode.AYN) add(App(bf, "BiFrost", false,
-            "Both drive the stick lights, so they flicker between the two. Use one: Wayfinder's Stick lights → " +
-                "\"AYN default\", or turn BiFrost off.", HubPage.LIGHTS))
+            "Both drive the stick lights, so they flicker between the two. Use one: \"${LightMode.AYN.label}\" in Wayfinder's " +
+                "${Nav.place(HubPage.LIGHTS)}, or turn BiFrost off.", HubPage.LIGHTS))
         val ot = "de.langerhans.odintools"
         if (installed(ctx, ot) && a11yOn(ctx, ot)) add(App(ot, "OdinTools", false,
             "Both set performance and the fan for each app, so they undo each other. Use one: leave Wayfinder's games on " +

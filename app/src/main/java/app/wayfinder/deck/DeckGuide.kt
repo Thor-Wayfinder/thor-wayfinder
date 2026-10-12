@@ -28,7 +28,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -40,6 +39,10 @@ import app.wayfinder.ForegroundAppService
 import app.wayfinder.GameProfiles
 import kotlinx.coroutines.delay
 import app.wayfinder.ui.LocalGlass
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.fillSubtle
+import app.wayfinder.ui.fillWell
+import app.wayfinder.ui.surfaceSolid
 import androidx.compose.ui.Modifier as UiModifier
 
 /** The deck's Guide tab (1.2) — not a key pad: the game's guide and notes. */
@@ -102,8 +105,8 @@ fun DeckGuidePane(pkg: String?, appLabel: String?, onClose: () -> Unit, modifier
         if (!notesTab) key(key) { GuideWeb(key, game, pinned, UiModifier.fillMaxWidth().weight(1f)) { web = it } }
         else {
             val notes = remember(key) { CompanionStore.notes(ctx, key) }
-            Box(UiModifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(14.dp))
-                .background(if (g.dark) Color(0x26FFFFFF) else Color(0xB3FFFFFF)).padding(14.dp)) {
+            Box(UiModifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(Radii.Control))
+                .background(g.fillWell).padding(14.dp)) {
                 Text(notes.ifBlank { "No notes for $game yet — write them in the full page (Full page)." },
                     color = if (notes.isBlank()) g.textTertiary else g.textPrimary, fontSize = 16.sp,
                     modifier = UiModifier.fillMaxSize().verticalScroll(rememberScrollState()))
@@ -120,7 +123,7 @@ private fun GuideWeb(pkg: String, game: String, pinned: String?, modifier: UiMod
     var failed by remember(pkg) { mutableStateOf(false) }
     var webRef by remember(pkg) { mutableStateOf<WebView?>(null) }
     val g = LocalGlass.current
-    Box(modifier.clip(RoundedCornerShape(14.dp))) {
+    Box(modifier.clip(RoundedCornerShape(Radii.Control))) {
         AndroidView(
             factory = { c ->
                 WebView(c).apply {
@@ -134,11 +137,11 @@ private fun GuideWeb(pkg: String, game: String, pinned: String?, modifier: UiMod
                     onWeb(this)
                 }
             },
-            onRelease = { it.destroy() },
+            onRelease = { app.wayfinder.GuideCache.release(it) },   // b18p (GitHub #108): its cookies kept, then freed
             modifier = UiModifier.fillMaxSize(),
         )
         if (failed) Column(
-            UiModifier.fillMaxSize().background(if (g.dark) Color(0xF00A0C14) else Color(0xF0E9ECF4)).padding(20.dp),
+            UiModifier.fillMaxSize().background(g.surfaceSolid).padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -154,15 +157,15 @@ private fun GuideWeb(pkg: String, game: String, pinned: String?, modifier: UiMod
 private fun Chip(text: String, selected: Boolean, onClick: () -> Unit) {
     val g = LocalGlass.current
     Box(
-        UiModifier.fillMaxHeight().clip(RoundedCornerShape(12.dp))
+        UiModifier.fillMaxHeight().clip(RoundedCornerShape(Radii.Chip))
             .background(
                 if (selected) Brush.linearGradient(listOf(g.accent, g.accent2))
-                else Brush.linearGradient(listOf(if (g.dark) Color(0x1FFFFFFF) else Color(0x66FFFFFF), if (g.dark) Color(0x1FFFFFFF) else Color(0x66FFFFFF)))
+                else Brush.linearGradient(listOf(g.fillSubtle, g.fillSubtle))
             )
             .pointerInput(onClick) { detectTapGestures { onClick() } }
             .padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(text, color = if (selected) Color.White else g.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Text(text, color = if (selected) g.onAccent else g.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }

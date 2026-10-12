@@ -40,6 +40,9 @@ enum class ThorButton(val printed: String, val keyCode: Int, val hatAxis: Int = 
 
     /** 1.3 (GitHub #27): the name on screen — the face buttons can be named the Xbox way ([ButtonNames]). */
     val label: String get() = ButtonNames.of(this)
+    /** dev build 15 (WP2): its name on [look]'s controller (its own vocabulary: ✕, LB, Options…). */
+    fun label(look: PadLook): String = ButtonNames.of(this, look)
+    fun spoken(look: PadLook): String = Vocab.spoken(this, look)
 
     /** The button in words, for hints ("D-pad up", "Right stick left"): the arrow glyphs were
      *  hard to read in the on-screen hints (2026-09-24). */
@@ -64,8 +67,10 @@ enum class Press(val label: String) { TAP("tap"), DOUBLE_TAP("double-tap"), TRIP
 data class Trigger(val button: ThorButton, val press: Press = Press.TAP, val modifier: ThorButton? = null) {
     val isChord get() = modifier != null
     // in words, never arrows: shown in hints, lists and the tour (2026-09-25)
-    fun label(): String = if (modifier != null) "${modifier.spoken} + ${button.spoken}" + (if (press != Press.TAP) " · ${press.label}" else "")
-        else "${button.spoken} · ${press.label}"
+    fun label(): String = label(ButtonNames.thorLook)
+    /** dev build 15 (WP2): in [look]'s controller's names. */
+    fun label(look: PadLook): String = if (modifier != null) "${modifier.spoken(look)} + ${button.spoken(look)}" + (if (press != Press.TAP) " · ${press.label}" else "")
+        else "${button.spoken(look)} · ${press.label}"
 
     fun toJson(): JSONObject = JSONObject().put("button", button.name).put("press", press.name)
         .apply { if (modifier != null) put("modifier", modifier.name) }
@@ -204,7 +209,7 @@ object ControlsStore {
      *  the app's own choice, else automatic — on for RetroArch when RetroArch itself uses Back (its menu
      *  or a hotkey on Back, GitHub #1 / Reddit); else Wayfinder's Back (hold = move / swap) as usual. */
     fun backToGame(pkg: String): Boolean {
-        val app = pkg.substringBefore('#')
+        val app = GameProfiles.pkgOf(pkg)                        // dev build 16 (WP4): a controller's key "<…>@<pad>" too
         AppConfigStore.get(app).backToGame?.let { return it }
         // 1.4 (GitHub #43): the layer hands Back to the game as a real pad press (and Select + Back straight
         // through) — the game gets its Back and Wayfinder keeps its own

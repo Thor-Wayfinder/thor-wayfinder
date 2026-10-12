@@ -10,7 +10,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -26,7 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import app.wayfinder.deck.CustomKey
 import app.wayfinder.deck.DeckSettings
-import app.wayfinder.ui.FocusableGlass
+import app.wayfinder.deck.PointerSpeed
 import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.glassSurface
 import app.wayfinder.ui.GlassSegmentedControl
@@ -45,32 +44,38 @@ fun DeckEditorSection() {
     val g = LocalGlass.current
     DeckSettings.init(ctx)
 
-    SectionHeader("Keyboard & mouse for games" + (ControlsStore.triggerFor(ThorAction.KEYBOARD)?.label()?.let { " · $it in any game" } ?: ""))
+    // dev build 16 (theme F): its combo as the controller in hand says it
+    SectionHeader("Keyboard & mouse for games" + (Say.combo(ThorAction.KEYBOARD, app.wayfinder.ui.currentLook())?.let { " · $it in any game" } ?: ""))
     SettingCard(
-        "Pick the pad for each app",
-        if (DeckSettings.autoPick) "RetroArch gets the emulator keys, video apps the video pad, streaming apps the trackpad… Your own choice in an app is remembered"
+        "Each app's pad",
+        if (DeckSettings.autoPick) "RetroArch gets the emulator keys, video apps the video pad, streaming apps the trackpad. Your own choice in an app is remembered."
         else "Always opens on the last pad you used",
         checked = DeckSettings.autoPick, onChecked = { DeckSettings.setAutoPickOn(it) },
     )
+    // b18h (GitHub #49 "a tad too sensitive", #99): the trackpad's Pointer speed, Mouse and Touch — 5 = the speed it always
+    // had; the deck has the same stepper beside its pad. Not Direct (the pad is the game's screen, 1:1)
+    SettingCard(NavCards.KB_SPEED, "How far the pointer goes for a finger on the trackpad, in Mouse and Touch") {
+        app.wayfinder.ui.Stepper(Say.POINTER_SCALE, "${DeckSettings.pointerSpeed}",
+            { DeckSettings.choosePointerSpeed(PointerSpeed.step(DeckSettings.pointerSpeed, faster = false)) },
+            { DeckSettings.choosePointerSpeed(PointerSpeed.step(DeckSettings.pointerSpeed, faster = true)) })
+    }
 
-    SectionHeader("Your own buttons (the “My pad” page of Keyboard & mouse)")
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    SectionHeader("Your own buttons · My pad")
+    GlassPanel(Modifier.fillMaxWidth(), radius = app.wayfinder.ui.Radii.Card) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text("Buttons you make for Keyboard & mouse: each one types a text you save, or presses a key " +
                 "combo a PC game or app needs — Ctrl+Z, F5 quick save, Alt+Enter…",
                 color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
             if (DeckSettings.custom.isEmpty()) {
-                Text("Nothing yet — start from an example:", color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
+                app.wayfinder.ui.Caption("Nothing yet — start from an example:")
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     // (Ctrl = META_CTRL_ON | META_CTRL_LEFT_ON; Alt = META_ALT_ON | META_ALT_LEFT_ON.)
                     for (ex in listOf(CustomKey("Undo", code = android.view.KeyEvent.KEYCODE_Z, meta = 0x3000),
                         CustomKey("Quick save", code = android.view.KeyEvent.KEYCODE_F5),
                         CustomKey("Full screen", code = android.view.KeyEvent.KEYCODE_ENTER, meta = 0x12),
                         CustomKey("gg", text = "gg"))) {
-                        app.wayfinder.ui.FocusableGlass(onClick = { DeckSettings.setCustomKeys(DeckSettings.custom + ex) }, radius = 12.dp) {
-                            Text("+ ${ex.label}", color = g.accent, style = MaterialTheme.typography.labelLarge,
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
-                        }
+                        app.wayfinder.ui.GlassButton("+ ${ex.label}", { DeckSettings.setCustomKeys(DeckSettings.custom + ex) },
+                            kind = app.wayfinder.ui.ButtonKind.PRIMARY, size = app.wayfinder.ui.ButtonSize.COMPACT)
                     }
                 }
             }
@@ -91,9 +96,10 @@ private fun CustomKeyRow(k: CustomKey, onDelete: () -> Unit) {
             Text(if (k.text != null) "Types: ${k.text}" else "Presses: ${comboLabel(k.code, k.meta)}",
                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall, maxLines = 1)
         }
-        FocusableGlass(onClick = onDelete, radius = 12.dp) {
-            Icon(Icons.Rounded.Delete, "Delete", tint = g.textSecondary, modifier = Modifier.padding(10.dp).size(20.dp))
-        }
+        // dev build 17 (WP8): deletes a key the user made — two presses
+        // review WP8-3: the confirmation is this key's (a plain loop: one deleted, the next takes its place — not armed)
+        app.wayfinder.ui.ConfirmButton("", "Press again to delete", onDelete, size = app.wayfinder.ui.ButtonSize.COMPACT,
+            icon = Icons.Rounded.Delete, iconDescription = "Delete", state = app.wayfinder.ui.rememberConfirmState(k))
     }
 }
 
@@ -108,32 +114,27 @@ private fun AddCustomKey(onAdd: (CustomKey) -> Unit) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
         EditField("Button name", label, Modifier.weight(1f)) { label = it }
         EditField(if (kind == 0) "Text to type" else "Keys, e.g. Ctrl+S or F5", value, Modifier.weight(2f)) { value = it }
-        FocusableGlass(onClick = {
+        app.wayfinder.ui.GlassButton("Add", {
             val name = label.trim().ifEmpty { value.trim().take(12) }
-            if (value.isBlank()) { error = "Type what the button should do"; return@FocusableGlass }
+            if (value.isBlank()) { error = "Type what the button should do"; return@GlassButton }
             val key = if (kind == 0) CustomKey(name, text = value) else parseCombo(value)?.let { (code, meta) ->
                 CustomKey(name, code = code, meta = meta)
             }
-            if (key == null) { error = "Didn't recognise “$value” — try Ctrl+S, Alt+Enter, F5, Esc"; return@FocusableGlass }
+            if (key == null) { error = "Didn't recognise “$value” — try Ctrl+S, Alt+Enter, F5, Esc"; return@GlassButton }
             onAdd(key); label = ""; value = ""; error = null
-        }, radius = 14.dp) {
-            Row(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Rounded.Add, null, tint = g.accent, modifier = Modifier.size(20.dp))
-                Text("Add", color = g.textPrimary, style = MaterialTheme.typography.labelLarge)
-            }
-        }
+        }, icon = Icons.Rounded.Add)
     }
-    error?.let { Text(it, color = app.wayfinder.ui.Glass.Danger, style = MaterialTheme.typography.bodySmall) }
+    error?.let { Text(it, color = g.danger, style = MaterialTheme.typography.bodySmall) }
 }
 
-/** A text field the controller can reach: the D-pad passes over it, A starts typing (before: it was an EditText the
+/** A text field the controller can reach: the D-pad passes over it, A starts typing (QA2 — it was an EditText the
  *  D-pad skipped). */
 @Composable
 private fun EditField(hint: String, value: String, modifier: Modifier, onChange: (String) -> Unit) {
     val g = LocalGlass.current
     app.wayfinder.ui.ControllerTextField(value, onChange, modifier,
         textStyle = androidx.compose.ui.text.TextStyle(color = g.textPrimary, fontSize = androidx.compose.ui.unit.TextUnit(16f, androidx.compose.ui.unit.TextUnitType.Sp)),
-        placeholder = hint, surface = Modifier.glassSurface(g, androidx.compose.foundation.shape.RoundedCornerShape(14.dp), raised = false),
+        placeholder = hint, surface = Modifier.glassSurface(g, androidx.compose.foundation.shape.RoundedCornerShape(app.wayfinder.ui.Radii.Control), raised = false),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 14.dp, vertical = 12.dp))
 }
 

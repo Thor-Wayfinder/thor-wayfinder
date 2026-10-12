@@ -9,7 +9,7 @@ import android.util.Log
 /**
  * 1.4 — AYN's two charging switches, and what the charger is doing now.
  *
- * Verified on a Thor (2026-10-01): "Stop at 80 %" = setting `percent_80_charge_limit`, which
+ * Verified in AYN's settings app (its triggers, 2026-10-01): "Stop at 80 %" = setting `percent_80_charge_limit`, which
  * AYN writes to `/sys/class/qcom-battery/limit_capacity_charge`; "Direct power" = `is_charging_separation`, written
  * to `usb_charge_now` (0 = the charger runs the Thor and the battery rests). The limit STOPS charging at 80 %; it
  * doesn't bring a fuller battery down — plugged in at 100 % it stays at 100 % (Android still says "charging").

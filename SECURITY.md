@@ -1,10 +1,11 @@
-# Wayfinder 1.0 — security
+# Wayfinder — security
 
 Wayfinder needs more access than most apps: it's an accessibility service and a keyboard, and it runs
 system commands through the AYN Thor's own system service (the same one AYN's "Run script as root"
 uses). So before 1.0 its code went through repeated, dedicated security review passes (September 2026;
 AI-assisted, like the code — no outside firm), each finding fixed and re-tested on a real Thor. This is
-what was checked and what was found.
+what was checked and what was found. This page describes 1.5-beta1 (October 2026): the Bluetooth / USB
+controller support it adds went through the same kind of review.
 
 ## What was reviewed
 - **Every exported component** (anything another app can call): only the main screen can be opened by
@@ -25,11 +26,24 @@ what was checked and what was found.
   by the same installation (signed with a key that never leaves the device); anything else restores
   controller mappings only, through the same filter.
 - **The native input layer** (the controller copy games see): its profile parser rejects any
-  out-of-range value, and 98 automated checks run on the device.
+  out-of-range value. Its tests and the controller reader's (below) — about 4,000 automated checks,
+  `tools/build_wfpad.sh test` and `tools/build_wfhid.sh test` — run on a Thor.
+- **Bluetooth and USB controllers** (new in 1.5): a small native reader (`wfhid`, built from `fx/wfhid.c`)
+  runs as root, one per connected controller, started by the system helper only from the app's own copy
+  of the binary (owned by the app, writable by nobody else). It reads the controller's raw HID reports and
+  makes one game controller from them; its descriptor and report parsing is bounds-checked, and what the
+  app sends it (controller keys, button maps, profiles) is checked against strict patterns on both sides.
+  So that games don't see a controller twice, the helper removes the duplicate input node Android or AYN
+  made for it, and puts it back (same device, owner and mode) when Wayfinder lets that controller go; the
+  list of removed nodes lives in the app's private files and every field is checked when it's read back.
+  The names of Wayfinder's own controllers (only names ending in "(Wayfinder)") go on the list of devices
+  AYN's mapping service leaves alone.
 - **Logging and debug code**: the release build is not debuggable, has no test receivers, and writes no
   debug/info logs from the app; its own warnings don't name apps or keys (logs could reveal which apps you
   use; an Android error message quoted in a rare failure may still contain one). A few root-only entry
-  points used to drive the screens (focus, input tools) are part of the app itself, not test code.
+  points used to drive the screens (focus, input tools) are part of the app itself, not test code. The
+  input layer's binary keeps three command-line switches used by its on-device tests; Wayfinder never
+  passes them.
 
 ## What was found and fixed (highlights)
 - A command-injection path through an app-supplied package name (a malicious app could have named
@@ -55,6 +69,13 @@ what was checked and what was found.
   denial of service only. (A per-launch random name is planned.)
 - Screenshots and screen recordings capture everything shown, including content apps hide from
   screenshots (passwords, banking), and are saved to your Pictures / Movies folders.
+- When Wayfinder gives a controller back, its input node is made again readable and writable by every
+  app for a few seconds at most (Android has to be able to open it the moment it appears), then set back
+  to its usual mode (root and the input group only); if that last step fails, until the Thor restarts. On
+  a stock Thor, AYN's own controller node is open to every app all the time.
+- Turning "Wayfinder handles controllers" off takes Wayfinder's controller names off AYN's list (above).
+  Uninstalling Wayfinder without doing so leaves them there; they name only Wayfinder's own controllers,
+  so they do nothing.
 - The Guide page is a small web browser: a DuckDuckGo search for your game, or a page you pinned — when
   you open it, or automatically for apps where you turned the Guide companion on (off by default). It
   runs inside Wayfinder's app (with JavaScript on, and no bridge from web pages into the app).

@@ -58,6 +58,7 @@ object Features {
         ThorAction.FOCUS_SWITCH_UP, ThorAction.FOCUS_SWITCH_DOWN, ThorAction.FOCUS_LOCK_TOGGLE,
         ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH, ThorAction.HOME_HERE,
         ThorAction.CLOSE_APP, ThorAction.CLOSE_OTHER, ThorAction.OPEN, ThorAction.TOGGLE_SECOND_SCREEN,
+        ThorAction.TOGGLE_TOP_SCREEN, ThorAction.NOTHING,   // build 18 (GitHub #91, #81)
     )
 
     /** A combo's action is in use with the parts on now. */
@@ -71,6 +72,20 @@ object Features {
 
     /** Game controls (the input layer) are on somewhere. */
     val gameControls: Boolean get() = PadLayerCtl.mode != PadLayerCtl.Mode.NOWHERE
+
+    /** Build 18 (B10, MORE-04): the setup the parts make now — the Features page and the tour draw it selected. */
+    enum class Preset { JUST_SCREENS, EVERYTHING, MIXED }
+    /** Pure (JVM test): [on] = each part on or off — every one on is "Everything", none "Just switching screens". */
+    fun presetOf(on: List<Boolean>): Preset = when {
+        on.all { it } -> Preset.EVERYTHING
+        on.none { it } -> Preset.JUST_SCREENS
+        else -> Preset.MIXED
+    }
+    /** The parts "Just switching screens" turns off: more combos, the quick panel, Game controls, Keyboard & mouse, stick lights. */
+    fun parts(): List<Boolean> = listOf(moreCombos, AppSettings.aynButtonOurs, gameControls, deck, lights)
+    fun preset(): Preset = presetOf(parts())
+    /** How many of the [parts] are on ("turns off 5 parts"). */
+    fun partsOn(): Int = parts().count { it }
 
     /** "Just switching screens": the core only — the AYN button stays AYN's, no input layer, no Keyboard & mouse,
      *  no Wayfinder lights, no "Your controls" sheet. */

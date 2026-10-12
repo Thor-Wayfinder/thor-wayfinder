@@ -24,6 +24,8 @@ import app.wayfinder.ui.GlassListRow
 import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.LocalGlass
 import app.wayfinder.ui.SectionHeader
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.RowEnd
 
 /**
  * 1.4 — one page for what makes the battery last: what the Thor draws right now, the charging switches and sleep.
@@ -31,11 +33,11 @@ import app.wayfinder.ui.SectionHeader
  */
 @Composable
 internal fun BatteryPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit) =
-    SubPage(myDisplayId, "Battery", "What the Thor draws, charging and sleep", onBack) {
+    SubPage(myDisplayId, NavPages.title(HubPage.BATTERY), "What the Thor draws, charging and sleep", onBack) {
         val ctx = LocalContext.current
         NowCard()
         Tuners.installed(ctx)?.let { t ->
-            GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+            GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
                 Text(Tuners.note(t), color = LocalGlass.current.textPrimary, style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(16.dp))
             }
@@ -43,7 +45,9 @@ internal fun BatteryPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> U
         SectionHeader("Charging")
         BatterySwitches()
         SectionHeader("Asleep")
-        GlassListRow("Sleep & standby", value = sleepSummary(), icon = Icons.Rounded.Bedtime) { go(HubPage.SLEEP) }
+        // build 18: its page's title and id (B12, pF21: Back from Sleep opened elsewhere lands here), a chevron (B11, D21)
+        GlassListRow(NavPages.title(HubPage.SLEEP), value = sleepSummary(), icon = Icons.Rounded.Bedtime, id = HubPage.SLEEP,
+            end = RowEnd.CHEVRON) { go(HubPage.SLEEP) }
     }
 
 /** What the Thor does right now: its draw, the time left (or the charger), and the CPU's top speeds in force. */
@@ -73,7 +77,7 @@ private fun NowCard() {
             kotlinx.coroutines.delay(2000)
         }
     }
-    GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(watts?.let { "%.1f W".format(it) } ?: "—", color = g.textPrimary, style = MaterialTheme.typography.headlineMedium,
@@ -85,10 +89,20 @@ private fun NowCard() {
                 }, color = g.textSecondary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))
             }
             val limited = caps != null && maxima != null && caps!!.indices.any { caps!![it] < maxima!![it] }
-            Text("Battery ${n.level ?: "—"} % · CPU top speed: " + (caps?.let { c ->
-                (if (maxima == null) "" else if (limited) (Tuners.installed(ctx)?.let { "limited by $it — " } ?: "limited — ") else "usual — ") +
-                    c.joinToString(" · ") { "%.1f".format(it / 1_000_000f) } + " GHz (small · middle · big cores)"
-            } ?: "—") + ". Most of the battery goes to the screens: brightness saves the most.",
+            // build 18 (B9, hF18): what limits the CPU, in words ("limited" said not by what); its speeds only when it is limited,
+            // on a line of their own; the brightness tip on its own short line
+            val tuner = Tuners.installed(ctx)
+            Text("Battery ${n.level ?: "—"} % · CPU: " + when {
+                caps == null || maxima == null -> "—"
+                !limited -> "its usual top speed"
+                tuner != null -> "limited by $tuner"
+                else -> "below its top speed (AYN's performance mode)"
+            }, color = g.textSecondary, style = MaterialTheme.typography.bodySmall)
+            if (limited) caps?.let { c ->
+                Text("Top speeds now: " + c.joinToString(" · ") { "%.1f".format(it / 1_000_000f) } + " GHz (small · middle · big cores)",
+                    color = g.textTertiary, style = MaterialTheme.typography.labelSmall)
+            }
+            Text("Most of the battery goes to the screens: brightness saves the most.",
                 color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
         }
     }

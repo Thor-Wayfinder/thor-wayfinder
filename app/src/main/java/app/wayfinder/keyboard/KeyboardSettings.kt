@@ -26,6 +26,11 @@ object KeyboardSettings {
     /** 1.3 (GitHub #11): the D-pad picks the keys and the left stick moves the text cursor (default: the other way). */
     var dpadKeys by mutableStateOf(false)
         private set
+    /** b18i (D3, GitHub #99; 2026-10-10): with the keys on the other screen, a thin keyboard window stays on the typing
+     *  screen (1.4's, the default) — some games need one: Eden's name boxes take the text the moment no keyboard window is
+     *  visible. Off = 1.3's: no window there, so no AYN black keyboard bar either, but those games submit at once. */
+    var thinBar by mutableStateOf(true)
+        private set
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -39,11 +44,18 @@ object KeyboardSettings {
         placement = runCatching { KeyboardPlacement.valueOf(prefs.getString("placement", null) ?: "") }
             .getOrDefault(KeyboardPlacement.OTHER_SCREEN)
         dpadKeys = prefs.getBoolean("dpad_keys", false)
+        thinBar = prefs.getBoolean("thin_bar", true)            // b18i (D3): a new key, absent = on (today's)
     }
 
     fun chooseDpadKeys(on: Boolean) {
         dpadKeys = on
         prefs.edit().putBoolean("dpad_keys", on).apply()
+    }
+
+    /** b18i (D3): Keyboard's "Keep a thin bar" switch — read at the next keyboard opening ([ThorKeyboardService]). */
+    fun chooseThinBar(on: Boolean) {
+        thinBar = on
+        prefs.edit().putBoolean("thin_bar", on).apply()
     }
 
     fun setLayouts(ids: List<String>) {

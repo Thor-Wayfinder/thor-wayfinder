@@ -15,6 +15,16 @@
 // instead. A control that becomes active during the gate is "consumed": silent for the game
 // until it returns to rest, even after the gate ends (Home + R2, release Home first → R2 does
 // not reach the game). Controls already held before the gate come back when it ends.
+// b18g (B4): a Back pressed while a game button is already held (Select + Back: RetroArch's menu hotkey) goes WITH the
+// game, as ButtonEngine takes it (`backToGameNow`): that press doesn't gate, so the held button stays down ([wf_state.back_hot]).
+// b18h: "held" as the app sees it on the copy ([wf_game_key_held]).
+// b18l (GitHub #81, b18w B1): Home / Back's change goes out in a report of its own, apart from what the gate does to the rest
+// in that frame ([wf_frames]): the app reads the copy's events in the order written. b18l review: a button held before the gate
+// isn't echoed when let go under it — the copy let it go at the gate's open ([wf_event]).
+// b18n: a resync replays what's held in the order it went down, as far as the state before tells it ([wf_replay]) — a Back
+// that went with the game keeps doing so, the button held before it isn't withheld.
+// b18o: the copy's buttons a hand holds a turbo button for, told to Wayfinder ([wf_turbo_held]) — their on / off pulses are
+// no presses there (a Home tap with a turbo button held goes home).
 //
 // Header-only so fx/wfmap_test.c can test it on its own.
 #ifndef WFMAP_H
@@ -103,6 +113,15 @@ typedef struct {
     int shift, shift_used;
     long shift_tap_until;
     int back_free;                // copied from the map (`bg=1`): Back held doesn't gate
+    // b18g (B4): THIS Back press goes with the game — at its press a game button was already held (not withheld, not the
+    // shift button), so it doesn't gate: Select + Back reaches the game as Select + Back. Set at Back's press, cleared at
+    // its release ([wf_event]) and by [wf_state_rest]. Each Back press decides afresh.
+    int back_hot;
+    // b18h (review): what the copy shows of each held pad key (printed code), for Back's check ([wf_game_key_held]): 0 = the
+    // key itself, a key / D-pad direction = the profile's remap, WF_NONE = nothing the app sees held (the profile sends it to
+    // nothing or to Wayfinder, or it is turbo / toggle: the copy follows its rhythm or its latch, not the finger). Copied
+    // from the profile with its shift button and `bg=1` ([wf_state_map]); all 0 = no profile.
+    unsigned short seen_as[WF_NK];
 } wf_state;
 
 
@@ -139,6 +158,16 @@ static inline int wf_abs_active(const wf_state *s, int a) {
 
 static inline void wf_map_reset(wf_map *m) { memset(m, 0, sizeof *m); }
 
+/** The profile's parts the source state keeps, set with every profile: its shift button, `bg=1`, and what the copy shows of
+ *  each held key ([wf_state.seen_as], b18h review). */
+static inline void wf_state_map(wf_state *s, const wf_map *m) {
+    s->shift = m->shift; s->back_free = m->back_free;
+    for (int k = 0; k < WF_NK; k++) {
+        int d = m->keymap[k];
+        s->seen_as[k] = (unsigned short)(d == WF_NONE || d == WF_EXT || m->fire[k] ? WF_NONE : d);
+    }
+}
+
 static inline int wf_is_system(int printed) { return printed == WF_HOME || printed == WF_BACK; }
 
 /** 1.3 — the D-pad's directions are sources of their own (printed codes WF_HAT_UP..RIGHT, keymap
@@ -151,10 +180,62 @@ static inline int wf_dir_on(int hx, int hy, int dir) {
     return 0;
 }
 
+/** Back held gates: not when the profile gives Back to the game (`bg=1`), nor for a Back press that went with the game
+ *  (b18g: a game button was held before it, [wf_state.back_hot]). */
+static inline int wf_back_gates(const wf_state *s) {
+    return s->key[WF_BACK] && !s->back_free && !s->back_hot;
+}
+
 /** The gate is open (nothing reaches the game): Home held, Back held (unless the profile gives Back
- *  to the game), or the profile's shift button held. */
+ *  to the game, or this Back press went with the game), or the profile's shift button held. */
 static inline int wf_gate(const wf_state *s) {
-    return s->key[WF_HOME] || (s->key[WF_BACK] && !s->back_free) || (s->shift && s->key[s->shift]);
+    return s->key[WF_HOME] || wf_back_gates(s) || (s->shift && s->key[s->shift]);
+}
+
+/** The gate follows Home / Back / the shift button ([wf_gate]) — at [wf_event]'s Home / Back / shift change, and when a
+ *  resync's replay keeps a Back's decision ([wf_replay], b18n). At its open, what's held now is NOT consumed; at its close,
+ *  whatever is back at rest is free again. */
+static inline void wf_gate_follow(wf_state *s) {
+    int g = wf_gate(s);
+    if (g && !s->gated) {         // gate opens: what's held now is NOT consumed
+        for (int i = 0; i < s->nk; i++) s->akey_prev[s->keys[i]] = s->key[s->keys[i]];
+        for (int i = 0; i < s->na; i++) s->aabs_prev[s->axes[i]] = (unsigned char)wf_abs_active(s, s->axes[i]);
+    }
+    if (!g && s->gated) {         // gate closes: whatever is back at rest is free again
+        for (int i = 0; i < s->nk; i++) if (!s->key[s->keys[i]]) s->ckey[s->keys[i]] = 0;
+        for (int i = 0; i < s->na; i++) if (!wf_abs_active(s, s->axes[i])) s->cabs[s->axes[i]] = 0;
+    }
+    s->gated = g;
+}
+
+/** b18h (review): a copy's key code the app's ButtonEngine names as a button (ThorButton: the face buttons, L1 / R1, L2 / R2,
+ *  L3 / R3, Select, Start). Not MODE (a connected controller's Home given to the game), C or Z (its SL / SR): Android reads
+ *  them as BUTTON_MODE / C / Z, which the engine never counts. */
+static inline int wf_app_button(int code) {
+    switch (code) {
+        case WF_A: case WF_B: case WF_X: case WF_Y: case 0x136: case 0x137: case WF_L2: case WF_R2:
+        case 0x13a: case 0x13b: case 0x13d: case 0x13e: return 1;
+    }
+    return 0;
+}
+
+/** b18g (B4): a game button is held now, AS THE APP SEES IT ON THE COPY. ButtonEngine decides the same Back from the copy's
+ *  keys (`backToGameNow`), so both must agree (b18h review). A pad key counts when it is held and live and the copy shows it
+ *  as a button the app names, or as a D-pad direction ([wf_state.seen_as]). Never Home / Back, never a withheld key
+ *  (consumed: pressed during a gate — Back came first, GitHub #81 — until it is let go, as ButtonEngine's `withheld`). The
+ *  D-pad and the sticks themselves don't count. Counting less never splits the two: a Back that gates releases everything
+ *  in that frame, in a report before Back's ([wf_frames], b18l — b18h: the UHID copy wrote the buttons first in Back's own
+ *  report), so the app sees nothing held either. */
+static inline int wf_game_key_held(const wf_state *s) {
+    for (int i = 0; i < s->nk; i++) {
+        int k = s->keys[i];
+        // the shift button isn't a game button. Defensive: its gate is open while it is held, and [wf_event] asks only with
+        // no gate open
+        if (wf_is_system(k) || k == s->shift || !s->key[k] || s->ckey[k]) continue;
+        int d = s->seen_as[k] ? s->seen_as[k] : k;
+        if (d != WF_NONE && (wf_app_button(d) || (d >= WF_HAT_UP && d <= WF_HAT_RIGHT))) return 1;
+    }
+    return 0;
 }
 
 /** One output of the copy: a printed button (layout applied), a D-pad direction, or — for a
@@ -178,6 +259,7 @@ static inline void wf_state_rest(wf_state *s) {
     memset(s->akey_prev, 0, sizeof s->akey_prev); memset(s->aabs_prev, 0, sizeof s->aabs_prev);
     memset(s->latch, 0, sizeof s->latch);
     memset(s->vkey, 0, sizeof s->vkey);
+    s->back_hot = 0;
 }
 
 /** A virtual press / release (`p <code> <0|1>`): a pad button the pad has (not Home) or a
@@ -208,10 +290,42 @@ static inline int wf_turbo_active(const wf_state *s, const wf_map *m) {
     return 0;
 }
 
+/** b18o: the codes [wf_app_button] names — the only jobs [wf_turbo_held] tells. */
+#define WF_APP_LO 0x130
+#define WF_APP_HI 0x13e
+/**
+ * b18o (2026-10-11 — GitHub #81's turbo leftover): the copy's buttons a hand holds a TURBO button for, as Wayfinder
+ * must know them. A turbo button's job goes on and off on the copy while it is held, and ButtonEngine reads the copy's keys:
+ * each on-pulse looked like a new press, so a Home tap within 150 ms of one was "Home + that button" (no tap) about half the
+ * time. Told instead ("TU <code> <1|0> <ms>"), it keeps the hand's press time and counts the button as held till the hand
+ * lets go; the pulses are no presses. [said] (the caller's, by the copy's printed code, kept across resyncs and profiles:
+ * whatever no longer counts is said let go): the jobs said held. A job counts while a turbo button whose job it is (its
+ * keymap target, or itself) is held and not consumed — under a gate too (the hand holds it, the gate only silences it).
+ * Never Home / Back or the shift button; never a job that is nothing, Wayfinder's, a D-pad direction or not a button the
+ * app names. Two turbo buttons on one job: one hold, let go when neither counts. Writes the changes into [codes] / [vals],
+ * releases first, at most [cap]; returns how many. Pure.
+ */
+static inline int wf_turbo_held(const wf_state *s, const wf_map *m, unsigned char *said, int *codes, int *vals, int cap) {
+    unsigned char now[WF_APP_HI - WF_APP_LO + 1];
+    memset(now, 0, sizeof now);
+    for (int i = 0; i < s->nk; i++) {
+        int p = s->keys[i];
+        if (wf_is_system(p) || (s->shift && p == s->shift) || m->fire[p] != 1 || !s->key[p] || s->ckey[p]) continue;
+        int d = m->keymap[p] ? m->keymap[p] : p;
+        if (d >= WF_APP_LO && d <= WF_APP_HI && wf_app_button(d)) now[d - WF_APP_LO] = 1;
+    }
+    int n = 0;
+    for (int d = WF_APP_LO; d <= WF_APP_HI && n < cap; d++) if (said[d] && !now[d - WF_APP_LO]) { said[d] = 0; codes[n] = d; vals[n++] = 0; }
+    for (int d = WF_APP_LO; d <= WF_APP_HI && n < cap; d++) if (!said[d] && now[d - WF_APP_LO]) { said[d] = 1; codes[n] = d; vals[n++] = 1; }
+    return n;
+}
+
 
 /**
  * Feed one source event. Returns 1 if it must be ECHOED to Wayfinder (withheld from the game
  * — during a gate, or a consumed control until it rests). *printed gets the printed code.
+ * b18l (review): not a button's release under the gate when it was held since before the gate opened — the copy already
+ * let it go there.
  */
 static inline int wf_event(wf_state *s, int type, int code, int value, int *printed) {
     *printed = code;
@@ -225,20 +339,20 @@ static inline int wf_event(wf_state *s, int type, int code, int value, int *prin
             // released alone (no other button, no Home / Back meanwhile): the game gets a short tap
             if (is_shift && value == 0 && !s->shift_used && !s->key[WF_HOME] && !s->key[WF_BACK])
                 s->shift_tap_until = s->now_ms + 60;
-            int g = wf_gate(s);
-            if (g && !s->gated) {         // gate opens: what's held now is NOT consumed
-                for (int i = 0; i < s->nk; i++) s->akey_prev[s->keys[i]] = s->key[s->keys[i]];
-                for (int i = 0; i < s->na; i++) s->aabs_prev[s->axes[i]] = (unsigned char)wf_abs_active(s, s->axes[i]);
-            }
-            if (!g && s->gated) {         // gate closes: whatever is back at rest is free again
-                for (int i = 0; i < s->nk; i++) if (!s->key[s->keys[i]]) s->ckey[s->keys[i]] = 0;
-                for (int i = 0; i < s->na; i++) if (!wf_abs_active(s, s->axes[i])) s->cabs[s->axes[i]] = 0;
-            }
-            s->gated = g;
+            // b18g (B4): Back pressed while a game button is held (Select + Back) goes with the game — no gate, the held
+            // button stays down. Not under a gate already open (Home, the shift button): Home + Back stays Wayfinder's.
+            if (p == WF_BACK && value == 1 && !s->gated) s->back_hot = wf_game_key_held(s);
+            if (p == WF_BACK && value == 0) s->back_hot = 0;
+            wf_gate_follow(s);
             return is_shift;              // Home/Back themselves always reach Android; the shift button is Wayfinder's
         }
         if (value == 1 && s->shift && s->key[s->shift]) s->shift_used = 1;
-        int echo = s->gated || s->ckey[p];
+        // b18l (review): never the release of a button held since before the gate opened (not pressed again under it, not
+        // consumed). The gate let it go on the copy at its open, and the app took that from the copy. Echoed, its line could
+        // overtake the copy's own Home DOWN on the way to the app and take the button out of what Home found held (case b).
+        // A docked / merged controller's reader lets go of it in a report after its Home (b18l), so wfpad read each such
+        // let-go under its own gate and said a release the hand never made
+        int echo = s->ckey[p] || (s->gated && !(value == 0 && s->akey_prev[p]));
         if (s->gated && value && !s->akey_prev[p]) s->ckey[p] = 1;
         if (s->gated) s->akey_prev[p] = value != 0;
         if (!s->gated && !value) s->ckey[p] = 0;
@@ -254,6 +368,39 @@ static inline int wf_event(wf_state *s, int type, int code, int value, int *prin
         return echo;
     }
     return 0;
+}
+
+/**
+ * b18n (b18h WI-4, "Not changed" 1): a resync — events dropped, AYN's pad re-made, a feed's start or switch — replays the
+ * keys held now ([held]: by source code, the pad's keys only) through [wf_event] as presses, on a state just reset. [old]:
+ * the state before the reset (NULL: none — then code order, as before b18n). The replay keeps the order the keys went down
+ * in, as far as [old] tells it. In code order alone Back (0x9e) came before Select (0x13a): a Back that went with the game
+ * (Select + Back) gated on the replay and withheld its Select, while the app had given that Back to the game. Three passes,
+ * each in code order:
+ *  1. a button [old] held and let through (live) — it went down before any Home / Back / shift button held then;
+ *  2. Home, Back, the profile's shift button, and a key [old] didn't hold (pressed during the drop) — as before b18n;
+ *  3. a button [old] held but withheld (consumed: pressed under a gate) — it stays consumed, silent until let go.
+ * A Back [old] held is the same press on the copy, so it keeps its decision ([wf_state.back_hot]): one that went with the
+ * game stays so even if its game button was let go meanwhile; one that gated still gates. So does the shift button: used
+ * under it ([wf_state.shift_used]), its release sends no tap.
+ */
+static inline void wf_replay(wf_state *s, const unsigned char *held, const wf_state *old) {
+    int fresh = 0;                                // a key [old] didn't hold, replayed under the held shift button
+    for (int pass = 0; pass < 3; pass++)
+        for (int i = 0; i < s->nk; i++) {
+            int k = s->keys[i], p = wf_in(s, k), q;
+            if (!held[k]) continue;
+            int gate = wf_is_system(p) || (s->shift && p == s->shift);
+            int at = !(old && old->key[p] && !gate) ? 1 : old->ckey[p] ? 2 : 0;
+            if (at != pass) continue;
+            if (at == 1 && !gate && s->shift && s->key[s->shift]) fresh = 1;
+            wf_event(s, EV_KEY, k, 1, &q);
+            if (at == 2) s->ckey[p] = 1;          // the same press: still withheld until let go, gate or not
+            if (p == WF_BACK && old && old->key[WF_BACK]) { s->back_hot = old->back_hot; wf_gate_follow(s); }
+        }
+    // the shift button held through: used as before (a button withheld from an earlier gate, replayed under it, isn't a
+    // use), or by a key pressed under it during the drop
+    if (old && s->shift && old->shift == s->shift && old->key[s->shift] && s->key[s->shift]) s->shift_used = old->shift_used || fresh;
 }
 
 /**
@@ -354,8 +501,9 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
         wf_put(s, m, o, d, p == WF_L2 || p == WF_R2, &hx, &hy, trig_full);
     }
     // Wayfinder's virtual presses (a trigger pressed this way = a full pull)
-    // (silent under Home / Back; under the shift button they ARE its layer's outputs — a button target)
-    if (!s->key[WF_HOME] && !(s->key[WF_BACK] && !s->back_free)) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
+    // (silent under Home / Back; under the shift button they ARE its layer's outputs — a button target; b18g: not silent
+    // under a Back that went with the game)
+    if (!s->key[WF_HOME] && !wf_back_gates(s)) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
     // 1.3: a remapped D-pad direction leaves the game's D-pad for its target (another button, a
     // direction, nothing, or Wayfinder); the other directions stay as they are
     int hat_x_off = 0, hat_y_off = 0;
@@ -430,6 +578,69 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
         if (a == WF_LX || a == WF_LY || a == WF_RX || a == WF_RY || a == WF_HX || a == WF_HY || a == WF_GAS || a == WF_BRAKE) continue;
         int v; wf_live_abs(s, a, &v); o->abs[a] = v;
     }
+}
+
+/**
+ * b18l (GitHub #81, b18w B1): the copy's states between two frames when Home or Back changes. The gate lets go of what is
+ * held at Home / Back's press and gives it back at their release, in the SAME frame. Written as one report, the order was
+ * the report's (the UHID copy: the buttons before Home and Back; wfhid's pad: Home last), and ButtonEngine reads it
+ * literally: R2 given back before Home's release made "Home + R2" (Brighter, no home); X let go before Home's press was no
+ * partner of it (Home went home). So the frame goes out in up to three reports:
+ *  1. Home's change (press or release) and Back's release: first, alone;
+ *  2. everything else: what the gate lets go of or gives back, other buttons, the axes;
+ *  3. Back's press: last. The app decides that Back from what it sees held then (`backToGameNow`), this layer from what it
+ *     counts ([wf_game_key_held]); a Back that gates lets go only of what it doesn't count, so the app must see that go
+ *     first (b18h WI-4).
+ * [mid] gets the states before [nxt]: the copy goes cur → mid[0] → … → nxt, one report each; a report that changes nothing
+ * on the device is skipped by the caller. Returns how many (0..2); 0 = one report, as before.
+ */
+static inline int wf_frames(const wf_out *cur, const wf_out *nxt, wf_out mid[2]) {
+    int home = cur->key[WF_HOME] != nxt->key[WF_HOME];
+    int back_up = cur->key[WF_BACK] && !nxt->key[WF_BACK], back_down = !cur->key[WF_BACK] && nxt->key[WF_BACK];
+    int n = 0;
+    if (home || back_up) {                        // 1. Home's change, Back's release
+        mid[n] = *cur;
+        mid[n].key[WF_HOME] = nxt->key[WF_HOME];
+        if (back_up) mid[n].key[WF_BACK] = 0;
+        n++;
+    }
+    if (back_down) {                              // 2. the rest — 3. Back's press after it
+        mid[n] = *nxt;
+        mid[n].key[WF_BACK] = 0;
+        n++;
+    }
+    return n;
+}
+
+/**
+ * b18l: [wf_frames] as the events of a copy written event by event (wfpad's uinput copy, wfhid's pad): each report's
+ * changes over [keys] then [axes] (in those orders), then SYN_REPORT; a report with no change is left out. [full]: every
+ * control, one report (a fresh copy). Returns the number of events in [ev], at most [cap]; 3 × (nk + na + 1) is enough.
+ */
+static inline int wf_frame_events(const wf_out *cur, const wf_out *nxt, const unsigned short *keys, int nk,
+                                  const unsigned char *axes, int na, int full, struct input_event *ev, int cap) {
+    wf_out mid[2];
+    int nm = full ? 0 : wf_frames(cur, nxt, mid), c = 0;
+    const wf_out *prev = cur;
+    for (int s = 0; s <= nm; s++) {
+        const wf_out *st = s < nm ? &mid[s] : nxt;
+        int c0 = c;
+        for (int i = 0; i < nk && c < cap - 1; i++) {
+            int k = keys[i];
+            if (!full && st->key[k] == prev->key[k]) continue;
+            memset(&ev[c], 0, sizeof ev[c]);
+            ev[c].type = EV_KEY; ev[c].code = (unsigned short)k; ev[c].value = st->key[k]; c++;
+        }
+        for (int i = 0; i < na && c < cap - 1; i++) {
+            int a = axes[i];
+            if (!full && st->abs[a] == prev->abs[a]) continue;
+            memset(&ev[c], 0, sizeof ev[c]);
+            ev[c].type = EV_ABS; ev[c].code = (unsigned short)a; ev[c].value = st->abs[a]; c++;
+        }
+        if (c > c0) { memset(&ev[c], 0, sizeof ev[c]); ev[c].type = EV_SYN; ev[c].code = SYN_REPORT; c++; }
+        prev = st;
+    }
+    return c;
 }
 
 /**
@@ -515,6 +726,14 @@ static inline int wf_parse(wf_map *out, const wf_state *s, const char *line) {
     }
     *out = m;
     return 0;
+}
+
+/** dev build 15: a device name ending " (Wayfinder)" — a pad Wayfinder made (an external controller's, the copy with
+ *  the opt-in name) or AYN's copy of one (2020:0111, no location, the same name). AYN's own pad is never named so. */
+static inline int wf_wayfinder_name(const char *name) {
+    static const char suf[] = " (Wayfinder)";
+    size_t n = strlen(name), k = sizeof suf - 1;
+    return n >= k && !strcmp(name + n - k, suf);
 }
 
 #endif

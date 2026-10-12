@@ -35,6 +35,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.focusProperties
+import androidx.compose.foundation.focusGroup
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -56,10 +58,21 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
-import app.wayfinder.ui.FocusableGlass
 import app.wayfinder.ui.LocalGlass
+import app.wayfinder.ui.requestAfterLayout
 import app.wayfinder.ui.glassSurface
+import app.wayfinder.ui.ButtonKind
+import app.wayfinder.ui.ButtonSize
+import app.wayfinder.ui.GlassButton
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.focusIndicator
+import app.wayfinder.ui.modalSurface
 import kotlin.math.roundToInt
+
+/** Build 18 (E2, pF12): where the host's header ends, in window px (null: not known) — the floating description card never
+ *  covers it. The panel's edit mode gives its header row; elsewhere (the Hub's page) [HEADER_DEFAULT] from the window's top. */
+internal val LocalHeaderBottom = androidx.compose.runtime.compositionLocalOf<() -> Int?> { { null } }
+private val HEADER_DEFAULT = 140.dp
 
 /**
  * The quick panel's shortcuts, arranged like a home screen: the chosen tiles in a grid
@@ -80,18 +93,23 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
     var pickedFrom by remember { mutableStateOf<String?>(null) }
     androidx.compose.runtime.LaunchedEffect(picking) {
         val from = pickedFrom
-        if (picking == null && from != null) { kotlinx.coroutines.delay(120); runCatching { pickButtons[from]?.requestFocus() }; pickedFrom = null }
+        if (picking == null && from != null) { pickButtons[from]?.requestAfterLayout(); pickedFrom = null }
     }
     picking?.let { kind ->
-        androidx.activity.compose.BackHandler { picking = null }
+        // dev build 16 (WP7): a layer — B closes the picker (inside the panel's edit mode: the picker first)
+        app.wayfinder.ui.BackLayer(onBack = { picking = null }) {
         Box(Modifier.fillMaxWidth().height(if (kind == "app") 520.dp else 420.dp)) {
             OpenPicker(kind, onCancel = { picking = null }) { arg -> picking = null; if (arg !in chosen) save(chosen + arg) }
+        }
         }
         return
     }
     // where each tile is on screen (window y of its centre) — read while placing the card
     val tileY = remember { HashMap<String, Float>() }
     val margin = with(LocalDensity.current) { 12.dp.roundToPx() }
+    val headerEnd = LocalHeaderBottom.current
+    val headerDefault = with(LocalDensity.current) { HEADER_DEFAULT.roundToPx() }
+    val halfCell = with(LocalDensity.current) { cellHeight.toPx() / 2f }
     // 1.3: the description only floats while its tile is on screen, and the controller leaving the
     // tiles clears it — it stayed over the settings rows above (AYN tap / hold) otherwise
     val screenH = with(LocalDensity.current) { androidx.compose.ui.platform.LocalConfiguration.current.screenHeightDp.dp.toPx() }
@@ -105,27 +123,42 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
         // soon as you'd scrolled down to a tile. It goes to the edge AWAY from the selected tile
         // and is solid: at the bottom, see-through, it covered the very tile the controller was
         // on and its text ran into the tiles behind (review 2026-09-25).
-        // the hint stays in the page (taking it away made the grid jump up under the finger)
-        DescriptionCard(null, inPanel = false, add = {}, remove = {})
+        // the hint stays in the page (taking it away made the grid jump up under the finger). Build 18 (E2, pF12 / pF13): one
+        // line — the keys while a controller drives (A7 badges, the hand's), the touch gestures after a touch; the card that
+        // floats over the page says the rest
+        ArrangeLegend()
         if (selected != null && selOnScreen) androidx.compose.ui.window.Popup(
             popupPositionProvider = object : androidx.compose.ui.window.PopupPositionProvider {
                 override fun calculatePosition(anchorBounds: androidx.compose.ui.unit.IntRect, windowSize: androidx.compose.ui.unit.IntSize,
                                                layoutDirection: androidx.compose.ui.unit.LayoutDirection,
                                                popupContentSize: androidx.compose.ui.unit.IntSize): IntOffset {
                     val y = tileY[selected] ?: 0f
-                    val top = y > windowSize.height / 2f
-                    return IntOffset((windowSize.width - popupContentSize.width) / 2,
-                        if (top) margin else windowSize.height - popupContentSize.height - margin)
+                    // build 18 (E2, pF12): never over the header (it covered Done, × and the page's Back): just above the tile
+                    // when it fits below the header, else at the bottom — whichever leaves the tile uncovered
+                    val headerY = (headerEnd() ?: headerDefault) + margin
+                    val aboveY = (y - halfCell - margin - popupContentSize.height).toInt()
+                    val belowY = windowSize.height - popupContentSize.height - margin
+                    val aboveFits = aboveY >= headerY
+                    val belowFits = belowY >= y + halfCell + margin
+                    val low = y > windowSize.height / 2f
+                    val at = when {
+                        low && aboveFits -> aboveY
+                        belowFits -> belowY
+                        aboveFits -> aboveY
+                        else -> maxOf(headerY, if (low) aboveY else belowY)
+                    }
+                    return IntOffset((windowSize.width - popupContentSize.width) / 2, at)
                 }
             },
             properties = androidx.compose.ui.window.PopupProperties(focusable = false)) {
+            // dev build 17 (WP8): the one popup surface
             Box(Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                .background(g.base.copy(alpha = 0.97f), RoundedCornerShape(18.dp))) {
+                .modalSurface(g, RoundedCornerShape(Radii.Modal))) {
                 DescriptionCard(selected, inPanel = selected in chosen,
                     add = { id -> save(chosen + id) }, remove = { id -> save(chosen - id) })
             }
         }
-        Text("In the panel (${chosen.size}) — hold a tile and drag it to move it", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
+        Text("In the panel (${chosen.size})", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)   // build 18 (E2, pF13)
         ChosenGrid(chosen, columns, cellHeight, reorder = { save(it) }, remove = { save(chosen - it) }, select = pick,
             placed = place)
         if (chosen.isEmpty()) Text("Empty — add some below.", color = g.textTertiary, style = MaterialTheme.typography.bodyMedium)
@@ -139,17 +172,23 @@ fun ShortcutGridEditor(columns: Int = 4, cellHeight: Dp = 72.dp) {
         Text("Add — a tile that opens…", color = g.textPrimary, style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(top = 6.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             for ((kind, label) in listOf("app" to "An app", "pair" to "An app pair", "page" to "A Wayfinder page"))
-                FocusableGlass(onClick = { pickedFrom = kind; picking = kind }, radius = 14.dp,
-                    focusRequester = pickButtons.getOrPut(kind) { androidx.compose.ui.focus.FocusRequester() }) {
-                    Text("+ $label", color = g.accent, style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
-                }
+                GlassButton("+ $label", { pickedFrom = kind; picking = kind }, kind = ButtonKind.PRIMARY,
+                    focusRequester = pickButtons.getOrPut(kind) { androidx.compose.ui.focus.FocusRequester() })
         }
-        FocusableGlass(onClick = { save(PanelShortcuts.DEFAULT) }, radius = 14.dp) {
-            Text("Back to the default set", color = g.textSecondary, style = MaterialTheme.typography.labelLarge,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
-        }
+        // build 18 (E2, pF10): two presses — one wiped the user's own set
+        app.wayfinder.ui.ConfirmButton("Back to the default set", "Press again to reset the shortcuts", { save(PanelShortcuts.DEFAULT) })
     }
+}
+
+/** Build 18 (E2, pF13): Arrange's help in one line — the controller's keys as badges, or after a touch the gestures. Review:
+ *  B "drop" (it was "cancel"): every move is saved as it happens, B only puts the lifted tile down where it is now. */
+@Composable
+private fun ArrangeLegend() {
+    val g = LocalGlass.current
+    val text = if (app.wayfinder.ui.InputMode.lastWasTouch) "Hold and drag to move · − removes · + adds"
+        else "${Say.keyMenu(ThorButton.A)} lift / drop · ◀▶▲▼ move · ${Say.keyMenu(ThorButton.Y)} remove · ${Say.keyMenu(ThorButton.B)} drop"
+    app.wayfinder.ui.GlyphText(text, color = g.textTertiary, style = MaterialTheme.typography.bodySmall, maxLines = 1,
+        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
 }
 
 /** A tile's icon — an app tile shows the app's own (1.4). */
@@ -168,31 +207,25 @@ internal fun TileIcon(icon: androidx.compose.ui.graphics.vector.ImageVector, pkg
 private fun DescriptionCard(id: String?, inPanel: Boolean, add: (String) -> Unit, remove: (String) -> Unit) {
     val g = LocalGlass.current
     val info = id?.let { PanelShortcuts.info(LocalContext.current, it) }
-    app.wayfinder.ui.GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+    app.wayfinder.ui.GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
         Row(Modifier.fillMaxWidth().height(86.dp).padding(horizontal = 14.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (info == null) {
-                Text("Tap or select a tile to see what it does.\n" +
-                    "Touch: hold and drag to move · − removes · + adds.   Controller: A picks up and puts down, the D-pad moves it, Y removes.",
-                    color = g.textTertiary, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
-                return@Row
-            }
+            if (info == null) return@Row   // build 18 (E2, pF12): the static help is Arrange's one-line legend now
             TileIcon(info.icon, info.pkg, g.accent, 30.dp)
             Column(Modifier.weight(1f)) {
                 Text(info.name + "  ·  " + info.group.title, color = g.textPrimary, style = MaterialTheme.typography.titleSmall, maxLines = 1)
-                Text(info.what + if (inPanel) "  A picks it up to move it (D-pad, then A)." else "",
+                app.wayfinder.ui.GlyphText(info.what + if (inPanel) "  ${Say.menu(ThorButton.A)} picks it up to move it (D-pad, then ${Say.menu(ThorButton.A)})." else "",
                     color = g.textSecondary, style = MaterialTheme.typography.bodySmall, maxLines = 3)
             }
             // Touch: this button. Controller: the button named on it, pressed on the tile — the card
             // can't take focus (it would pull the controller off the tiles), so it says which one.
-            FocusableGlass(onClick = { if (inPanel) remove(id) else add(id) }, radius = 12.dp) {
-                Text(if (inPanel) "Remove  ·  ${ButtonNames.m("Y")}" else "Add  ·  ${ButtonNames.m("A")}", color = if (inPanel) g.textSecondary else g.accent, style = MaterialTheme.typography.labelLarge,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp))
-            }
+            GlassButton(if (inPanel) "Remove  ·  ${Say.menu(ThorButton.Y)}" else "Add  ·  ${Say.menu(ThorButton.A)}", { if (inPanel) remove(id) else add(id) },
+                kind = if (inPanel) ButtonKind.QUIET else ButtonKind.PRIMARY, size = ButtonSize.COMPACT)
         }
     }
 }
 
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
 @Composable
 private fun ChosenGrid(
     ids: List<String>, columns: Int, cellHeight: Dp,
@@ -213,10 +246,13 @@ private fun ChosenGrid(
     var focusNext by remember { mutableStateOf<String?>(null) }
     androidx.compose.runtime.LaunchedEffect(focusNext) {
         val n = focusNext ?: return@LaunchedEffect
-        kotlinx.coroutines.delay(60); runCatching { requesters[n]?.requestFocus() }; focusNext = null
+        requesters[n]?.requestAfterLayout(); focusNext = null
     }
     val latestIds by rememberUpdatedState(ids)
     val latestReorder by rememberUpdatedState(reorder)
+    // build 18 (E2, pF09): B with a tile lifted puts it down in place — a layer deeper than the panel's edit mode (whose own
+    // layer took B first and left edit mode, the focus lost off screen); the tile's own B branch is gone
+    app.wayfinder.ui.BackLayer(enabled = moving != null, onBack = { moving = null })
     fun slot(i: Int) = IntOffset((i % columns) * (cellW + gap), (i / columns) * (cellH + gap))
     fun move(id: String, to: Int) {
         val cur = latestIds.indexOf(id)
@@ -232,7 +268,17 @@ private fun ChosenGrid(
     }
     val rows = ((ids.size + columns - 1) / columns).coerceAtLeast(1)
     val height = with(density) { (rows * (cellH + gap) - gap).toDp() }
-    Box(Modifier.fillMaxWidth().height(height).onSizeChanged { width = it.width }) {
+    // build 18 (E2, pF26): Down into the grid lands on its first tile (the tiles are placed by offset: the search picked the
+    // third); from below, the nearest one as before
+    val firstId = ids.firstOrNull()
+    Box(Modifier.fillMaxWidth().height(height).onSizeChanged { width = it.width }
+        // a lifted tile is put down when the focus leaves the grid (a touch elsewhere): B then means what it says there
+        .onFocusChanged { if (!it.hasFocus) moving = null }
+        .focusProperties {
+            enter = { dir -> if (dir == androidx.compose.ui.focus.FocusDirection.Down) firstId?.let { requesters[it] } ?: androidx.compose.ui.focus.FocusRequester.Default
+                else androidx.compose.ui.focus.FocusRequester.Default }
+        }
+        .focusGroup()) {
         if (cellW == 0) return@Box
         ids.forEachIndexed { i, id ->
             key(id) {
@@ -248,16 +294,15 @@ private fun ChosenGrid(
                         onDragCancel = { dragId = null },
                     )
                 }
-                val keys = Modifier.onKeyEvent { e ->
+                // dev build 16 (WP7): A picks up / puts down on a release whose press came here (both halves taken)
+                val gate = remember { app.wayfinder.ui.ReleaseGate() }
+                val keys = Modifier.onFocusChanged { if (!it.isFocused) gate.armed = false }.onKeyEvent { e ->
                     val here = latestIds.indexOf(id)
                     when {
-                        e.type == KeyEventType.KeyUp && (e.key == Key.ButtonA || e.key == Key.DirectionCenter || e.key == Key.Enter) -> {
-                            moving = if (moving == id) null else id; true }
+                        app.wayfinder.ui.ReleaseGate.isSelect(e) -> gate.onKey(e) { moving = if (moving == id) null else id }
                         e.type == KeyEventType.KeyUp && e.key == Key.ButtonY -> {
                             focusNext = latestIds.getOrNull(here + 1) ?: latestIds.getOrNull(here - 1)
                             moving = null; remove(id); true }
-                        moving == id && (e.key == Key.ButtonB || e.key == Key.Back || e.key == Key.Escape) -> {
-                            if (e.type == KeyEventType.KeyUp) moving = null; true }
                         moving == id && e.type == KeyEventType.KeyDown -> when (e.key) {
                             Key.DirectionLeft -> { move(id, here - 1); true }
                             Key.DirectionRight -> { move(id, here + 1); true }
@@ -285,8 +330,10 @@ private fun AvailableGrid(ids: List<String>, columns: Int, cellHeight: Dp, add: 
         ids.chunked(columns).forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 row.forEach { id ->
+                    val gate = remember(id) { app.wayfinder.ui.ReleaseGate() }   // dev build 16 (WP7): a release seen here
                     EditorCell(id, Modifier.weight(1f).height(cellHeight)
-                        .onKeyEvent { e -> if (e.type == KeyEventType.KeyUp && (e.key == Key.ButtonA || e.key == Key.DirectionCenter || e.key == Key.Enter)) { add(id); true } else false }
+                        .onFocusChanged { if (!it.isFocused) gate.armed = false }
+                        .onKeyEvent { e -> gate.onKey(e) { add(id) } }
                         .pointerInput(id) { detectTapGestures { select(id) } },
                         lifted = false, badge = "+", onBadge = { add(id) },
                         onFocus = { f -> if (f) select(id) }, dim = true, placed = { placed(id, it) })
@@ -307,14 +354,16 @@ private fun EditorCell(id: String, modifier: Modifier, lifted: Boolean, badge: S
     // A tile added / removed with the controller: the focus stays in this slot, which now shows
     // ANOTHER tile — no focus change, so say it again (the card kept describing the old tile)
     androidx.compose.runtime.LaunchedEffect(id) { if (focused) onFocus(true) }
-    val scale by animateFloatAsState(if (lifted) 1.08f else if (focused) 1.035f else 1f, spring(dampingRatio = 0.6f), label = "lift")
-    val shape = RoundedCornerShape(16.dp)
+    // dev build 17 (WP8): focus = the one look (focusIndicator, its 1.035); a lifted tile keeps its own lift on top (1.08 in
+    // all) and its raised frost — no border of its own
+    val scale by animateFloatAsState(if (lifted) 1.08f / 1.035f else 1f, spring(dampingRatio = 0.6f), label = "lift")
+    val shape = RoundedCornerShape(Radii.Row)
     Box(modifier.graphicsLayer { scaleX = scale; scaleY = scale }
         .onGloballyPositioned { placed(it.positionInWindow().y + it.size.height / 2f) }   // not clipped: off screen = off screen
+        .focusIndicator(shape)
         .onFocusChanged { focused = it.isFocused; onFocus(it.isFocused) }
         .focusable()
-        .glassSurface(g, shape, raised = focused || lifted)
-        .then(if (lifted) Modifier.border(2.dp, g.accent, shape) else if (focused) Modifier.border(1.5.dp, g.accent.copy(alpha = 0.8f), shape) else Modifier)) {
+        .glassSurface(g, shape, raised = focused || lifted)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 4.dp, vertical = 4.dp), verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally) {
             TileIcon(info.icon, info.pkg, if (dim) g.textTertiary else g.accent, 20.dp)
@@ -323,7 +372,7 @@ private fun EditorCell(id: String, modifier: Modifier, lifted: Boolean, badge: S
         }
         Box(Modifier.align(Alignment.TopEnd).padding(4.dp).size(22.dp).background(if (badge == "+") g.accent else g.textTertiary.copy(alpha = 0.55f), CircleShape)
             .pointerInput(id) { detectTapGestures { onBadge() } }, contentAlignment = Alignment.Center) {
-            Text(badge, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelLarge)
+            Text(badge, color = g.onAccent, style = MaterialTheme.typography.labelLarge)
         }
     }
 }

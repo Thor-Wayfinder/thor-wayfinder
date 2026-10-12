@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -34,6 +35,8 @@ import androidx.compose.material.icons.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Mouse
 import androidx.compose.material.icons.rounded.TouchApp
 import androidx.compose.material.icons.rounded.Swipe
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Dialpad
 import androidx.compose.material.icons.rounded.SportsEsports
@@ -51,6 +54,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier as UiModifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -59,14 +63,26 @@ import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.wayfinder.MainActivity
+import app.wayfinder.ScreenSize
 import app.wayfinder.keyboard.ComposeOwner
+import app.wayfinder.ui.DISABLED_ALPHA
 import app.wayfinder.ui.LocalGlass
 import app.wayfinder.ui.ThorGlassTheme
 import app.wayfinder.ui.glassLight
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.fillChip
+import app.wayfinder.ui.fillSubtle
+import app.wayfinder.ui.fillWell
+import app.wayfinder.ui.keyFill
+import app.wayfinder.ui.keyPressed
+import app.wayfinder.ui.surfaceOverlay
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
@@ -77,8 +93,14 @@ enum class Latch { OFF, ONCE, LOCKED }
  * The input deck's state: which pad, the sticky modifiers, and the app it serves.
  * Keys go to the game's screen through [VirtualInput] (root injection).
  */
-class DeckState(val pkg: String?, val appLabel: String?, initialPad: String, val guideOnly: Boolean = false) {
+class DeckState(pkg: String?, appLabel: String?, initialPad: String, val guideOnly: Boolean = false) {
     var padId by mutableStateOf(initialPad)
+    /** Build 18 (E5, pF04): the app the keys go to — it follows the app on the game's screen ([InputDeck.retarget]). */
+    var pkg by mutableStateOf(pkg)
+        private set
+    var appLabel by mutableStateOf(appLabel)
+        private set
+    fun retarget(pkg: String?, appLabel: String?) { this.pkg = pkg; this.appLabel = appLabel }
     private val latches = mutableStateMapOf<Modifier, Latch>()
     private val latchTime = HashMap<Modifier, Long>()
 
@@ -133,6 +155,24 @@ class DeckState(val pkg: String?, val appLabel: String?, initialPad: String, val
 }
 
 /**
+ * Build 18 (E5): Keyboard & mouse as the rest of the app sees it — whether it is up, and the app its keys go to. The Hub's
+ * Back layer closes it when it serves Wayfinder itself (pF04: B left the app with the deck still up); the service follows
+ * the app on its game's screen ([InputDeckOverlay.retarget]). Main thread (the service's handler).
+ */
+object InputDeck {
+    private val shownState = mutableStateOf(false)
+    val shown: androidx.compose.runtime.State<Boolean> get() = shownState
+    /** The package the keys go to now — null: not known ("the other screen"). */
+    var targetPkg by mutableStateOf<String?>(null)
+        private set
+    @Volatile internal var live: InputDeckOverlay? = null
+    private val main = android.os.Handler(android.os.Looper.getMainLooper())
+    internal fun set(shown: Boolean, pkg: String?) { shownState.value = shown; targetPkg = pkg }
+    /** Close it (any thread). */
+    fun hide() { main.post { live?.hide() } }
+}
+
+/**
  * The input deck window on the screen the game is NOT on: an accessibility overlay
  * that never takes focus (the game keeps the controller and the keyboard focus), so
  * everything it sends lands in the game. Touch-only: the pad stays the game's.
@@ -162,7 +202,22 @@ class InputDeckOverlay(private val service: AccessibilityService) {
     private var state: DeckState? = null
     var displayId: Int? = null
         private set
+    /** Build 18 (E5): the screen its keys go to, and whether it sits beside the game on that screen (the guide alone). */
+    var gameDisplay: Int? = null
+        private set
+    var beside = false
+        private set
+    var guideOnly = false
+        private set
     val isShowing get() = view != null
+
+    /** Build 18 (E5, pF04): the app on its game's screen changed — "Sending to: <it>" (null: "the other screen"). */
+    fun retarget(pkg: String?, appLabel: String?) {
+        val st = state ?: return
+        if (st.pkg == pkg) return
+        st.retarget(pkg, appLabel)
+        InputDeck.set(true, pkg)
+    }
 
     /** [guideOnly]: just the Guide & notes (1.3, GitHub #12); [beside]: a panel on the game's own screen
      *  (single-screen devices, or the other screen covered by a dual-screen game). */
@@ -185,7 +240,8 @@ class InputDeckOverlay(private val service: AccessibilityService) {
                 }}
             }
         }
-        val screenW = runCatching { wm.currentWindowMetrics.bounds.width() }.getOrDefault(0)
+        // b18g (GitHub #49): the screen's own width (currentWindowMetrics read the process configuration, any screen's)
+        val screenW = ScreenSize.real(service, displayId)?.x ?: 0
         val lp = WindowManager.LayoutParams(
             if (beside && screenW > 0) (screenW * 0.45f).toInt() else WindowManager.LayoutParams.MATCH_PARENT,
             WindowManager.LayoutParams.MATCH_PARENT,
@@ -205,6 +261,8 @@ class InputDeckOverlay(private val service: AccessibilityService) {
         return try {
             wm.addView(v, lp)
             view = v; this.wm = wm; this.owner = owner; state = st; this.displayId = displayId
+            this.gameDisplay = gameDisplay; this.beside = beside; this.guideOnly = guideOnly
+            InputDeck.live = this; InputDeck.set(true, pkg)
             true
         } catch (e: Exception) {
             Log.w("ThorDeck", "deck on display $displayId failed: ${e.message}"); owner.destroy(); false
@@ -223,7 +281,8 @@ class InputDeckOverlay(private val service: AccessibilityService) {
         val v = view ?: return
         runCatching { wm?.removeViewImmediate(v) }
         owner?.destroy()
-        view = null; wm = null; owner = null; state = null; displayId = null
+        view = null; wm = null; owner = null; state = null; displayId = null; gameDisplay = null
+        if (InputDeck.live === this) InputDeck.set(false, null)
     }
 }
 
@@ -244,7 +303,7 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
     val g = LocalGlass.current
     val pads = BUILT_IN_PADS + DeckSettings.customPad()
     Column(
-        modifier.background(if (g.dark) Color(0x990A0C14) else Color(0x99E9ECF4)).padding(8.dp),
+        modifier.background(g.surfaceOverlay).padding(8.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         // Header: pad tabs · focus the game · close.
@@ -270,6 +329,10 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
                     gyroOn = !gyroOn; app.wayfinder.GyroEngine.setPausedByUser(!gyroOn)
                 }
             }
+            // build 18 (E5, pF03 minimum): it's touch-only — the header says which combo closes it (in the hand's names)
+            app.wayfinder.Say.combo(app.wayfinder.ThorAction.KEYBOARD)?.takeIf { !st.guideOnly }?.let { combo ->
+                Text("$combo closes", color = g.textTertiary, fontSize = 13.sp, maxLines = 1)
+            }
             Tab(null, Icons.Rounded.Close, selected = false, onClick = onClose)
         }
         val pad = (pads.firstOrNull { it.id == st.padId } ?: pads.first()).let { if (it.id == PAD_PC && DeckSettings.simpleKeys) PC_SIMPLE else it }
@@ -279,7 +342,7 @@ fun DeckPanel(st: DeckState, modifier: UiModifier, onClose: () -> Unit, onOpenHu
             pad.id == PAD_CUSTOM && pad.rows.isEmpty() -> Box(UiModifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("Your own buttons: text snippets and key combos", color = g.textSecondary, fontSize = 18.sp)
-                    Box(UiModifier.height(56.dp)) { Tab("Make them in Wayfinder → Keyboard", Icons.Rounded.Star, selected = true, onClick = onOpenHub) }
+                    Box(UiModifier.height(56.dp)) { Tab("Make them in ${app.wayfinder.Nav.place(app.wayfinder.HubPage.KEYBOARD, inWayfinder = true)}", Icons.Rounded.Star, selected = true, onClick = onOpenHub) }
                 }
             }
             else -> PadGrid(st, pad, UiModifier.fillMaxWidth().weight(1f))
@@ -315,12 +378,12 @@ private fun ClipRow(onPick: (String) -> Unit) {
     Row(Modifier_fillWidthHeight(48).horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         when {
-            !clips.listening -> Text("The clipboard list needs Wayfinder Keyboard as your keyboard (Wayfinder → Keyboard).",
+            !clips.listening -> Text("The clipboard list needs Wayfinder Keyboard as your keyboard (${app.wayfinder.Nav.place(app.wayfinder.HubPage.KEYBOARD, inWayfinder = true)}).",
                 color = g.textTertiary, fontSize = 14.sp)
             clips.items.isEmpty() -> Text("Nothing copied yet — copy some text and it shows here.", color = g.textTertiary, fontSize = 14.sp)
             else -> clips.items.toList().forEach { t ->
-                Box(UiModifier.fillMaxHeight().clip(RoundedCornerShape(12.dp))
-                    .background(if (g.dark) Color(0x33FFFFFF) else Color(0x99FFFFFF))
+                Box(UiModifier.fillMaxHeight().clip(RoundedCornerShape(Radii.Chip))
+                    .background(g.fillChip)
                     .pointerInput(t) { detectTapGestures { onPick(t) } }.padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center) {
                     Text(clips.preview(t), color = g.textPrimary, fontSize = 15.sp, maxLines = 1)
@@ -338,18 +401,18 @@ private fun LaunchedEffectRead() = androidx.compose.runtime.LaunchedEffect(Unit)
 private fun Tab(label: String?, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
     val g = LocalGlass.current
     Row(
-        UiModifier.fillMaxHeight().clip(RoundedCornerShape(14.dp))
+        UiModifier.fillMaxHeight().clip(RoundedCornerShape(Radii.Control))
             .background(
                 if (selected) Brush.linearGradient(listOf(g.accent, g.accent2))
-                else Brush.linearGradient(listOf(if (g.dark) Color(0x1FFFFFFF) else Color(0x66FFFFFF), if (g.dark) Color(0x1FFFFFFF) else Color(0x66FFFFFF)))
+                else Brush.linearGradient(listOf(g.fillSubtle, g.fillSubtle))
             )
             .pointerInput(onClick) { detectTapGestures { onClick() } }
             .padding(horizontal = if (label == null) 12.dp else 14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Icon(icon, label, tint = if (selected) Color.White else g.textSecondary, modifier = UiModifier.size(22.dp))
-        if (label != null) Text(label, color = if (selected) Color.White else g.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Icon(icon, label, tint = if (selected) g.onAccent else g.textSecondary, modifier = UiModifier.size(22.dp))
+        if (label != null) Text(label, color = if (selected) g.onAccent else g.textPrimary, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
@@ -377,15 +440,14 @@ private fun DeckKeyCap(st: DeckState, k: DeckKey, modifier: UiModifier) {
     val ctx = view.context
     var pressed by remember { mutableStateOf(false) }
     val latched = k.modifier?.let { st.latch(it) != Latch.OFF } == true
-    val shape = RoundedCornerShape(12.dp)
+    val shape = RoundedCornerShape(Radii.Chip)
     Box(
         modifier.clip(shape)
             .background(
                 when {
                     latched -> Brush.linearGradient(listOf(g.accent, g.accent2))
-                    pressed -> Brush.linearGradient(listOf(Color(0x66FFFFFF), Color(0x40FFFFFF)))
-                    g.dark -> Brush.verticalGradient(listOf(Color(0x40FFFFFF), Color(0x26FFFFFF)))
-                    else -> Brush.verticalGradient(listOf(Color(0xE6FFFFFF), Color(0xB3FFFFFF)))
+                    pressed -> g.keyPressed
+                    else -> g.keyFill(functional = false)
                 }, shape,
             )
             .glassLight(shape, g.dark)
@@ -414,9 +476,9 @@ private fun DeckKeyCap(st: DeckState, k: DeckKey, modifier: UiModifier) {
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             val label = if (st.shiftOn && k.shifted != null) k.shifted else if (st.shiftOn && k.label.length == 1) k.label.uppercase() else k.label
-            Text(label, color = if (latched) Color.White else g.textPrimary, fontSize = if (label.length <= 2) 22.sp else 16.sp,
+            Text(label, color = if (latched) g.onAccent else g.textPrimary, fontSize = if (label.length <= 2) 22.sp else 16.sp,
                 fontWeight = FontWeight.SemiBold, maxLines = 1)
-            k.caption?.let { Text(it, color = if (latched) Color.White else g.textTertiary, fontSize = 11.sp, maxLines = 1) }
+            k.caption?.let { Text(it, color = if (latched) g.onAccent else g.textTertiary, fontSize = 11.sp, maxLines = 1) }
         }
     }
 }
@@ -442,6 +504,8 @@ private fun runAction(ctx: android.content.Context, a: DeckAction) {
 private suspend fun touchGestures(scope: androidx.compose.ui.input.pointer.PointerInputScope, view: android.view.View) = scope.awaitEachGesture {
     val first = awaitFirstDown(requireUnconsumed = false)
     val start = first.uptimeMillis
+    // b18h (GitHub #49, #99): Pointer speed, read as the gesture starts (no restart of the pad); 5 = ×1, as before
+    val factor = PointerSpeed.factor(DeckSettings.pointerSpeed)
     var maxFingers = 1; var travel = 0f; var holding = false
     var sx = 0f; var sy = 0f
     while (true) {
@@ -458,7 +522,8 @@ private suspend fun touchGestures(scope: androidx.compose.ui.input.pointer.Point
             travel += abs(dx) + abs(dy)
             if (down.size >= 2) { sx += dx * 3f; sy += dy * 3f }
             else {
-                val gain = 1.3f + ((abs(dx) + abs(dy)) / 25f).coerceAtMost(2.5f)
+                // the tap / hold tests above stay on the finger's own travel; two-finger swipes aren't on the speed
+                val gain = (1.3f + ((abs(dx) + abs(dy)) / 25f).coerceAtMost(2.5f)) * factor
                 TouchPointer.move(dx * gain, dy * gain)
             }
         }
@@ -503,71 +568,84 @@ private fun Trackpad(modifier: UiModifier, service: AccessibilityService?) {
         if (touch) TouchPointer.show(service!!, VirtualInput.targetDisplay) else TouchPointer.hide()
         onDispose { TouchPointer.hide() }
     }
+    // build 18 (GitHub #65): Direct can go without the pointer; Touch (or leaving Direct) shows it again
+    androidx.compose.runtime.LaunchedEffect(touch, DeckSettings.directTouch, DeckSettings.directPointer) {
+        TouchPointer.setDotHidden(touch && DeckSettings.directTouch && !DeckSettings.directPointer)
+    }
+    // 1.4 (GitHub #65): Mouse → Touch → Direct
+    val direct = touch && DeckSettings.directTouch
     Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        val shape = RoundedCornerShape(20.dp)
-        Box(
-            UiModifier.fillMaxWidth().weight(1f).clip(shape)
-                .background(if (g.dark) Color(0x26FFFFFF) else Color(0x80FFFFFF), shape)
-                .glassLight(shape, g.dark)
-                .border(1.dp, Brush.linearGradient(0f to g.rimTop, 0.5f to Color.Transparent, 1f to g.rimBottom), shape)
-                .pointerInput(touch, DeckSettings.directTouch) {
-                    if (touch && DeckSettings.directTouch) { directGestures(this); return@pointerInput }
-                    if (touch) { touchGestures(this, view); return@pointerInput }
-                    awaitEachGesture {
-                        val first = awaitFirstDown(requireUnconsumed = false)
-                        val start = first.uptimeMillis
-                        var maxFingers = 1
-                        var travel = 0f
-                        var dragging = false
-                        var fx = 0f; var fy = 0f; var scrollAcc = 0f
-                        while (true) {
-                            val ev = awaitPointerEvent()
-                            val down = ev.changes.filter { it.pressed }
-                            if (down.isEmpty()) break
-                            maxFingers = maxOf(maxFingers, down.size)
-                            if (!dragging && maxFingers == 1 && travel < 12f && ev.changes.first().uptimeMillis - start > 450) {
-                                dragging = true; VirtualInput.mouseButton(0, true)
-                                view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                            }
-                            if (ev.type == PointerEventType.Move) {
-                                val c = down.first()
-                                val dx = c.position.x - c.previousPosition.x
-                                val dy = c.position.y - c.previousPosition.y
-                                travel += abs(dx) + abs(dy)
-                                if (down.size >= 2) {
-                                    scrollAcc += dy
-                                    val steps = (scrollAcc / 40f).toInt()
-                                    if (steps != 0) { VirtualInput.scroll(-steps); scrollAcc -= steps * 40f }
-                                } else {
-                                    // Gentle acceleration: slow = precise, fast = across the screen.
-                                    val speed = abs(dx) + abs(dy)
-                                    val gain = 1.3f + (speed / 25f).coerceAtMost(2.5f)
-                                    fx += dx * gain; fy += dy * gain
-                                    val mx = fx.roundToInt(); val my = fy.roundToInt()
-                                    if (mx != 0 || my != 0) { VirtualInput.mouseMove(mx, my); fx -= mx; fy -= my }
+        val shape = RoundedCornerShape(Radii.Action)
+        // b18h (GitHub #49, #99): the pad, and Pointer speed beside it in Mouse and Touch — outside the pad (its
+        // awaitFirstDown(requireUnconsumed = false) would also take a press on it and click in the game). Not in Direct:
+        // its pad is the game's screen (1:1), and keeps its whole width
+        Row(UiModifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Box(
+                UiModifier.weight(1f).fillMaxHeight().clip(shape)
+                    .background(g.fillWell, shape)
+                    .glassLight(shape, g.dark)
+                    .border(1.dp, Brush.linearGradient(0f to g.rimTop, 0.5f to Color.Transparent, 1f to g.rimBottom), shape)
+                    .pointerInput(touch, DeckSettings.directTouch) {
+                        if (touch && DeckSettings.directTouch) { directGestures(this); return@pointerInput }
+                        if (touch) { touchGestures(this, view); return@pointerInput }
+                        awaitEachGesture {
+                            val first = awaitFirstDown(requireUnconsumed = false)
+                            val start = first.uptimeMillis
+                            // b18h: Pointer speed, read as the gesture starts (no restart of the pad); 5 = ×1, as before
+                            val factor = PointerSpeed.factor(DeckSettings.pointerSpeed)
+                            var maxFingers = 1
+                            var travel = 0f
+                            var dragging = false
+                            var fx = 0f; var fy = 0f; var scrollAcc = 0f
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val down = ev.changes.filter { it.pressed }
+                                if (down.isEmpty()) break
+                                maxFingers = maxOf(maxFingers, down.size)
+                                if (!dragging && maxFingers == 1 && travel < 12f && ev.changes.first().uptimeMillis - start > 450) {
+                                    dragging = true; VirtualInput.mouseButton(0, true)
+                                    view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                                 }
+                                if (ev.type == PointerEventType.Move) {
+                                    val c = down.first()
+                                    val dx = c.position.x - c.previousPosition.x
+                                    val dy = c.position.y - c.previousPosition.y
+                                    travel += abs(dx) + abs(dy)
+                                    if (down.size >= 2) {
+                                        scrollAcc += dy
+                                        val steps = (scrollAcc / 40f).toInt()
+                                        if (steps != 0) { VirtualInput.scroll(-steps); scrollAcc -= steps * 40f }
+                                    } else {
+                                        // Gentle acceleration: slow = precise, fast = across the screen. The click and drag
+                                        // tests stay on the finger's own travel; the two-finger scroll isn't on the speed
+                                        val speed = abs(dx) + abs(dy)
+                                        val gain = (1.3f + (speed / 25f).coerceAtMost(2.5f)) * factor
+                                        fx += dx * gain; fy += dy * gain
+                                        val mx = fx.roundToInt(); val my = fy.roundToInt()
+                                        if (mx != 0 || my != 0) { VirtualInput.mouseMove(mx, my); fx -= mx; fy -= my }
+                                    }
+                                }
+                                ev.changes.forEach { it.consume() }
                             }
-                            ev.changes.forEach { it.consume() }
+                            val quick = travel < 14f
+                            when {
+                                dragging -> VirtualInput.mouseButton(0, false)
+                                quick && maxFingers >= 2 -> { VirtualInput.mouseButton(1, true); VirtualInput.mouseButton(1, false) }
+                                quick -> { VirtualInput.mouseButton(0, true); VirtualInput.mouseButton(0, false) }
+                            }
                         }
-                        val quick = travel < 14f
-                        when {
-                            dragging -> VirtualInput.mouseButton(0, false)
-                            quick && maxFingers >= 2 -> { VirtualInput.mouseButton(1, true); VirtualInput.mouseButton(1, false) }
-                            quick -> { VirtualInput.mouseButton(0, true); VirtualInput.mouseButton(0, false) }
-                        }
-                    }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(if (touch && DeckSettings.directTouch) "Direct · this pad is the game's screen — touch, drag and swipe with one finger"
-                else if (touch) "Touch · move = the pointer · tap = a finger tap there · hold + move = drag · 2 fingers = swipe"
-                else "Trackpad · tap = click · 2 fingers: tap = right click, drag = scroll · hold + move = drag",
-                color = g.textTertiary, fontSize = 14.sp)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(if (touch && DeckSettings.directTouch) "Direct · this pad is the game's screen — touch, drag and swipe with one finger"
+                    else if (touch) "Touch · move = the pointer · tap = a finger tap there · hold + move = drag · 2 fingers = swipe"
+                    else "Trackpad · tap = click · 2 fingers: tap = right click, drag = scroll · hold + move = drag",
+                    color = g.textTertiary, fontSize = 14.sp)
+            }
+            if (!direct) SpeedStepper(UiModifier.width(64.dp).fillMaxHeight())
         }
         Row(UiModifier.fillMaxWidth().height(64.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             // 1.3 (GitHub #36): a mouse, or finger touches (for games that ignore a mouse)
-            // 1.4 (GitHub #65): Mouse → Touch → Direct
-            val direct = touch && DeckSettings.directTouch
             Tab(if (direct) "Direct" else if (touch) "Touch" else "Mouse", if (direct) Icons.Rounded.Swipe else if (touch) Icons.Rounded.TouchApp else Icons.Rounded.Mouse, selected = touch) {
                 when {
                     !DeckSettings.touchMode -> { DeckSettings.chooseTouchMode(true); DeckSettings.chooseDirect(false) }
@@ -580,10 +658,65 @@ private fun Trackpad(modifier: UiModifier, service: AccessibilityService?) {
                 MouseButton("Middle", 2, UiModifier.weight(0.6f).fillMaxHeight())
                 MouseButton("Right", 1, UiModifier.weight(1f).fillMaxHeight())
                 AynMouseLink(UiModifier.weight(1.2f).fillMaxHeight())
-            } else Text(if (direct) "Where you touch here = where the finger lands there — for swipes (menus, pages, Shorts)"
-                else "Touches go where the pointer is, on the game's screen — for games a mouse doesn't work in",
-                color = g.textTertiary, fontSize = 13.sp, modifier = UiModifier.weight(1f).align(Alignment.CenterVertically))
+            } else {
+                // build 18 (GitHub #65): Direct with or without the pointer on the game's screen (the touches are the same)
+                if (direct) Tab(if (DeckSettings.directPointer) "Pointer" else "No pointer",
+                    if (DeckSettings.directPointer) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
+                    selected = DeckSettings.directPointer) { DeckSettings.chooseDirectPointer(!DeckSettings.directPointer) }
+                Text(if (direct) "Where you touch here = where the finger lands there — for swipes (menus, pages, Shorts)"
+                    else "Touches go where the pointer is, on the game's screen — for games a mouse doesn't work in",
+                    color = g.textTertiary, fontSize = 13.sp, modifier = UiModifier.weight(1f).align(Alignment.CenterVertically))
+            }
         }
+    }
+}
+
+/**
+ * b18h (GitHub #49, #99): Pointer speed on the deck — a slim column beside the pad: faster (+) on top, the number and its
+ * name, slower (−) below; the same setting as Keyboard's Pointer speed card ([DeckSettings.pointerSpeed], 1–10, 5 = as
+ * before). Touch-only, like the deck.
+ */
+@Composable
+private fun SpeedStepper(modifier: UiModifier) {
+    val g = LocalGlass.current
+    val s = DeckSettings.pointerSpeed
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        SpeedStep(faster = true, can = s < PointerSpeed.MAX, UiModifier.fillMaxWidth().weight(1f))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("$s", color = g.accent, fontSize = 22.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(app.wayfinder.Say.POINTER_SPEED, color = g.textTertiary, fontSize = 11.sp, lineHeight = 13.sp, textAlign = TextAlign.Center)
+        }
+        SpeedStep(faster = false, can = s > PointerSpeed.MIN, UiModifier.fillMaxWidth().weight(1f))
+    }
+}
+
+/** One step of [SpeedStepper]: [faster] (+) or slower (−); [can] false at 10 / 1 (dimmed, a tap does nothing). The tap
+ *  reads the speed it changes (never a value captured when drawn). */
+@Composable
+private fun SpeedStep(faster: Boolean, can: Boolean, modifier: UiModifier) {
+    val g = LocalGlass.current
+    val view = LocalView.current
+    var pressed by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(Radii.Control)
+    Box(
+        modifier.clip(shape)
+            .then(if (pressed) UiModifier.background(g.keyPressed, shape) else UiModifier.background(g.fillChip, shape))
+            .glassLight(shape, g.dark)
+            .clearAndSetSemantics { contentDescription = if (faster) app.wayfinder.Say.FASTER else app.wayfinder.Say.SLOWER }
+            .pointerInput(faster) {
+                detectTapGestures(onPress = { pressed = true; tryAwaitRelease(); pressed = false }) {
+                    val now = DeckSettings.pointerSpeed
+                    val next = PointerSpeed.step(now, faster)
+                    if (next != now) {
+                        DeckSettings.choosePointerSpeed(next)
+                        view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(if (faster) "+" else "−", color = g.textPrimary, fontSize = 24.sp, fontWeight = FontWeight.SemiBold,
+            modifier = UiModifier.alpha(if (can) 1f else DISABLED_ALPHA))
     }
 }
 
@@ -605,10 +738,10 @@ private fun AynMouseLink(modifier: UiModifier) {
             android.provider.Settings.System.getString(ctx.contentResolver, "second_gamepad_to_mouse_key"),
         ).filter { it.isNotBlank() }.joinToString(" / ").ifEmpty { "L3 / R3" }
     }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(Radii.Control)
     Box(
         modifier.clip(shape)
-            .background(if (on) Brush.linearGradient(listOf(g.accent, g.accent2)) else Brush.linearGradient(listOf(Color(0x33FFFFFF), Color(0x33FFFFFF))), shape)
+            .background(if (on) Brush.linearGradient(listOf(g.accent, g.accent2)) else Brush.linearGradient(listOf(g.fillChip, g.fillChip)), shape)
             .glassLight(shape, g.dark)
             .pointerInput(Unit) {
                 detectTapGestures {
@@ -625,9 +758,9 @@ private fun AynMouseLink(modifier: UiModifier) {
         contentAlignment = Alignment.Center,
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(if (on) "Stick mouse: on" else "Stick mouse: off", color = if (on) Color.White else g.textPrimary,
+            Text(if (on) "Stick mouse: on" else "Stick mouse: off", color = if (on) g.onAccent else g.textPrimary,
                 fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (on) "click $keys · again to exit" else "AYN mouse mode", color = if (on) Color.White else g.textTertiary, fontSize = 11.sp)
+            Text(if (on) "click $keys · again to exit" else "AYN mouse mode", color = if (on) g.onAccent else g.textTertiary, fontSize = 11.sp)
         }
     }
 }
@@ -636,10 +769,10 @@ private fun AynMouseLink(modifier: UiModifier) {
 private fun MouseButton(name: String, button: Int, modifier: UiModifier) {
     val g = LocalGlass.current
     var pressed by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(14.dp)
+    val shape = RoundedCornerShape(Radii.Control)
     Box(
         modifier.clip(shape)
-            .background(if (pressed) Color(0x66FFFFFF) else if (g.dark) Color(0x33FFFFFF) else Color(0xB3FFFFFF), shape)
+            .then(if (pressed) UiModifier.background(g.keyPressed, shape) else UiModifier.background(g.fillChip, shape))
             .glassLight(shape, g.dark)
             .pointerInput(button) {
                 awaitEachGesture {

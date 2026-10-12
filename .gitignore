@@ -24,6 +24,9 @@ release.properties
 Thumbs.db
 .DS_Store
 tools/wfmap_test
+tools/wfhid_test
+tools/wfuhid_test
+tools/wfmerge_test
 app/src/debug/
 .vscode/
 *.pem

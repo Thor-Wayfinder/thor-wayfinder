@@ -26,8 +26,8 @@ android {
         // getWindowsOnAllDisplays(), both API 30 — the app cannot function below that.
         minSdk = 30
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.4.1"
+        versionCode = 9
+        versionName = "1.5-beta1"
 
     }
 

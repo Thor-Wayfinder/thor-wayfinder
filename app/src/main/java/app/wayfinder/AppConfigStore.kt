@@ -12,12 +12,16 @@ enum class SecondScreenPolicy { DEFAULT, KEEP_ON, BLANK }
 /** Which screen this app opens on (ANY = wherever Android puts it). */
 enum class Route(val label: String) { ANY("Any screen"), TOP("Top"), BOTTOM("Bottom") }
 
-/** Input layer — face buttons for this app: as PRINTED on the Thor (Nintendo: A right, B
- *  bottom) or Xbox (A at the bottom). null in [AppConfig.face] = AYN's own setting. */
-enum class FaceLayout(val label: String) { NINTENDO("Nintendo"), XBOX("Xbox") }
+/** How Wayfinder's button bindings behave while this app has the controller. Build 18 (GC12, gd-D28): NORMAL is "Usual" (your
+ *  usual combos — the glossary's word; "Normal" was off it). Stored by name: the label changes nothing saved. */
+enum class ButtonsMode { NORMAL, CUSTOM, OFF;
+    val label: String get() = when (this) { NORMAL -> Say.usual(null); CUSTOM -> "Custom"; OFF -> "Off" }
+}
 
-/** How Wayfinder's button bindings behave while this app has the controller. */
-enum class ButtonsMode(val label: String) { NORMAL("Normal"), CUSTOM("Custom"), OFF("Off") }
+/** Build 18 (GC1, decision H4): what a controller's own controls were made from when Wayfinder made them by itself — THOR:
+ *  a copy of the Thor's, made by a first change (a face pick, an edit) on a tab that used them. "Use the Thor's again" then
+ *  deletes the copy while it differs from the Thor's controls only by its face ([GameTabRules.useThorsAgain]). */
+enum class MadeFrom { THOR }
 
 /**
  * Per-app settings. One record per package so later per-app features (screen
@@ -43,8 +47,10 @@ data class AppConfig(
     val fan: FanMode? = null,
     /** Refresh rate while this app is on screen: 60 / 120 (null = the user's setting). */
     val hz: Int? = null,
-    /** Input layer: face buttons forced for this app (null = like all apps / AYN's setting). */
-    val face: FaceLayout? = null,
+    /** Input layer: face buttons forced for this app — positions only, as PRINTED on the Thor (Nintendo: A right, B
+     *  bottom) or Xbox (A at the bottom); null = like all apps / AYN's setting. dev build 15 (WP2): [FaceStyle] (it
+     *  replaces FaceLayout, same names in the JSON). */
+    val face: FaceStyle? = null,
     /** Input layer: what this app's controls become (null = as the Thor sends them). */
     val remap: PadRemap? = null,
     /** 1.3 — the controller's own Back goes straight to this app, held too (RetroArch's Back
@@ -60,6 +66,12 @@ data class AppConfig(
     /** 1.4: the controller goes with this app when it's moved / swapped — true yes, false no, null = the
      *  Controller page's switch ([AppSettings.focusFollowsMove]). */
     val followMove: Boolean? = null,
+    /** Controllers: player 1 while this app is on top — true a connected controller, false
+     *  the Thor, null = the Other controllers page's switch ([ExtPadsCtl.extFirst]). */
+    val extFirst: Boolean? = null,
+    /** Build 18 (GC1): a pad profile Wayfinder made by itself from the Thor's ([MadeFrom.THOR]); null = made by the user
+     *  ("Make its own"), or before build 18 — D7 as always. Never on an app's or a game's own settings. */
+    val madeFrom: MadeFrom? = null,
 ) {
     val isDefault get() = this == AppConfig()
 
@@ -81,6 +93,8 @@ data class AppConfig(
         .apply { reopenOnMove?.let { put("reopenMove", it) } }
         .apply { layer?.let { put("layer", it) } }
         .apply { followMove?.let { put("follow", it) } }
+        .apply { extFirst?.let { put("extFirst", it) } }
+        .apply { madeFrom?.let { put("madeFrom", it.name) } }
         .toString()
 
     companion object {
@@ -106,13 +120,15 @@ data class AppConfig(
                 perf = runCatching { PerfMode.valueOf(o.optString("perf")) }.getOrNull(),
                 fan = runCatching { FanMode.valueOf(o.optString("fan")) }.getOrNull(),
                 hz = o.optInt("hz", 0).takeIf { it == 60 || it == 120 },
-                face = runCatching { FaceLayout.valueOf(o.optString("face")) }.getOrNull(),
+                face = FaceStyle.parse(o.optString("face")),
                 remap = PadRemap.fromJson(o.optJSONObject("remap")),
                 backToGame = if (o.has("backGame")) o.optBoolean("backGame") else null,
                 fps = if (o.has("fps")) o.optBoolean("fps") else null,
                 reopenOnMove = if (o.has("reopenMove")) o.optBoolean("reopenMove") else null,
                 layer = if (o.has("layer")) o.optBoolean("layer") else null,
                 followMove = if (o.has("follow")) o.optBoolean("follow") else null,
+                extFirst = if (o.has("extFirst")) o.optBoolean("extFirst") else null,
+                madeFrom = if (o.has("madeFrom")) runCatching { MadeFrom.valueOf(o.optString("madeFrom")) }.getOrNull() else null,
             )
         }.getOrDefault(AppConfig())
     }

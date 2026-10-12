@@ -29,7 +29,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
@@ -40,6 +39,8 @@ import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.GlassScreen
 import app.wayfinder.ui.LocalGlass
 import app.wayfinder.ui.ThorGlassTheme
+import app.wayfinder.ui.surfaceSolid
+import app.wayfinder.ui.Radii
 import kotlinx.coroutines.delay
 
 /**
@@ -54,6 +55,10 @@ class CompanionActivity : ComponentActivity() {
 
     private val pkg = mutableStateOf("")
 
+    // dev build 14 (critic 2): a controller whose Home is the game's sends MODE — unhandled, Android made it Home
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
+        event.keyCode == android.view.KeyEvent.KEYCODE_BUTTON_MODE || super.dispatchKeyEvent(event)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Volume keys here = the media volume (else Android picks the ring volume when nothing plays).
@@ -66,13 +71,22 @@ class CompanionActivity : ComponentActivity() {
                 ThemeMode.LIGHT -> false
                 ThemeMode.SYSTEM -> androidx.compose.foundation.isSystemInDarkTheme()
             }
-            ThorGlassTheme(dark = dark) { CompanionScreen(pkg.value) { finish() } }
+            // dev build 15 (WP2): buttons named as on the controller in hand
+            androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalPadLook provides ButtonNames.handLook) {
+                ThorGlassTheme(dark = dark) { CompanionScreen(pkg.value) { finish() } }
+            }
         }
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         intent.getStringExtra(EXTRA_PKG)?.let { pkg.value = it }
+    }
+
+    /** b18p (GitHub #108): out of sight (closed, another app over it) — what the guide's sites set is written to disk. */
+    override fun onStop() {
+        super.onStop()
+        GuideCache.keepCookies()
     }
 
     companion object {
@@ -146,7 +160,7 @@ private fun CompanionScreen(pkg: String, onClose: () -> Unit) {
                         if (next != null) GuideCache.save(ctx, key, w) else GuideCache.drop(ctx, key)
                     }
                 }
-                BarButton("✕") { onClose() }
+                BarButton("×") { onClose() }
             }
             // a new WebView per game: the companion is reused when the game changes, and the old
             // one kept showing (and pinning) the previous game's page (review 2026-09-25)
@@ -158,7 +172,7 @@ private fun CompanionScreen(pkg: String, onClose: () -> Unit) {
 
 @Composable
 private fun BarButton(text: String, onClick: () -> Unit) {
-    FocusableGlass(onClick = onClick, radius = 14.dp) {
+    FocusableGlass(onClick = onClick, radius = Radii.Control) {
         Text(text, color = LocalGlass.current.textPrimary, style = MaterialTheme.typography.labelLarge,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
     }
@@ -171,7 +185,7 @@ private fun GuidePage(pkg: String, game: String, pinned: String?, onWeb: (WebVie
     var failed by remember(pkg) { mutableStateOf(false) }
     var webRef by remember(pkg) { mutableStateOf<WebView?>(null) }
     val g = LocalGlass.current
-    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp))) {
+    Box(Modifier.fillMaxSize().clip(RoundedCornerShape(Radii.Row))) {
         AndroidView(
             factory = { c ->
                 WebView(c).apply {
@@ -185,9 +199,11 @@ private fun GuidePage(pkg: String, game: String, pinned: String?, onWeb: (WebVie
                     onWeb(this)
                 }
             },
+            // b18p (GitHub #108): its cookies kept, then freed (Notes, another game, the page closed — it was never destroyed)
+            onRelease = { GuideCache.release(it) },
             modifier = Modifier.fillMaxSize(),
         )
-        if (failed) Column(Modifier.fillMaxSize().background(if (g.dark) Color(0xF00A0C14) else Color(0xF0E9ECF4)).padding(24.dp),
+        if (failed) Column(Modifier.fillMaxSize().background(g.surfaceSolid).padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp, androidx.compose.ui.Alignment.CenterVertically),
             horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
             Text("The guide page couldn't load", color = g.textPrimary, style = MaterialTheme.typography.titleMedium)
@@ -205,12 +221,12 @@ private fun NotesPage(pkg: String) {
     var text by remember(pkg) { mutableStateOf(CompanionStore.notes(ctx, pkg)) }
     // saved as typed (apply() writes in the background): a 400 ms delay lost the last keystrokes
     // when the companion closed or the tab changed (review 2026-09-25)
-    GlassPanel(Modifier.fillMaxSize(), radius = 16.dp) {
+    GlassPanel(Modifier.fillMaxSize(), radius = Radii.Row) {
         Box(Modifier.fillMaxSize().padding(14.dp)) {
-            // the D-pad passes over it; A (or a tap) starts typing
+            // the D-pad passes over it; A (or a tap) starts typing (QA2) — dev build 16 (theme F): named as the hand's confirm
             app.wayfinder.ui.ControllerTextField(text, { text = it; CompanionStore.saveNotes(ctx, pkg, it) }, Modifier.fillMaxSize(),
                 textStyle = TextStyle(color = g.textPrimary, fontSize = 17.sp), singleLine = false,
-                placeholder = "Notes for this game — quests, codes, where you left off… (A to write)")
+                placeholder = "Notes for this game — quests, codes, where you left off… (${Say.menu(ThorButton.A)} to write)")
         }
     }
 }

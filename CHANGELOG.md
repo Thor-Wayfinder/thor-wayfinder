@@ -1,5 +1,111 @@
 # Changelog
 
+## 1.5-beta1 — October 2026 (pre-release)
+
+A test version of 1.5: everything below is new since 1.4.1. 1.4.1 stays the current release — the Download link and
+Wayfinder's update notice still point to it.
+
+**Before you install**
+- **Don't go back to an older version after installing this one** unless you have to: Android installs 1.4.1 (or an
+  older beta) only after an uninstall, and Wayfinder's settings go with it. Save a backup in 1.4.1 first (More › Help &
+  status › Back up now): restored after a reinstall, it brings back your game controls — combos and other settings are
+  set up again.
+- **Wayfinder's update notice only tells you about full releases.** Testing the beta? Watch the
+  [Releases](https://github.com/Thor-Wayfinder/thor-wayfinder/releases) page for the next one.
+- **Map your Bluetooth / USB controllers again in your emulators, once** (Eden, Dolphin…): games now see each one as
+  Wayfinder's controller ("… (Wayfinder)"). After that, a controller turned off for less than 30 minutes, or
+  reconnected over Bluetooth or USB, keeps its place.
+- Update with no game running: an update while a game runs can number the controllers differently until that game's
+  next start.
+
+**New: Bluetooth and USB controllers** (on by default — Controller › Settings for every controller › "Wayfinder handles
+controllers")
+- **Wayfinder reads each controller itself** — PlayStation (DualSense, DualShock 4), Xbox (over Bluetooth), Switch Pro,
+  Joy-Cons and other gamepads — so games get every button and stick, and AYN's incomplete copy is taken away. Rumble
+  too, and aim with motion on Nintendo controllers.
+- **Every controller gets the Thor's buttons**: its Home is the Thor's Home (your combos), and it has a Back and an AYN
+  button — a PlayStation controller's touchpad click and Mute, an Xbox Series pad's Share, a Switch Pro's or a Joy-Con
+  pair's Capture; a controller without spare buttons uses Home + Select and Home + Start. "Back and AYN buttons" on its
+  page changes them.
+- **Controller is a list**: the Thor first, then each controller with its own page — face buttons, Test it (its own
+  deadzone), its buttons in games, Home and combos, and a setup wizard for a button read wrong.
+- **Face buttons**: PlayStation and Xbox controllers confirm with their bottom button (✕ / A), Nintendo ones with A on
+  the right — in games too. "Like the Thor" on its page keeps the Thor's layout.
+- **Player order** for every game, for an app or for one game. A change waits for the game's next start ("Apply now"
+  does it at once — the game may lose its controllers).
+- **"Plays as the Thor's controller"** (its page, off by default): it drives the Thor's controller, so games set up for
+  the Thor (Eden's player 1) need no change, and the Thor's own buttons keep working alongside. **"New controllers play
+  as Thor's"** (Settings for every controller, off by default) does it for every controller you connect for the first
+  time.
+- **PlayStation touchpad moves the pointer** (on by default, on its page): a light tap clicks, two fingers scroll;
+  pressing the touchpad stays its Back.
+- **On a TV or monitor** (on by default): docked, the controller you connect plays as the Thor's, as player 1.
+- **Joy-Cons**: hold L on the left one and R on the right one for a second to make them one controller ("Combine
+  Joy-Cons"); a single one can be held sideways (hold SL + SR).
+- Holding a controller's Home + Back for 5 seconds turns its Wayfinder controls off (its plain buttons); its page turns
+  them back on. Xbox LT / RT press L2 / R2, so Home + LT / RT and trigger changes work on them.
+
+**Game controls for every controller**
+- **Home + X on any controller** (PS + △ on a PlayStation one) opens Game controls on that controller's tab, with its
+  own drawing and button names. The first change makes its own controls (the Thor's stay as they are); "Use the Thor's
+  again" switches them off without deleting them; Remove asks twice; "Bring back" (Game settings › These controls)
+  undoes it.
+- A Games tile opens the game's page — Game controls first, its settings below; Home + X opens the same page. Game
+  controls' "More ›" is now "Game settings ›".
+- Controller › **"Open on the other screen"** (off by default): Game controls opens on the screen the game isn't on, so
+  Eden and GameNative keep running. When a game paused itself under Game controls, a message says to resume it there.
+- Eden: a game started from Eden's own list is recognised (its Game controls, performance and lights apply); a game an
+  emulator names late (GameNative) still switches the page to it.
+
+**Clearer, and easier with any controller**
+- One focus highlight, clearly visible everywhere and in every theme; a chosen option is filled, with a check.
+- Each controller's buttons are drawn and named as on it (PS, Create, touchpad click, Mute); page headers show what its
+  buttons do on the focused control.
+- Messages show on the controller's screen, follow the theme and never end up in a screenshot.
+- Search: the D-pad reaches the field, every result opens its setting, and Back keeps your search.
+- Appearance: one theme choice with Your colours, a warning when text gets hard to read, and a reset. Help & status
+  shows the status first.
+- **Asks before acting**: Recent apps' close all (Select, then Select again), Close background apps, Arrange's resets,
+  deleting a change, a macro step, a chord or an app pair; Test it's Start / Select act only when held for a second.
+
+**Fixed (GitHub issues)**
+- Wayfinder Keyboard: ↵ and Start run the search in boxes like the Play Store's (#94). Keyboard › "Keep a thin bar" (on
+  by default): turn it off to lose Android's black keyboard bar on the typing screen (#99).
+- Home combos: Home and another button pressed at the same moment no longer go home, and holding a button (accelerate,
+  say) then tapping Home goes home instead of making a combo (#81). New combo action "Nothing", for example on Home's
+  tap (#81).
+- New combo actions "Top screen off / on" (#91) and "Turn Wayfinder off", for games that refuse to run beside an
+  accessibility app — one press in Wayfinder turns it back on (#83).
+- Stick lights: after the lid or the power button, Off and Colour come back in about a tenth of a second, and the colour
+  wheel follows the stick (#64); Spectrum can show the same colour on both sticks (#82).
+- Keyboard & mouse: a "No pointer" tab in Direct (#65); Touch and Direct reach the whole top screen (#49); Pointer speed
+  1 to 10 (#49, #99).
+- Quick panel: the Details card shows the power drawn, the fan and the memory (#89, #87); the Screenshot shortcut asks
+  which screen (#71).
+- The frame-rate counter comes in three sizes and a compact style (#86). Screen recordings can be saved with your
+  screenshots (#98).
+- Back over a game: a game never gets one Back twice; locking or sending the controller no longer takes the game's
+  focus; Recent apps opened right after a swap stays open (#102). A second swap pressed during the first is done right
+  after it (#99).
+- Home on both screens sends both screens home, wherever the controller is, and Home on the top screen no longer sends
+  the bottom one home when the controller is down there (#97).
+- A quick-panel tile, a combo that opens an app on "The controller's screen" and the Media card's Open follow the
+  app's own "Opens on" (Top or Bottom), as Android's launcher does; if that app is already showing on a screen, it
+  stays there (#107).
+- Wayfinder Keyboard: typing in a Guide page (Guide & notes) no longer freezes Wayfinder for seconds. A pinned guide
+  whose site answers with an error or a check page ("Just a moment…") keeps its offline copy (#108).
+- Stick lights on a system without the Thor's own light controls: Wayfinder's light effects stay off and Stick lights
+  says "No stick lights found". On LineageOS (or another system whose sticks have standard LED controls), Wayfinder
+  drives the lights if your system lets Wayfinder change them — directly, without root; if it doesn't, Stick lights
+  says "Can't change the stick lights". Not yet tried on such a system (#109).
+
+**Also fixed**
+- Select + Back (RetroArch's hotkey): Select stays held while Back is pressed. Turbo: holding a turbo button and tapping
+  Home goes home; a combo with a turbo button fires once.
+- After Recent apps and back, the game is still recognised (its performance, lights and Game controls).
+- Appearance › Hub screen › Bottom no longer leaves Wayfinder hidden behind the launcher.
+- The screen-record tile stops saying "Recording" once the file is saved.
+
 ## 1.4.1 — October 2026
 
 **Fixed**

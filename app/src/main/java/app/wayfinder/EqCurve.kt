@@ -24,8 +24,8 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -39,6 +39,8 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import app.wayfinder.ui.LocalGlass
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.focusIndicator
 
 /**
  * 1.4 (Reddit): the headphone EQ as a curve you shape — ten points an octave apart (31 Hz … 16 kHz, ±12 dB),
@@ -53,6 +55,9 @@ fun EqCurve(out: HeadphoneEq.Out, gains: List<Float>) {
     var sel by remember { mutableIntStateOf(-1) }        // the point being moved (touch or controller)
     var editing by remember { mutableStateOf(false) }   // controller editing
     var focused by remember { mutableStateOf(false) }
+    val gate = remember { app.wayfinder.ui.ReleaseGate() }
+    val req = remember { androidx.compose.ui.focus.FocusRequester() }
+    app.wayfinder.ui.OfferEntry(req)                           // dev build 16 (WP7): an entry candidate, in page order
     val latest by rememberUpdatedState(gains)
     fun set(i: Int, db: Float) {
         val v = Math.round(db.coerceIn(-12f, 12f)).toFloat()
@@ -62,22 +67,27 @@ fun EqCurve(out: HeadphoneEq.Out, gains: List<Float>) {
     val measurer = androidx.compose.ui.text.rememberTextMeasurer()
     val scaleStyle = MaterialTheme.typography.labelSmall.copy(color = g.textTertiary)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(when {
+        app.wayfinder.ui.GlyphText(when {
             sel >= 0 -> HeadphoneEq.FREQS[sel].let { f -> if (f >= 1000) "${f / 1000} kHz" else "$f Hz" } + "  ·  " + (if (gains[sel] > 0) "+" else "") + "${gains[sel].toInt()} dB" +
-                if (editing) "   —  ◀ ▶ another point · ▲ ▼ move it · ${ButtonNames.m("A")} done" else ""
-            focused -> "${ButtonNames.m("A")} to shape the curve with the D-pad"
+                // build 18 (B17, MORE-D11): the hand's A drawn as its badge (A7's token), the arrows stay text
+                if (editing) "   —  ◀ ▶ another point · ▲ ▼ move it · ${Say.keyMenu(ThorButton.A)} done" else ""
+            focused -> "${Say.keyMenu(ThorButton.A)} to shape the curve with the D-pad"
             else -> "Drag a point up for more, down for less — bass on the left, treble on the right"
         }, color = if (sel >= 0) g.accent else g.textTertiary, style = MaterialTheme.typography.bodySmall)
         Box(Modifier.fillMaxWidth().height(220.dp)
-            .border(if (focused) 2.dp else 1.dp, if (focused) g.accent else g.textTertiary.copy(alpha = 0.3f), RoundedCornerShape(14.dp))
-            .onFocusChanged { focused = it.isFocused; if (!it.isFocused) { editing = false; sel = -1 } }
+            .focusRequester(req)
+            // dev build 17 (WP8): the one focus look, inside its edge; the 1 dp frame stays
+            .focusIndicator(RoundedCornerShape(Radii.Control), inset = true)
+            .border(1.dp, g.textTertiary.copy(alpha = 0.3f), RoundedCornerShape(Radii.Control))
+            .onFocusChanged { focused = it.isFocused; if (!it.isFocused) { editing = false; sel = -1; gate.armed = false } }
             .onKeyEvent { e ->
-                val select = e.key == Key.ButtonA || e.key == Key.DirectionCenter || e.key == Key.Enter
-                if (select || (editing && (e.key == Key.ButtonB || e.key == Key.Back || e.key == Key.Escape))) {
-                    if (e.type == KeyEventType.KeyUp) {
-                        editing = select && !editing
-                        sel = if (editing) (if (sel >= 0) sel else 2) else -1
-                    }
+                // dev build 16 (WP7): A toggles shaping on a release seen here (its press came here); B ends it as before
+                if (app.wayfinder.ui.ReleaseGate.isSelect(e)) return@onKeyEvent gate.onKey(e) {
+                    editing = !editing
+                    sel = if (editing) (if (sel >= 0) sel else 2) else -1
+                }
+                if (editing && (e.key == Key.ButtonB || e.key == Key.Back || e.key == Key.Escape)) {
+                    if (e.type == KeyEventType.KeyUp) { editing = false; sel = -1 }
                     return@onKeyEvent true
                 }
                 if (!editing || e.type != KeyEventType.KeyDown) return@onKeyEvent false
@@ -116,11 +126,12 @@ fun EqCurve(out: HeadphoneEq.Out, gains: List<Float>) {
                 fun y(db: Float) = padY + (12f - db) / 24f * h
                 val plotW = size.width - 64.dp.toPx()                // the dB scale has its own margin on the right
                 fun x(t: Float) = (t + 0.5f) / n * plotW             // t in points (0 … n-1)
-                // the grid: 0 dB solid, ±6 / ±12 dashed, a line per point
+                // the grid: 0 dB solid, ±6 / ±12 dashed, a line per point. Build 18 (B17, MORE-D39): the lines end where the curve
+                // does (plotW) — the dB labels keep their margin on the right (the lines ran on under them, past the fill)
                 val dash = PathEffect.dashPathEffect(floatArrayOf(6f, 8f))
                 for (db in listOf(12f, 6f, -6f, -12f))
-                    drawLine(g.textTertiary.copy(alpha = 0.25f), Offset(0f, y(db)), Offset(size.width, y(db)), 1.dp.toPx(), pathEffect = dash)
-                drawLine(g.textTertiary.copy(alpha = 0.5f), Offset(0f, y(0f)), Offset(size.width, y(0f)), 1.dp.toPx())
+                    drawLine(g.textTertiary.copy(alpha = 0.25f), Offset(0f, y(db)), Offset(plotW, y(db)), 1.dp.toPx(), pathEffect = dash)
+                drawLine(g.textTertiary.copy(alpha = 0.5f), Offset(0f, y(0f)), Offset(plotW, y(0f)), 1.dp.toPx())
                 // the scale, at the right edge (the 16 kHz point sits left of it)
                 for (db in listOf(12, 6, 0, -6, -12)) {
                     val t = measurer.measure(if (db > 0) "+$db dB" else if (db == 0) "0 dB" else "−${-db} dB", scaleStyle)
@@ -142,7 +153,7 @@ fun EqCurve(out: HeadphoneEq.Out, gains: List<Float>) {
                 for (i in 0 until n) {
                     val c = Offset(x(i.toFloat()), y(gains[i]))
                     if (i == sel) drawCircle(g.accent.copy(alpha = 0.3f), 16.dp.toPx(), c)
-                    drawCircle(Color.White, (if (i == sel) 9 else 7).dp.toPx(), c)
+                    drawCircle(g.onAccent, (if (i == sel) 9 else 7).dp.toPx(), c)
                     drawCircle(g.accent, (if (i == sel) 9 else 7).dp.toPx(), c, style = Stroke(2.5.dp.toPx()))
                 }
             }

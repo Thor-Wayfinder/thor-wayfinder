@@ -89,11 +89,17 @@ object InputMonitor {
     }
 
     @Volatile private var clientOut: java.io.OutputStream? = null
-    /** Frames presented in the last second by the watched app (see [FpsSampler]). */
-    @Volatile var fpsListener: ((top: Int, bottom: Int) -> Unit)? = null
+    /** Frames presented in the last second by the watched app (see [FpsSampler]): its busiest layer's, then the kept surface's
+     *  (b18j, D1: the game's own surface while Game controls watches it; the busiest's when nothing is kept). */
+    @Volatile var fpsListener: ((top: Int, bottom: Int, keptTop: Int, keptBottom: Int) -> Unit)? = null
     /** Input layer: (type, code, value) of pad events the GAME did not get because Home or Back
      *  was held — Wayfinder's shortcuts read them here. Keys come as PRINTED buttons. */
-    @Volatile var gatedListener: ((Int, Int, Int) -> Unit)? = null
+    /** (type, code, value, source): source 0 = the Thor, n = an external controller (ExtPads, its hidraw number + 1). */
+    @Volatile var gatedListener: ((Int, Int, Int, Int) -> Unit)? = null
+    /** b18o: (printed code, 1 = held / 0 = let go, when — CLOCK_MONOTONIC ms, the key events' clock, source) of a turbo
+     *  button whose job is that button of the copy / a controller's pad ("TU" lines: wfpad, wfhid tagged by ExtPads); code 0
+     *  = every one let go (the input layer's engine gone). */
+    @Volatile var turboListener: ((Int, Int, Long, Int) -> Unit)? = null
     /** Input layer: (printed evdev code, 1 = down / 0 = up) of a button the current app's remap
      *  sends to Wayfinder — a keyboard key or a Wayfinder action ([PadRemap]). */
     @Volatile var extListener: ((Int, Int) -> Unit)? = null
@@ -153,6 +159,7 @@ object InputMonitor {
                     continue
                 }
                 if (p[0] == "P") { PadLayerCtl.onStatus(line.removePrefix("P ")); continue }   // input layer status
+                if (p[0] == "Z") { ExtPadsCtl.onLine(line); continue }                       // external controllers
                 if (p[0] == "B" && p.size == 3) {   // a screen's brightness (answer to "Q")
                     val d = p[1].toIntOrNull(); val v = p[2].toFloatOrNull()
                     if (d != null && v != null) ScreenLevels.onHelperLevel(d, v)
@@ -178,13 +185,23 @@ object InputMonitor {
                     if (t != null && c != null && v != null) GyroEngine.onWatched(t, c, v)
                     continue
                 }
-                if (p[0] == "J" && p.size == 4) {   // input layer: an event withheld from the game (Home/Back held)
-                    val t = p[1].toIntOrNull(); val c = p[2].toIntOrNull(); val v = p[3].toIntOrNull()
-                    if (t != null && c != null && v != null) gatedListener?.invoke(t, c, v)
+                if (p[0] == "TU" && (p.size == 4 || p.size == 5)) {  // b18o: a turbo button the hand holds / let go
+                    val c = p[1].toIntOrNull(); val v = p[2].toIntOrNull(); val at = p[3].toLongOrNull()
+                    val src = p.getOrNull(4)?.toIntOrNull()?.takeIf { it in 1..1000 } ?: 0
+                    if (c != null && v != null && at != null) turboListener?.invoke(c, v, at, src)
                     continue
                 }
-                if (p[0] == "F" && p.size in 2..3) {   // F <top> [<bottom>]  (-1 = not watched)
-                    fpsListener?.invoke(p[1].toIntOrNull() ?: -1, p.getOrNull(2)?.toIntOrNull() ?: -1); continue
+                if (p[0] == "J" && (p.size == 4 || p.size == 5)) {   // an event withheld from the game (Home/Back/shift held)
+                    val t = p[1].toIntOrNull(); val c = p[2].toIntOrNull(); val v = p[3].toIntOrNull()
+                    val src = p.getOrNull(4)?.toIntOrNull()?.takeIf { it in 1..1000 } ?: 0
+                    if (t != null && c != null && v != null) gatedListener?.invoke(t, c, v, src)
+                    continue
+                }
+                // F <top> [<bottom>] [<kept top> <kept bottom>]  (-1 = not watched). b18j (D1): the kept counts follow one surface
+                // (FpsSampler); a helper that sends none (an older one) gives the busiest layer's, as before
+                if (p[0] == "F" && p.size in 2..5) {
+                    val t = p[1].toIntOrNull() ?: -1; val b = p.getOrNull(2)?.toIntOrNull() ?: -1
+                    fpsListener?.invoke(t, b, p.getOrNull(3)?.toIntOrNull() ?: t, p.getOrNull(4)?.toIntOrNull() ?: b); continue
                 }
                 if (p.size < 4) continue
                 val idx = p[0].toIntOrNull() ?: continue
@@ -201,6 +218,7 @@ object InputMonitor {
         finally { clientConnected = false; clientOut = null; try { client.close() } catch (_: Exception) {} }
         Log.d(TAG, "client ended after $count events")
         PadLayerCtl.onStatus("stopped (helper gone)")
+        ExtPadsCtl.helperLost()             // its controllers' readers went with it (the next helper tells the live ones)
         relaunchSoon()
     }
 

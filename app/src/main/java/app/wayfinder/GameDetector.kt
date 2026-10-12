@@ -15,13 +15,14 @@ import java.io.File
  *     isn't rewritten when a game is played again, and a zipped game isn't kept open).
  *  2. GameNative — the active container link `xuser → xuser-STEAM_<appid>` while a Windows game
  *     runs; the name from its own database (a copy — never opened in place).
- *  3. Any emulator — the game file it keeps open (Dolphin .rvz, PPSSPP .iso, Azahar .3ds…).
+ *  3. Any emulator — the game file it keeps open (Dolphin .rvz, PPSSPP .iso, Azahar .3ds…). b18i (D2): one that keeps
+ *     several open (Eden: its whole library) — the one it is reading ([GameReading]: offsets, mappings).
  *  4. Cocoon's record of what it launched in that app (melonDS and others that close the file).
  */
 object GameDetector {
     private const val TAG = "ThorGame"
     private val EXT = Regex("""\.(rvz|iso|gcm|gcz|wbfs|wia|ciso|3ds|cci|cia|cxi|app|nsp|xci|nca|chd|cso|pbp|cue|bin|img|m3u|nds|dsi|z64|n64|v64|sfc|smc|gba|gbc|gb|nes|fds|md|gen|smd|sms|gg|pce|ws|wsc|ngp|zip|7z|wua|wux|rpx|elf|vpk|cdi|gdi)$""", RegexOption.IGNORE_CASE)
-    private val PKG = Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")
+    internal val PKG = Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")
     private val gnNames = HashMap<String, String>()
 
     /** The helper's answer line for [pkg]. */
@@ -42,9 +43,7 @@ object GameDetector {
 
     /** (game id, title) — the id is stable (profiles are stored under it). */
     fun detect(pkg: String): Pair<String, String>? {
-        val uid = runCatching { Os.stat("/data/data/$pkg").st_uid }.getOrNull() ?: return null
-        val pids = File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }
-            .filter { runCatching { Os.stat("/proc/$it").st_uid == uid }.getOrDefault(false) }
+        val pids = pidsOf(pkg)
         if (pids.isEmpty()) return null
         val started = pids.minOf { startMs(it) }
         // the id comes from what really runs (stable whatever launched it); Cocoon's name, when it
@@ -57,8 +56,13 @@ object GameDetector {
             ?: (if (pkg == "app.gamenative") gameNative(pids) else null)
             ?: (if (own) return null else chooseGame(pkg, pids, nice))
             ?: return nice
+        // b18i (D2): the app reads another game than the one Cocoon names — no answer, not Cocoon's either
+        if (found === CANT_TELL) return null
         return found.first to (nice?.second ?: found.second)
     }
+
+    /** [chooseGame]'s "can't tell — not even Cocoon's name" (compared by identity). */
+    private val CANT_TELL = Pair("", "")
 
     private fun fileGame(path: String): Pair<String, String> {
         val base = path.substringAfterLast('/').replace(EXT, "").trim()
@@ -78,18 +82,30 @@ object GameDetector {
     /** A stable id from a name: lower-case letters and digits, dashes between. */
     fun idOf(s: String) = s.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(64).ifEmpty { "game" }
 
-    /** Every game file the app keeps open (the user's files only — not an emulator's own: Eden keeps system .nca files open). */
-    private fun openGames(pids: List<Int>): List<Pair<String, String>> {
-        val out = LinkedHashMap<String, Pair<String, String>>()
+    /** A user's game file (the user's files only — not an emulator's own: Eden keeps system .nca files open). */
+    private fun userGame(t: String) = (t.startsWith("/storage/") || t.startsWith("/sdcard/") || t.startsWith("/data/media/") || t.startsWith("/mnt/")) &&
+        "/Android/data/" !in t && "/Android/obb/" !in t && EXT.containsMatchIn(t)
+
+    /** b18i (D2): one open game file — the process, its descriptor, the file and the game its name gives. */
+    private class OpenFd(val pid: Int, val fd: String, val path: String, val game: Pair<String, String>)
+
+    /** Every game file descriptor the app keeps open ([userGame]). */
+    private fun openFds(pids: List<Int>): List<OpenFd> {
+        val out = ArrayList<OpenFd>()
         for (pid in pids) {
             val fds = File("/proc/$pid/fd").list() ?: continue
             for (fd in fds) {
                 val t = runCatching { Os.readlink("/proc/$pid/fd/$fd") }.getOrNull() ?: continue
-                if ((t.startsWith("/storage/") || t.startsWith("/sdcard/") || t.startsWith("/data/media/") || t.startsWith("/mnt/")) &&
-                    "/Android/data/" !in t && "/Android/obb/" !in t && EXT.containsMatchIn(t))
-                    fileGame(t).let { out[it.first] = it }
+                if (userGame(t)) out += OpenFd(pid, fd, t, fileGame(t))
             }
         }
+        return out
+    }
+
+    /** Every game the app keeps open, one per game id. */
+    private fun openGames(fds: List<OpenFd>): List<Pair<String, String>> {
+        val out = LinkedHashMap<String, Pair<String, String>>()
+        fds.forEach { out[it.game.first] = it.game }
         return out.values.toList()
     }
 
@@ -122,26 +138,131 @@ object GameDetector {
     private val lastOpen = HashMap<String, Pair<String, Set<String>>>()
     private val newlyOpened = HashMap<String, Pair<String, String>>()
 
-    /** Which of the open game files is the one running (see the class comment). Null = can't tell — better than wrong. */
+    /** Which of the open game files is the one running (see the class comment). Null = can't tell — better than wrong.
+     *  b18i (D2): [CANT_TELL] = not even Cocoon's name (the app reads another game than it). */
     private fun chooseGame(pkg: String, pids: List<Int>, nice: Pair<String, String>?): Pair<String, String>? {
-        val open = openGames(pids)
+        val fds = openFds(pids)
+        val open = openGames(fds)
         // 1.4 (review): a game opened since the last look (same process) is the one now running
         val pidKey = pids.sorted().joinToString(","); val ids = open.map { it.first }.toSet()
         val prev = lastOpen[pkg]; lastOpen[pkg] = pidKey to ids
         if (prev == null || prev.first != pidKey) newlyOpened.remove(pkg)
         else if (prev.second != ids) {
             newlyOpened.remove(pkg); launchCache.remove(pkg)
-            open.filter { it.first !in prev.second }.singleOrNull()?.let { newlyOpened[pkg] = it }
+            open.filter { it.first !in prev.second }.singleOrNull()?.let {
+                newlyOpened[pkg] = it
+                // b18i (D2): the newest file opened is the one read, once that rule ends — held by its descriptors (review)
+                reading[pkg] = pidKey to GameReading.Kept(idOf(it.second), fds.filter { f -> f.game.first == it.first }.map { f -> "${f.pid}/${f.fd}" }.toSet())
+            }
         }
         newlyOpened[pkg]?.let { g -> if (g.first in ids) return g else newlyOpened.remove(pkg) }
         val launched = launchedWith(pkg, pids)
         if (launched != null && (open.isEmpty() || open.any { it.first == launched.first })) return launched
         if (open.size == 1) return open[0]
-        if (open.isEmpty() || nice == null) return null
+        if (open.isEmpty()) return null
         // several open (a library kept open): the one whose name matches what Cocoon launched
         fun words(s: String) = s.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length > 2 }.toSet()
-        val want = words(nice.second)
-        return open.map { it to (words(it.second) intersect want).size }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
+        val want = nice?.let { words(it.second) }.orEmpty()
+        fun score(g: Pair<String, String>) = (words(g.second) intersect want).size
+        val byName = if (nice == null) null else open.map { it to score(it) }.filter { it.second > 0 }.maxByOrNull { it.second }?.first
+        // Cocoon names a game none of the open files' names match: its own name answers ([detect]), as before
+        if (nice != null && byName == null) return null
+        // b18i (review): the files its name matches as well as the one it picked (a DLC named after its game) — one game
+        val ties = byName?.let { b -> score(b).let { best -> open.filter { score(it) == best }.map { it.first }.toSet() } }.orEmpty()
+        // b18i (D2, "detect harder", g1 BUG-2): the one the app is reading
+        return readingGame(pkg, pidKey, pids, fds, open, byName, ties)
+    }
+
+    // ── b18i (D2): which of several open game files the app reads ([GameReading]) ──
+
+    /** Per app: the last look at its open game files — its processes, when (elapsed ms), each descriptor's offset, and the game
+     *  files mapped (their tidied names' ids). And the game last seen read, per process, with what showed it ([GameReading.Kept]).
+     *  Only the helper's detector thread touches them. */
+    private class Look(val pids: String, val at: Long, val fds: List<GameReading.Fd>, val mapped: Set<String>)
+    private val looks = HashMap<String, Look>()
+    private val reading = HashMap<String, Pair<String, GameReading.Kept>>()
+    private val lastWhy = HashMap<String, Pair<GameReading.Why, String?>>()
+    /** A look this recent (same processes) is the first of the two: no wait. */
+    private const val LOOK_FRESH_MS = 30_000L
+    /** Else the two looks are this far apart (the helper's detector thread, never the app's). */
+    private const val LOOK_GAP_MS = 250L
+
+    /** The offset of [pid]'s descriptor [fd] (`/proc/<pid>/fdinfo/<fd>` "pos"); null: gone or unreadable. */
+    private fun posOf(pid: Int, fd: String): Long? = runCatching {
+        File("/proc/$pid/fdinfo/$fd").useLines { l -> l.firstOrNull { it.startsWith("pos:") }?.substringAfter(':')?.trim()?.toLong() }
+    }.getOrNull()
+
+    /** One look: each descriptor still on its file, and its offset. */
+    private fun look(fds: List<OpenFd>): List<GameReading.Fd> = fds.mapNotNull { f ->
+        if (runCatching { Os.readlink("/proc/${f.pid}/fd/${f.fd}") }.getOrNull() != f.path) return@mapNotNull null
+        posOf(f.pid, f.fd)?.let { GameReading.Fd("${f.pid}/${f.fd}", f.game.first, it) }
+    }
+
+    /** A maps line's file (after address, perms, offset, device and inode). */
+    private val MAP_FILE = Regex("""^\S+\s+\S+\s+\S+\s+\S+\s+\d+\s+(/.+)$""")
+
+    /** The game files mapped in [pids] (`/proc/<pid>/maps`), as their tidied names' ids (one per game: [GameReading.Families]). */
+    private fun mappedGames(pids: List<Int>): Set<String> {
+        val out = HashSet<String>()
+        for (pid in pids) runCatching {
+            File("/proc/$pid/maps").useLines { lines ->
+                for (l in lines) {
+                    if ("/storage/" !in l && "/sdcard/" !in l && "/data/media/" !in l && "/mnt/" !in l) continue
+                    val path = MAP_FILE.find(l)?.groupValues?.get(1) ?: continue
+                    if (userGame(path)) out += idOf(fileGame(path).second)
+                }
+            }
+        }
+        return out
+    }
+
+    /** The game [pkg] reads among the several it keeps open ([open], [fds]); [byName] the one Cocoon's record names, [ties] the
+     *  files its name matches as well. Two looks at the descriptors' offsets: the previous call's (≤ [LOOK_FRESH_MS] ago, same
+     *  processes) and now — else now and [LOOK_GAP_MS] later (not when Cocoon's name answers: no wait added to it). Null: can't
+     *  tell (Cocoon's name, if any, answers); [CANT_TELL]: no answer at all. */
+    private fun readingGame(pkg: String, pidKey: String, pids: List<Int>, fds: List<OpenFd>, open: List<Pair<String, String>>,
+                            byName: Pair<String, String>?, ties: Set<String>): Pair<String, String>? {
+        val before = looks[pkg]?.takeIf { it.pids == pidKey }
+        var first = look(fds)
+        val moved: List<GameReading.Fd>
+        if (before != null && SystemClock.elapsedRealtime() - before.at <= LOOK_FRESH_MS) moved = GameReading.moved(before.fds, first)
+        // Cocoon names an open file: its answer now, as fast as before (the next ask compares with this look)
+        else if (byName != null) moved = emptyList()
+        else {
+            // this process's first look (or an old one): the second one a moment later
+            Thread.sleep(LOOK_GAP_MS)
+            val second = look(fds)
+            moved = GameReading.moved(first, second)
+            first = second
+        }
+        val mappedNow = mappedGames(pids)
+        looks[pkg] = Look(pidKey, SystemClock.elapsedRealtime(), first, mappedNow)
+        // b18i (review): one game, several files (base / update / DLC, a disc's tracks) — the rules work on games, not files
+        val fam = GameReading.Families(open.associate { it.first to idOf(it.second) }, byName?.first, ties)
+        val openFam = open.mapNotNull { fam.ofFile(it.first) }.toSet()
+        val readOn = moved.mapNotNull { f -> fam.ofFile(f.game)?.let { f.copy(game = it) } }
+        val read = readOn.map { it.game }.toSet()
+        val mappedFam = mappedNow.map { fam.of(it) }.toSet()
+        val mapped = GameReading.newlyMapped(before?.mapped?.map { fam.of(it) }?.toSet(), mappedFam)
+        // b18i (review): the game remembered in this process while what showed it lasts — a descriptor it was read on, its
+        // mapping. Quit to the app's own list, it reads nothing, like a paused game; kept while its file stayed open, it went on
+        // answering there (Eden keeps its whole library open)
+        val fdsNow = first.mapNotNull { f -> fam.ofFile(f.game)?.let { f.fd to it } }.toMap()
+        val was = reading[pkg]?.takeIf { it.first == pidKey }?.second?.let { k -> k.copy(game = fam.of(k.game), next = k.next?.let { fam.of(it) }) }
+        val kept = GameReading.lasting(was, fdsNow, mappedFam)
+        val c = GameReading.choose(openFam, read, mapped, kept?.game, byName?.let { fam.ofFile(it.first) }, kept?.next)
+        val k = GameReading.remember(c, kept, readOn, mappedFam)
+        if (k == null) reading.remove(pkg) else reading[pkg] = pidKey to k
+        // release log on a change only, no app or file name (the device check: which rule named it, or why none, and what
+        // holds the game remembered)
+        val gone = if (was != null && kept == null) ", what held the last game gone" else ""
+        val held = k?.let { " (held by ${it.fds.size} descriptors" + (if (it.mapped) ", mapped)" else ")") } ?: ""
+        if (lastWhy.put(pkg, c.why to c.game) != c.why to c.game)
+            Log.w(TAG, "D2: ${open.size} game files open (${openFam.size} games), ${read.size} read, ${mapped.size} newly mapped$gone → ${c.why}$held")
+        if (BuildConfig.DEBUG) Log.d(TAG, "D2 $pkg: read $read, mapped $mapped (of $mappedFam), kept $was → $k → ${c.game} (${c.why})")
+        if (c.veto) return CANT_TELL
+        // the family's file: Cocoon's pick in it, else its first id (stable whatever order the app opened its files in)
+        return c.game?.let { g -> fam.fileOf(g) }?.let { id -> open.firstOrNull { it.first == id } }
     }
 
     private fun retroarch(pids: List<Int>): Pair<String, String>? {
@@ -223,8 +344,17 @@ object GameDetector {
         return idOf(name) to name
     }
 
-    /** A process's start, in wall-clock ms (/proc/<pid>/stat field 22, in clock ticks). */
-    private fun startMs(pid: Int): Long = runCatching {
+    /** The processes of [pkg] (its data folder's uid). dev build 15 (C5): also whether an app still runs and since when
+     *  ([ExtPads]: a player-order change waits while a game runs). */
+    internal fun pidsOf(pkg: String): List<Int> {
+        if (!PKG.matches(pkg)) return emptyList()
+        val uid = runCatching { Os.stat("/data/data/$pkg").st_uid }.getOrNull() ?: return emptyList()
+        return File("/proc").list().orEmpty().mapNotNull { it.toIntOrNull() }
+            .filter { runCatching { Os.stat("/proc/$it").st_uid == uid }.getOrDefault(false) }
+    }
+
+    /** A process's start, in wall-clock ms (/proc/<pid>/stat field 22, in clock ticks); Long.MAX_VALUE unreadable. */
+    internal fun startMs(pid: Int): Long = runCatching {
         val s = File("/proc/$pid/stat").readText()
         val ticks = s.substringAfterLast(')').trim().split(' ')[19].toLong()
         val boot = System.currentTimeMillis() - SystemClock.elapsedRealtime()

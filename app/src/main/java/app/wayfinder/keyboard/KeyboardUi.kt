@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
@@ -32,7 +34,7 @@ import androidx.compose.material.icons.rounded.KeyboardCapslock
 import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material.icons.rounded.SwapVert
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -43,11 +45,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -56,7 +60,16 @@ import androidx.compose.ui.unit.sp
 import app.wayfinder.ThorButton
 import app.wayfinder.ui.ButtonGlyph
 import app.wayfinder.ui.LocalGlass
+import app.wayfinder.ui.ScreenIcon
 import app.wayfinder.ui.glassLight
+import app.wayfinder.ui.Radii
+import app.wayfinder.ui.fillChip
+import app.wayfinder.ui.fillSubtle
+import app.wayfinder.ui.fillWell
+import app.wayfinder.ui.keyFill
+import app.wayfinder.ui.pressVeil
+import app.wayfinder.ui.surfaceOverlay
+import app.wayfinder.ui.surfaceSolid
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -76,19 +89,18 @@ fun ThorKeyboardPanel(
     preview: Preview,
     modifier: Modifier = Modifier,
     onHide: () -> Unit,
-    /** "▲ Top screen" / "▼ Bottom screen" — null = no other screen. */
+    /** The move button's words, [KeyboardWords.move]: "Move up" / "Move down" (build 18, KB2) — null = no other screen. */
     moveLabel: String?,
     onMove: () -> Unit,
-) {
+) = androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalPadLook provides app.wayfinder.ButtonNames.handLook) {
+    // dev build 15 (WP2): the badges name the buttons of the controller in hand (IME and overlay alike), as menuSwap
+    // picks them
     val g = LocalGlass.current
     Column(
         modifier
             // The overlay has the system blur behind it; the IME window doesn't — so
             // it gets a nearly opaque base, or the app's text shows through the keys.
-            .background(
-                if (overlay) (if (g.dark) Color(0x990A0C14) else Color(0x99E9ECF4))
-                else (if (g.dark) Color(0xF20A0C14) else Color(0xF2E9ECF4))
-            )
+            .background(if (overlay) g.surfaceOverlay else g.surfaceSolid)
             .padding(horizontal = 8.dp, vertical = 6.dp),
         verticalArrangement = Arrangement.spacedBy(if (overlay) 8.dp else 6.dp),
     ) {
@@ -99,7 +111,7 @@ fun ThorKeyboardPanel(
             kb.rows().forEachIndexed { r, row ->
                 Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     row.forEachIndexed { c, key ->
-                        KeyCap(kb, key, focused = kb.focus == r to c, big = overlay, modifier = Modifier.weight(key.weight).fillMaxHeight())
+                        KeyCap(kb, key, r, c, focused = kb.focus == r to c, big = overlay, modifier = Modifier.weight(key.weight).fillMaxHeight())
                     }
                 }
             }
@@ -128,79 +140,124 @@ private fun TopBar(kb: KeyboardController, overlay: Boolean, preview: Preview, o
                 popup.second.forEachIndexed { i, opt ->
                     val sel = i == kb.popupIndex
                     Box(
-                        Modifier.height(if (overlay) 56.dp else 40.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (sel) g.accent else if (g.dark) Color(0x33FFFFFF) else Color(0x99FFFFFF))
+                        Modifier.height(if (overlay) 56.dp else 40.dp).clip(RoundedCornerShape(Radii.KeyCap))
+                            .background(if (sel) g.accent else g.fillChip)
                             .pointerInput(opt) { detectTapGestures { kb.choosePopup(opt) } }
                             .padding(horizontal = 14.dp),
                         contentAlignment = Alignment.Center,
-                    ) { Text(ClipHistory.preview(opt), color = if (sel) Color.White else g.textPrimary, fontSize = if (overlay) 20.sp else 16.sp, maxLines = 1) }
+                    ) { Text(ClipHistory.preview(opt), color = if (sel) g.onAccent else g.textPrimary, fontSize = if (overlay) 20.sp else 16.sp, maxLines = 1) }
                 }
                 Box(Modifier.size(if (overlay) 56.dp else 40.dp).pointerInput(Unit) { detectTapGestures { kb.choosePopup(null) } },
-                    contentAlignment = Alignment.Center) { Text("✕", color = g.textSecondary, fontSize = 18.sp) }
+                    contentAlignment = Alignment.Center) { Text("×", color = g.textSecondary, fontSize = 18.sp) }
             }
         } else if (popup != null) {
-            // Accents for the held key — tap one (or ←/→ + A with the controller).
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Accents for the held key — tap one (or ←/→ + A with the controller). Build 18 review (KB4): the row scrolls and
+            // the lit option is scrolled into sight — beside the bar's buttons the bottom screen has room for about three
+            // boxes, and the ones past them were squeezed to nothing (unseen, untappable, picked blind).
+            val box = if (overlay) 56.dp else 40.dp
+            val gap = 6.dp
+            val accScroll = remember(popup) { androidx.compose.foundation.ScrollState(0) }
+            var viewW by remember { androidx.compose.runtime.mutableIntStateOf(0) }
+            val density = androidx.compose.ui.platform.LocalDensity.current
+            androidx.compose.runtime.LaunchedEffect(popup, kb.popupIndex, viewW) {
+                if (viewW <= 0) return@LaunchedEffect
+                val boxPx = with(density) { box.roundToPx() }
+                val left = kb.popupIndex * (boxPx + with(density) { gap.roundToPx() })
+                val to = when {
+                    left < accScroll.value -> left
+                    left + boxPx > accScroll.value + viewW -> left + boxPx - viewW
+                    else -> return@LaunchedEffect
+                }
+                accScroll.animateScrollTo(to)
+            }
+            Row(Modifier.weight(1f).onSizeChanged { viewW = it.width }.horizontalScroll(accScroll),
+                horizontalArrangement = Arrangement.spacedBy(gap)) {
                 popup.second.forEachIndexed { i, opt ->
                     val sel = i == kb.popupIndex
                     Box(
-                        Modifier.size(if (overlay) 56.dp else 40.dp).clip(RoundedCornerShape(10.dp))
-                            .background(if (sel) g.accent else if (g.dark) Color(0x33FFFFFF) else Color(0x99FFFFFF))
+                        Modifier.size(box).clip(RoundedCornerShape(Radii.KeyCap))
+                            .background(if (sel) g.accent else g.fillChip)
                             .pointerInput(opt) { detectTapGestures { kb.choosePopup(opt) } },
                         contentAlignment = Alignment.Center,
-                    ) { Text(opt, color = if (sel) Color.White else g.textPrimary, fontSize = if (overlay) 26.sp else 20.sp) }
+                    ) { Text(opt, color = if (sel) g.onAccent else g.textPrimary, fontSize = if (overlay) 26.sp else 20.sp) }
                 }
-                Box(Modifier.size(if (overlay) 56.dp else 40.dp).pointerInput(Unit) { detectTapGestures { kb.choosePopup(null) } },
-                    contentAlignment = Alignment.Center) { Text("✕", color = g.textSecondary, fontSize = 18.sp) }
+                Box(Modifier.size(box).pointerInput(Unit) { detectTapGestures { kb.choosePopup(null) } },
+                    contentAlignment = Alignment.Center) { Text("×", color = g.textSecondary, fontSize = 18.sp) }
             }
         } else if (overlay) {
             // What you're typing on the other screen, right here.
             Box(
-                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(14.dp))
-                    .background(if (g.dark) Color(0x26FFFFFF) else Color(0x80FFFFFF))
+                Modifier.weight(1f).fillMaxHeight().clip(RoundedCornerShape(Radii.Control))
+                    .background(g.fillWell)
                     .padding(horizontal = 16.dp),
                 contentAlignment = Alignment.CenterStart,
-            ) {
-                val empty = preview.before.isEmpty() && preview.after.isEmpty()
-                if (empty) Text("Types into the top screen",
-                    color = g.textTertiary, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Clip)
-                else {
-                    val shownBefore = if (preview.before.length > 34) "…" + preview.before.takeLast(34) else preview.before
-                    val shownAfter = if (preview.after.length > 24) preview.after.take(24) + "…" else preview.after
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(shownBefore, color = g.textPrimary, fontSize = 22.sp, maxLines = 1)
-                        Text("▏", color = g.accent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                        Text(shownAfter, color = g.textSecondary, fontSize = 22.sp, maxLines = 1)
-                    }
-                }
-            }
+            ) { PreviewLine(preview) }
         } else Spacer(Modifier.weight(1f))
-        BarButton(null, "?", { kb.toggleHelp() }, badge = if (kb.padActive) ThorButton.L3 else null)
-        if (moveLabel != null) BarButton(Icons.Rounded.SwapVert, moveLabel, onMove)
-        BarButton(Icons.Rounded.KeyboardHide, null, onHide, badge = if (kb.padActive) app.wayfinder.ButtonEngine.menuSwap(ThorButton.B) else null)
+        // build 18 (KB2): the legend's key says what it opens ("?" read as a question); the move button says what it does,
+        // with the screen it sends the keys to (ScreenIcon — "▲ Top screen" read as PlayStation's △ and as a status)
+        // b18n (N3-ui 1): the controller lights them too (Up from the top key row, KeyboardController.BAR) — A presses the lit one
+        val lit = kb.focusedBar()
+        BarButton(Icons.Rounded.SportsEsports, KeyboardWords.BUTTONS, { kb.toggleHelp() }, badge = if (kb.padActive) ThorButton.L3 else null,
+            lit = lit == BarKey.BUTTONS)
+        if (moveLabel != null) BarButton(null, moveLabel, onMove, screenTop = moveLabel == KeyboardWords.MOVE_UP, lit = lit == BarKey.MOVE)
+        BarButton(Icons.Rounded.KeyboardHide, null, onHide, badge = if (kb.padActive) app.wayfinder.ButtonEngine.menuSwap(ThorButton.B) else null,
+            lit = lit == BarKey.HIDE)
     }
 }
 
+/**
+ * The overlay's preview of the field: its text around the cursor, or the placeholder. Build 18 (KB2): the placeholder
+ * fits ("Types into the top screen" was cut to "Types into the top" beside the button badges) and a long text keeps its
+ * end and the cursor in sight — the start is cut instead of the cursor.
+ */
 @Composable
-private fun BarButton(icon: ImageVector?, label: String?, onClick: () -> Unit, badge: ThorButton? = null) {
+private fun PreviewLine(preview: Preview) {
+    val g = LocalGlass.current
+    if (preview.before.isEmpty() && preview.after.isEmpty()) {
+        Text(KeyboardWords.TYPE_HERE, color = g.textTertiary, fontSize = 22.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        return
+    }
+    val shownBefore = if (preview.before.length > 34) "…" + preview.before.takeLast(34) else preview.before
+    val shownAfter = if (preview.after.length > 24) preview.after.take(24) + "…" else preview.after
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        // the text before the cursor ends at the cursor: wider than its room, it is cut on the left
+        Box(Modifier.weight(1f, fill = false).clipToBounds(), contentAlignment = Alignment.CenterEnd) {
+            Text(shownBefore, Modifier.wrapContentWidth(Alignment.End, unbounded = true),
+                color = g.textPrimary, fontSize = 22.sp, maxLines = 1, softWrap = false)
+        }
+        Text("▏", color = g.accent, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(shownAfter, Modifier.widthIn(max = 160.dp), color = g.textSecondary, fontSize = 22.sp, maxLines = 1,
+            softWrap = false, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** A top-bar button: a badge (the controller's button for it), an icon or — [screenTop] set — the two screens with the
+ *  one it sends the keys to filled (ui.ScreenIcon), and its words. b18n (N3-ui 1): [lit] = the controller's highlight is on
+ *  it — the keys' ring ([KeyCap]'s). */
+@Composable
+private fun BarButton(icon: ImageVector?, label: String?, onClick: () -> Unit, badge: ThorButton? = null, screenTop: Boolean? = null,
+                      lit: Boolean = false) {
     val g = LocalGlass.current
     val click by androidx.compose.runtime.rememberUpdatedState(onClick)   // the tap handler is installed once
+    val shape = RoundedCornerShape(Radii.Chip)
     Row(
-        Modifier.fillMaxHeight().clip(RoundedCornerShape(12.dp))
-            .background(if (g.dark) Color(0x1FFFFFFF) else Color(0x66FFFFFF))
+        Modifier.fillMaxHeight().clip(shape)
+            .background(g.fillSubtle)
+            .then(if (lit) Modifier.border(2.5.dp, Brush.linearGradient(listOf(g.accent, g.accent2)), shape) else Modifier)
             .pointerInput(Unit) { detectTapGestures { click() } }
             .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         if (badge != null) ButtonGlyph(badge, size = 20.dp)
+        if (screenTop != null) ScreenIcon(screenTop, size = 22.dp)
         if (icon != null) Icon(icon, label, tint = g.textSecondary, modifier = Modifier.size(22.dp))
-        if (label != null) Text(label, color = g.textSecondary, fontSize = if (icon == null) 18.sp else 14.sp, fontWeight = FontWeight.SemiBold)
+        if (label != null) Text(label, color = g.textSecondary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
 
 @Composable
-private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: Boolean, modifier: Modifier) {
+private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, focused: Boolean, big: Boolean, modifier: Modifier) {
     val g = LocalGlass.current
     val view = LocalView.current
     var pressed by remember { mutableStateOf(false) }
@@ -209,14 +266,8 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
     val functional = key.kind != KeyKind.CHAR && key.kind != KeyKind.SPACE
     val accentKey = key.kind == KeyKind.ENTER ||
         (key.kind == KeyKind.SHIFT && kb.shift != Shift.OFF)
-    val shape = RoundedCornerShape(if (big) 14.dp else 10.dp)
-    val fill = when {
-        accentKey -> Brush.verticalGradient(listOf(g.accent, g.accent2))
-        g.dark -> Brush.verticalGradient(
-            if (functional) listOf(Color(0x1FFFFFFF), Color(0x14FFFFFF)) else listOf(Color(0x40FFFFFF), Color(0x26FFFFFF)))
-        else -> Brush.verticalGradient(
-            if (functional) listOf(Color(0x66FFFFFF), Color(0x40FFFFFF)) else listOf(Color(0xE6FFFFFF), Color(0xB3FFFFFF)))
-    }
+    val shape = RoundedCornerShape(if (big) Radii.Control else Radii.KeyCap)
+    val fill = if (accentKey) Brush.verticalGradient(listOf(g.accent, g.accent2)) else g.keyFill(functional)
     val tap: () -> Unit = {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         kb.press(key)
@@ -226,7 +277,7 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
             .graphicsLayer { val s = 1f + 0.06f * lift; scaleX = s; scaleY = s }
             .clip(shape)
             .background(fill, shape)
-            .then(if (pressed) Modifier.background(Color(0x33FFFFFF), shape) else Modifier)
+            .then(if (pressed) Modifier.background(g.pressVeil, shape) else Modifier)
             .glassLight(shape, g.dark)
             .border(
                 if (focused) 2.5.dp else 1.dp,
@@ -234,7 +285,7 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
                 else Brush.linearGradient(0f to g.rimTop.copy(alpha = 0.7f), 0.5f to Color.Transparent, 1f to g.rimBottom),
                 shape,
             )
-            .pointerInput(key, kb.page, kb.layoutIndex) {
+            .pointerInput(key, kb.page, kb.layoutIndex, row, col) {
                 if (key.kind == KeyKind.BACKSPACE) {
                     // Hold to repeat.
                     awaitEachGesture {
@@ -276,7 +327,7 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
                 } else detectTapGestures(
                     onPress = { pressed = true; tryAwaitRelease(); pressed = false },
                     onLongPress = {
-                        if (kb.openPopup(key)) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                        if (kb.openPopup(key, row, col)) view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                         else if (key.kind == KeyKind.SPACE) kb.nextLayout()
                     },
                     onTap = { tap() },
@@ -284,13 +335,13 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, focused: Boolean, big: 
             },
         contentAlignment = Alignment.Center,
     ) {
-        val fg = if (accentKey) Color.White else g.textPrimary
+        val fg = if (accentKey) g.onAccent else g.textPrimary
         val size = if (big) 30.sp else 22.sp
         when (key.kind) {
             KeyKind.CHAR -> {
                 Text(kb.display(key), color = fg, fontSize = size)
-                // Hint for the first long-press option (digits on the top row, accents).
-                kb.hint(key)?.let { hint ->
+                // The hint: the top row's digit by position, else the language's first accent — a long-press offers it first.
+                kb.hint(key, row, col)?.let { hint ->
                     Text(hint, color = g.textTertiary, fontSize = if (big) 13.sp else 10.sp,
                         modifier = Modifier.align(Alignment.TopEnd).padding(top = 3.dp, end = 6.dp))
                 }

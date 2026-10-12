@@ -44,6 +44,7 @@ import app.wayfinder.ui.GlassPanel
 import app.wayfinder.ui.GlassSegmentedControl
 import app.wayfinder.ui.LocalGlass
 import app.wayfinder.ui.SectionHeader
+import app.wayfinder.ui.Radii
 
 /** Is the Thor Keyboard switched on in Android's keyboard list / the one in use? */
 enum class KeyboardState { OFF, ENABLED, ACTIVE }
@@ -59,11 +60,12 @@ fun keyboardState(ctx: Context): KeyboardState {
     }
 }
 
+/** The Hub tile's line. Build 18 (B22, FTU-16): it says Keyboard & mouse is here too (while that part is on). */
 fun keyboardSummary(ctx: Context): String = when (keyboardState(ctx)) {
     KeyboardState.OFF -> "Press to turn on"
     KeyboardState.ENABLED -> "Ready · not in use"
     KeyboardState.ACTIVE -> "On · " + KeyboardSettings.layoutIds.size.let { if (it == 1) "1 language" else "$it languages" }
-}
+} + if (Features.deck) " · Keyboard & mouse" else ""
 
 /**
  * Keyboard page. Setup is two taps and Android's own (it insists the user OKs any
@@ -80,7 +82,7 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
     LaunchedEffect(lifecycle) { lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) { tick++ } }
     val state = remember(tick) { keyboardState(ctx) }
 
-    SubPage(myDisplayId, "Keyboard", "Type with touch or the controller — on the other screen or the same one", onBack) {
+    SubPage(myDisplayId, NavPages.title(HubPage.KEYBOARD), "Type with touch or the controller — on the other screen or the same one", onBack) {
         when (state) {
             KeyboardState.OFF -> GlassActionButton(
                 "Turn on Wayfinder Keyboard", Icons.Rounded.Keyboard, Modifier.fillMaxWidth(),
@@ -96,10 +98,11 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
             ) { ctx.getSystemService(InputMethodManager::class.java).showInputMethodPicker() }
         }
 
+        // build 18 (B3): the registry's cards (Search opens the page on them)
         SettingCard(
-            "Where it opens",
+            NavCards.KB_WHERE,
             if (KeyboardSettings.placement == KeyboardPlacement.OTHER_SCREEN)
-                "With a text box on the top screen, the keyboard fills the bottom screen, so the game keeps the whole top one"
+                "With a text box on the top screen, the keyboard fills the bottom one: the game keeps the top."
             else "Always at the bottom of the screen you're typing on, like a phone",
         ) {
             GlassSegmentedControl(listOf("Bottom screen", "Same screen"), KeyboardSettings.placement.ordinal, Modifier.fillMaxWidth()) {
@@ -107,13 +110,18 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
             }
         }
 
+        // b18i (D3, GitHub #99; 2026-10-10): the thin keyboard window on the typing screen — on (1.4's) by default
+        SettingCard(NavCards.KB_BAR, Say.thinBarLine(KeyboardSettings.thinBar),
+            checked = KeyboardSettings.thinBar, onChecked = { KeyboardSettings.chooseThinBar(it) })
+
         // 1.3 (GitHub #11)
-        SettingCard("The D-pad picks the keys",
+        SettingCard(NavCards.KB_DPAD,
             if (KeyboardSettings.dpadKeys) "On: the D-pad moves between keys, the left stick moves the text cursor"
             else "Off: the left stick picks keys, the D-pad moves the text cursor",
             checked = KeyboardSettings.dpadKeys, onChecked = { KeyboardSettings.chooseDpadKeys(it) })
 
-        SectionHeader("Languages · ${KeyboardSettings.layoutIds.size} on — the globe key switches")
+        SectionHeader("Languages · ${KeyboardSettings.layoutIds.size} on")
+        app.wayfinder.ui.Caption("The globe key switches between them.")
         // On first, in their switching order; then the rest.
         val on = KeyboardSettings.layoutIds.mapNotNull { id -> ALL_LAYOUTS.firstOrNull { it.id == id } }
         val off = ALL_LAYOUTS.filter { it.id !in KeyboardSettings.layoutIds }
@@ -121,14 +129,18 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
         for (row in on.chunked(3)) LanguageRow(row)
         if (off.isNotEmpty()) MoreOptions("${off.size} more", title = "Add a language") { for (row in off.chunked(3)) LanguageRow(row) }
 
+        // build 18 (B22, FTU-16): Keyboard & mouse in sight, before More options (behind it, the page didn't show it was here;
+        // its section has its own header)
+        DeckEditorSection()
+
         // 1.4
-        MoreOptions("the controller's keys, Keyboard & mouse: my pad") {
-        SectionHeader("With the controller — also on the keyboard: the ? key (or click the left stick)")
-        GlassPanel(Modifier.fillMaxWidth(), radius = 18.dp) {
+        MoreOptions("the controller's keys") {
+        SectionHeader("With the controller")
+        // review KB2: the legend's key by its label on the keyboard (was "?")
+        app.wayfinder.ui.Caption("Also on the keyboard: the ${app.wayfinder.keyboard.KeyboardWords.BUTTONS} key, or click the left stick.")
+        GlassPanel(Modifier.fillMaxWidth(), radius = Radii.Card) {
             KeyboardControlsLegend(Modifier.fillMaxWidth().padding(16.dp).height(300.dp), big = false)
         }
-
-        DeckEditorSection()
         }
     }
 }
@@ -148,7 +160,7 @@ private fun LanguageTile(l: KbLayout, modifier: Modifier) {
     FocusableGlass(onClick = {
         KeyboardSettings.toggleLayout(l.id)
         ThorKeyboardService.instance?.kb?.setLayouts(KeyboardSettings.layoutIds, KeyboardSettings.currentId)
-    }, modifier = modifier, radius = 16.dp) {
+    }, modifier = modifier, radius = Radii.Row) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(if (checked) Icons.Rounded.CheckCircle else Icons.Rounded.RadioButtonUnchecked, null,

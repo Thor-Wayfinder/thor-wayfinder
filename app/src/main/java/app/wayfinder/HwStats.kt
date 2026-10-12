@@ -12,12 +12,14 @@ data class HwSnapshot(
     val gpuLoad: Int?, val gpuMhz: Int?, val gpuTemp: Float?,
     val ramUsedGb: Float?, val ramTotalGb: Float?,
     val battery: Int?, val batteryTemp: Float?, val watts: Float?, val charging: Boolean,
+    /** Build 18 (GitHub #89): the fan's drive now, 0–100 % (its PWM duty ÷ period). */
+    val fanPct: Int? = null,
 )
 
 /**
  * Reads the hardware straight from the kernel — all of it readable by the app itself
  * (no root): /proc/stat (CPU load), cpufreq, kgsl (GPU), thermal zones cpu-* / gpuss-*,
- * /proc/meminfo, the battery broadcast + power_supply for watts.
+ * /proc/meminfo, the battery broadcast + power_supply for watts, the fan's PWM (gpio5_pwm2).
  */
 class HwStats(private val ctx: Context) {
     private var lastIdle = 0L
@@ -62,6 +64,11 @@ class HwStats(private val ctx: Context) {
         val uA = read("/sys/class/power_supply/battery/current_now")?.toLongOrNull()
         val uV = read("/sys/class/power_supply/battery/voltage_now")?.toLongOrNull()
         val watts = if (uA != null && uV != null) kotlin.math.abs(uA * uV / 1e12f) else null
+        // build 18 (GitHub #89): the fan's PWM, world-readable (no root). `speed` is NOT read: it's the speed AYN asked
+        // for (written on a mode change), not a tachometer — duty ÷ period is what drives the fan now
+        val duty = read("$FAN/duty")?.toLongOrNull()
+        val period = read("$FAN/period")?.toLongOrNull()?.takeIf { it > 0 } ?: FAN_PERIOD
+        val fanPct = duty?.let { it * 100 / period }?.takeIf { it in 0L..100L }?.toInt()
         return HwSnapshot(
             cpuLoad = load, cpuGhz = ghz, cpuTemp = maxTemp(cpuZones),
             gpuLoad = read("/sys/class/kgsl/kgsl-3d0/gpu_busy_percentage")?.substringBefore(' ')?.trim()?.toIntOrNull(),
@@ -69,7 +76,13 @@ class HwStats(private val ctx: Context) {
             gpuTemp = maxTemp(gpuZones),
             ramUsedGb = if (total != null && avail != null) total - avail else null, ramTotalGb = total,
             battery = level, batteryTemp = b?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1)?.takeIf { it > 0 }?.let { it / 10f },
-            watts = watts, charging = charging,
+            watts = watts, charging = charging, fanPct = fanPct,
         )
+    }
+
+    private companion object {
+        const val FAN = "/sys/class/gpio5_pwm2"
+        /** The PWM period read on a Thor (2026-10-07): full duty, if `period` can't be read. */
+        const val FAN_PERIOD = 50_000L
     }
 }

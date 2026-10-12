@@ -8,13 +8,14 @@ import androidx.compose.runtime.mutableStateListOf
 /**
  * Round 8 (2026-09-25): the quick panel's cards — which ones show, in which order — arranged in its
  * edit mode (the pencil), next to the shortcut tiles. Two are widgets you add: live details
- * (temperatures, clocks, battery time left) and media controls. Stored in thor_panel as
- * `id:1,id:0,…` (1 = shown); unknown ids are dropped, missing ones added hidden at the end.
+ * (temperatures, clocks, battery time left; build 18: power, fan, memory) and media controls. Stored in thor_panel as
+ * `id:1,id:0,…` (1 = shown); unknown ids are dropped, missing ones added hidden at the end. Build 18 (E10, V04): "now" is named
+ * "This app's settings" (its id kept) — "Now playing" sat under the media card's "Nothing playing".
  */
 object PanelCards {
     val NAMES = linkedMapOf(
-        "now" to "Now playing", "screens" to "Screen modes", "levels" to "Brightness and volume",
-        "details" to "Details — temperatures, clocks, battery time", "media" to "Media — what's playing",
+        "now" to "This app's settings", "screens" to "Screen modes", "levels" to "Brightness and volume",
+        "details" to "Details — temperatures, clocks, power, fan, memory", "media" to "Media — what's playing",
         "tiles" to "Shortcuts",
     )
     private val DEFAULT = listOf("now" to true, "screens" to true, "levels" to true, "details" to false, "media" to false, "tiles" to true)

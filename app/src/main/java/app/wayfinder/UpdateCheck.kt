@@ -73,7 +73,9 @@ object UpdateCheck {
         }.apply { isDaemon = true }.start()
     }
 
-    /** "1.10" > "1.9", "1.3.1" > "1.3"; anything after a '-' is ignored. */
+    /** "1.10" > "1.9", "1.3.1" > "1.3". 1.5-beta1: a pre-release ("1.5-beta1") is newer than 1.4.x and OLDER than its
+     *  release ("1.5"), so a beta tells its user when the release is out; two pre-releases of one version by their
+     *  number ("beta2" > "beta1"). GitHub's releases/latest never returns a pre-release: 1.4.x is never offered a beta. */
     fun newer(a: String, b: String): Boolean {
         fun parts(v: String) = v.substringBefore('-').split('.').map { it.toIntOrNull() ?: 0 }
         val x = parts(a); val y = parts(b)
@@ -81,6 +83,11 @@ object UpdateCheck {
             val d = x.getOrElse(i) { 0 } - y.getOrElse(i) { 0 }
             if (d != 0) return d > 0
         }
-        return false
+        val sa = a.substringAfter('-', ""); val sb = b.substringAfter('-', "")
+        if (sa.isEmpty() || sb.isEmpty()) return sa.isEmpty() && sb.isNotEmpty()     // the release beats its pre-release
+        val wa = sa.takeWhile { !it.isDigit() }.lowercase(); val wb = sb.takeWhile { !it.isDigit() }.lowercase()
+        if (wa != wb) return wa > wb                                                     // alpha < beta < rc
+        fun num(s: String) = s.dropWhile { !it.isDigit() }.takeWhile { it.isDigit() }.toIntOrNull() ?: 0
+        return num(sa) > num(sb)
     }
 }
