@@ -9,6 +9,7 @@ press away — all without leaving your game.
 <b><a href="https://github.com/Thor-Wayfinder/thor-wayfinder/wiki">📖 How to use it (wiki)</a></b> ·
 <a href="CHANGELOG.md">What's new</a> ·
 <a href="https://github.com/Thor-Wayfinder/thor-wayfinder/issues">Report a bug</a> ·
+<a href="https://github.com/Thor-Wayfinder/thor-wayfinder/discussions/categories/ideas">Suggest an idea</a> ·
 <a href="https://ko-fi.com/thorwayfinder">☕ Support on Ko-fi</a>
 </p>
 
@@ -351,8 +352,8 @@ the libraries built into the app — see
 [THIRD_PARTY_NOTICES.txt](app/src/main/assets/THIRD_PARTY_NOTICES.txt) (also in the app: Help & status →
 Open-source licenses).
 
-Contributions: pull requests aren't accepted (the license doesn't allow changes to the code) — bug reports
-and ideas are welcome as issues.
+Contributions: pull requests aren't accepted (the license doesn't allow changes to the code). Bug reports are
+welcome as [issues](https://github.com/Thor-Wayfinder/thor-wayfinder/issues), and ideas in [Discussions](https://github.com/Thor-Wayfinder/thor-wayfinder/discussions/categories/ideas).
 
 </details>
 
@@ -362,4 +363,4 @@ Wayfinder is made by one person. It's free; if it makes your Thor better, you ca
 
 [![Support me on Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/thorwayfinder)
 
-Questions and bug reports: open an issue.
+Bug reports: [open an issue](https://github.com/Thor-Wayfinder/thor-wayfinder/issues). Ideas and questions: [Discussions](https://github.com/Thor-Wayfinder/thor-wayfinder/discussions).

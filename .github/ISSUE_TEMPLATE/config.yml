@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Suggest an idea
+    url: https://github.com/Thor-Wayfinder/thor-wayfinder/discussions/categories/ideas
+    about: Ideas and feature requests go in Discussions, where others can upvote them.
+  - name: Ask a question
+    url: https://github.com/Thor-Wayfinder/thor-wayfinder/discussions/categories/q-a
+    about: Questions about using Wayfinder.
