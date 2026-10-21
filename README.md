@@ -15,7 +15,7 @@ press away — all without leaving your game.
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 > [!TIP]
-> **Try the 1.5 beta:** Bluetooth and USB controllers, Game controls for each one, and more — [1.5-beta1 pre-release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/tag/v1.5-beta1). 1.4.1 stays the recommended version.
+> **Try the 1.5 beta:** Bluetooth and USB controllers, Game controls for each one, and more in the [1.5-beta1 pre-release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/tag/v1.5-beta1). 1.4.1 stays the recommended version.
 
 > [!NOTE]
 > **ClusterTune, Pulse, SleepManager and other Thor apps:** Since 1.4, Wayfinder leaves the CPU to ClusterTune and Pulse, so they can stay installed together. With SleepManager, Wayfinder's sleep actions and lid guard stay off unless you turn them on. And if another app does the same job as a part of Wayfinder (Mjolnir, BiFrost, OdinTools), the Hub tells you what to do. If ClusterTune and Wayfinder gave you trouble before, restart your Thor once after updating.
