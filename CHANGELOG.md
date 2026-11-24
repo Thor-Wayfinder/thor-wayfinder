@@ -22,7 +22,7 @@ Wayfinder's settings go with it: make a backup first (More › Help & status ›
   single tap waits 0.3 s to see if a second one comes.
 - **Button colours** (#134): Appearance › Button colours: Coloured (as before), One colour, or your own colours for A,
   B, X and Y.
-- **Quick panel on the TV** (#139): docked, the quick panel opens on the screen the TV shows, and any combo can open it.
+- **Quick panel on the TV** (#139): docked, the quick panel opens on the screen the TV shows, from the AYN button or a combo set to Quick panel.
 - Wayfinder Keyboard: hold L2 for capitals while the controller types (a tap is Shift, as before); "Number row above the
   letters" (Keyboard page, off by default); by touch, hold a key and let go to type its number or its first option.
 - Help & status: "Clear the Guide's site data" removes what guide sites saved (sign-ins, cookie choices, site checks),
