@@ -230,14 +230,18 @@ object Say {
         ControlsStore.triggerFor(action), look,
         aynTap = AppSettings.aynButtonOurs && AppSettings.aynTap == action,
         aynHold = AppSettings.aynButtonOurs && AppSettings.aynHold == action,
-        gesture = AppSettings.gestureBlankMode.takeIf { action == ThorAction.TOGGLE_SECOND_SCREEN })
+        gesture = AppSettings.gestureBlankMode.takeIf { action == ThorAction.TOGGLE_SECOND_SCREEN },
+        aynDouble = AppSettings.aynButtonOurs && AppSettings.aynDouble == action)   // 1.5-beta2 (Q8)
 
-    /** Pure ([howTo], SearchIndexTest): [trigger] its combo, [aynTap] / [aynHold] the AYN button's, [gesture] the 3 fingers. */
-    fun howToOf(trigger: Trigger?, look: PadLook, aynTap: Boolean = false, aynHold: Boolean = false, gesture: BlankGesture? = null): String? =
+    /** Pure ([howTo], SearchIndexTest): [trigger] its combo, [aynTap] / [aynHold] the AYN button's, [gesture] the 3 fingers.
+     *  1.5-beta2 (Q8, GitHub #51): [aynDouble] its double tap ("AYN double-tap"). */
+    fun howToOf(trigger: Trigger?, look: PadLook, aynTap: Boolean = false, aynHold: Boolean = false, gesture: BlankGesture? = null,
+                aynDouble: Boolean = false): String? =
         listOfNotNull(
             trigger?.let { of(it, look) },
             btn(ThorButton.AYN, look).takeIf { aynTap },
             "${btn(ThorButton.AYN, look)} hold".takeIf { aynHold },
+            "${btn(ThorButton.AYN, look)} ${Press.DOUBLE_TAP.label}".takeIf { aynDouble },
             when (gesture) { BlankGesture.TAP -> "3-finger tap"; BlankGesture.SWIPE -> "3-finger swipe down"; else -> null },
         ).joinToString(" · ").ifEmpty { null }
 
@@ -414,6 +418,24 @@ object CtlWords {
         if (on) "On: a controller you connect for the first time plays as the Thor's controller — games keep seeing only " +
             "the Thor's, so nothing needs setting up again. One connected before keeps its own switch, on its page."
         else "Off: a new controller is its own player."
+    /** 1.5-beta2 (GitHub #102): Help & status › Troubleshooting's "A game sees two controllers" answer. Some games list
+     *  AYN's hidden controller beside Wayfinder's copy (they skip Android's enabled check) and keep a player by Android's
+     *  id for it, so their player 1 can be the silent one; choosing the copy there fixes it (the reporter's swap did).
+     *  (b2: words only then; impl102 below takes it out of Android's list.) [name]
+     *  the name option's path (with it on, the copy is told apart). Its first sentence shows on the card. b2 (review): the
+     *  name option's own cost, as its card says it (it is off by default for that), and that it turns off again; "Buttons
+     *  act twice" is a question of its own again, its row opening Where Game controls work (Hub.kt).
+     *  1.5-beta2 (GitHub #102, impl102): the input layer now takes AYN's pad out of Android's list while it runs (PadPark,
+     *  fx/wfpark.h), so games see one Odin Controller; a game that saved AYN's as its player 1 may still show two (the
+     *  layer could not set it aside) or none as player 1 (GameNative keeps a player's slot for a controller it knew):
+     *  choosing the copy once fixes it for good. Repair (review): the card shows the first sentence only, so it is what to
+     *  do (it said "games list only Wayfinder's copy" under "A game sees two controllers": it denied what the user sees, and
+     *  the layer can't set AYN's pad aside every time: docked, refused); the fact comes second, with "usually". */
+    fun twoListed(name: String): String =
+        "If a game shows two controllers, or nothing as its player 1, choose Wayfinder's copy as its player 1 once. " +
+            "While Game controls run, games usually list only Wayfinder's copy of the controller, not AYN's. To tell them apart, turn on $name: " +
+            "the copy then shows as “Odin Controller (Wayfinder)”. While it is on, some emulators may ask you to set up " +
+            "their buttons again. You can turn it off again after."
 
     // ── build 18 round 2 (C9): a connected controller's Home, said by what it does ──
     // [home] is Vocab.name(ThorButton.HOME, its look): its own name ("PS", "Xbox button", "Capture"), the plain "Home" (a
@@ -439,12 +461,35 @@ object CtlWords {
     /** The status header's Home part: "PS: Home, hold for combos"; a Home named Home — "Home: goes home, hold for combos";
      *  a Home-less controller's — "hold Select + Start: your combos" (device pass C: it is only held, never Home on its own,
      *  and "hold" is said once — as the Thor's "hold Home: your combos"). */
-    private fun homeStatus(home: String, ours: Boolean): String = when {
+    private fun homeStatus(home: String, ours: Boolean, tap: Boolean = false): String = when {
         !ours -> "${bare(home)} goes to the game"
         standIn(home) -> "${Say.hold(home)}: your combos"
+        tap -> "$home: tap for the game, hold for combos"                          // b19 (H7): Game + combos
         plainHome(home) -> "$home: goes home, hold for combos"
         else -> "$home: Home, hold for combos"
     }
+
+    // ── b19 (H7, ps-F9): a controller with a Home button of its own has three choices, not the switch ──
+    /** Its choices, in [ExtRules.HomeRole]'s order: today's switch on, the new one, today's switch off. */
+    val HOME_ROLES = listOf("Home", "Game + combos", "Game only")
+    /** A line for each choice while the controller is on it (GlassSegmentedControl's hints). */
+    val HOME_ROLE_HINTS = listOf("a tap goes home, hold it for your combos", "a tap goes to the game, hold it for your combos",
+        "every press goes to the game, no combos on it")
+    /** Its card's title, 5 words at most ("What PS does"): "What Capture does", "What Home does"; a name that ends in
+     *  "button" takes "the" ("What the Xbox button does"). */
+    fun roleTitle(home: String): String = bare(home).let { "What ${if (it.endsWith(" button")) "the $it" else it} does" }
+    /** Its card's line, what a tap and a hold do now ([combos] as [homeLine]'s: " (PS + △: Game controls, …)" or ""). */
+    internal fun roleLine(home: String, role: ExtRules.HomeRole, combos: String): String = when (role) {
+        ExtRules.HomeRole.HOME -> homeLine(home, on = true, combos = combos)
+        ExtRules.HomeRole.SPLIT -> "A tap goes to the game (emulators' menu); ${Say.hold(home)} for your combos$combos."
+        ExtRules.HomeRole.GAME -> "${bare(home)} goes to the game (emulators' menu). Your combos stay on the Thor's Home."
+    }
+    /** Its card's "?": why the combos need one of the first two, and Android's own fallback (AOSP's Generic.kcm turns a
+     *  MODE nobody reads into HOME). */
+    const val ROLE_MORE = "Wayfinder's combos need Home or Game + combos; the Thor's own Home always works. If the game " +
+        "doesn't use this button, Android takes a tap as Home."
+    /** Game + combos while it plays as the Thor's controller (docked or by its switch): its Home is the Thor's Home then. */
+    const val roleSeat = "It plays as the Thor's controller now: a tap goes home, as on the Thor."
 
     /** Theme H's status header: "player 2 · PS: Home, hold for combos · touchpad click: Back · PS + △: Game controls" —
      *  its Home, Back and Game controls in its own symbols; docked, as the Thor's controller. Build 18 (C9, VD-27 / ps-F8):
@@ -466,7 +511,7 @@ object CtlWords {
             else player(s.player),
             // dev build 18f2: while a new order waits for a game, what that number becomes
             s.after?.takeIf { s.player > 0 && !s.docked },
-            s.home?.let { homeStatus(it, s.homeOurs) },
+            s.home?.let { homeStatus(it, s.homeOurs, s.homeTap) },
             s.back?.let { "$it: Back" },
             s.gameControls?.let { it + (if (s.gcOnThor) " on the Thor" else "") + ": Game controls" }).joinToString(" · ")
     }
@@ -484,4 +529,42 @@ internal object LightsWords {
     const val LOCKED = "Stick lights found, but this system doesn't let Wayfinder change them. " +
         "Your system's own light settings aren't affected."
     const val LOCKED_ROW = "This system doesn't let Wayfinder change them"
+}
+
+/** b19 (H1a): Keyboard & mouse with the controller ([app.wayfinder.deck.DeckHold]) — its words, the buttons in the names of
+ *  the controller it holds (the Thor's, or one playing as it: [ButtonNames.lookOfSrc] 0). */
+internal object DeckWords {
+    /** The footer's chip that gives it the controller. */
+    const val USE = "Use the controller here"
+    /** The header while it holds the controller: "B back to the game · Home + Y closes" ([back]: the button doing Back's job,
+     *  [combo]: Keyboard & mouse's combo, null = none). */
+    fun heldHeader(back: String, combo: String?): String = "$back back to the game" + (combo?.let { " · $it closes" } ?: "")
+    /** The pill as it takes the controller ([back] as in [heldHeader]). */
+    fun took(back: String): String = "Keyboard & mouse has the controller. $back gives it back"
+    /** The pill when the controller went back by itself (Game controls stopped or started again). */
+    const val BACK_WITH_GAME = "The controller is back with the game"
+    /** Why it can't take the controller: [appName] the app its keys go to, [name] the controller that asked. */
+    fun cant(why: app.wayfinder.deck.DeckHoldRules.CantHold, appName: String?, name: String?): String = when (why) {
+        app.wayfinder.deck.DeckHoldRules.CantHold.GUIDE -> "The guide is touch-only"
+        app.wayfinder.deck.DeckHoldRules.CantHold.OWN_PLAYER ->
+            "${name ?: "That controller"} stays with the game. The Thor's controller drives Keyboard & mouse"
+        app.wayfinder.deck.DeckHoldRules.CantHold.WAYFINDER -> "Wayfinder already works with the controller"
+        // b2 (review): no app name (a launcher there: "Sending to: the other screen") says the same place as the footer
+        app.wayfinder.deck.DeckHoldRules.CantHold.LAYER_OFF -> "Game controls are off ${appName?.let { "in $it" } ?: "on the other screen"}, so Keyboard & mouse stays touch-only"
+    }
+}
+
+/** 1.5-beta2 (GitHub #134): Appearance's Button colours — its choices, in [app.wayfinder.ui.ButtonColours]' order, and the
+ *  card's line for each (what it does now). */
+internal object ButtonColourWords {
+    val CHOICES = listOf("Coloured", "One colour", "Your own")
+    /** The card's line while [mode] is chosen (the first sentence shown, the rest behind "?"). */
+    fun line(mode: Int): String = when (mode) {
+        app.wayfinder.ui.ButtonColours.ONE -> "Face buttons in the text colour, like the other buttons."
+        app.wayfinder.ui.ButtonColours.OWN -> "Pick a colour for each face button. Its letter or mark stays readable on it. " +
+            "A colour goes with its letter or mark, wherever the button names put it."
+        else -> "Face buttons in colour, as on an Xbox or PlayStation controller."
+    }
+    const val RESET = "Reset button colours"
+    const val RESET_CONFIRM = "Press again to reset the four colours"
 }

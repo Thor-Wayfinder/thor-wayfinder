@@ -339,6 +339,8 @@ internal fun GameControls(myDisplayId: Int, pkg: String, onBack: () -> Unit, inG
     var recording by remember { mutableStateOf(false) }
     var chordListen by remember { mutableStateOf(false) }
     var chordPair by remember { mutableStateOf(listOf<ThorButton>()) }
+    // 1.5-beta2 (Q11): the shift button pressed for a new chord (refused); its line stays until the next new chord
+    var chordRefused by remember { mutableStateOf<ThorButton?>(null) }
     val recDown = remember { HashMap<ThorButton, Long>() }
     var recLastUp by remember { mutableStateOf(0L) }
     val mapFocus = remember { FocusRequester() }
@@ -419,7 +421,7 @@ internal fun GameControls(myDisplayId: Int, pkg: String, onBack: () -> Unit, inG
         if (popup != Popup.MORE) moreParts = false
         // 1.4 (review): Chords / the bind popup closed (to More too) — no capture left running, no half-picked pair
         if (popup != Popup.BIND && popup != Popup.GYRO) { listening = false; recording = false }
-        if (popup != Popup.CHORDS) { chordListen = false; chordPair = emptyList() }
+        if (popup != Popup.CHORDS) { chordListen = false; chordPair = emptyList(); chordRefused = null }
     }
     // dev build 16 (WP6): the shown controller changed under an open popup or a capture (it left; the helper restarted) —
     // closed, so no change ever goes to another controller than the one whose tab was open
@@ -570,6 +572,8 @@ internal fun GameControls(myDisplayId: Int, pkg: String, onBack: () -> Unit, inG
             if (!down) return@startCapture
             if (chordListen) {                                   // a new chord's two buttons
                 if (b == ThorButton.HOME) { chordListen = false; chordPair = emptyList() }
+                // 1.5-beta2 (Q11): never the shift button (its chord could never fire): refused, the popup says why
+                else if (ShiftRules.refusedInChord(b, fresh().shift)) chordRefused = b
                 else if (b in PadRemap.BUTTONS && b !in chordPair) { chordPair = chordPair + b; if (chordPair.size == 2) chordListen = false }
                 return@startCapture
             }
@@ -599,7 +603,7 @@ internal fun GameControls(myDisplayId: Int, pkg: String, onBack: () -> Unit, inG
     LaunchedEffect(picking) { if (picking) { delay(6000); picking = false } }
     LaunchedEffect(listening) { if (listening) { delay(8000); listening = false } }
     LaunchedEffect(recording) { if (recording) { recLastUp = 0L; recDown.clear(); delay(15000); recording = false } }
-    LaunchedEffect(chordListen) { if (chordListen) { chordPair = emptyList(); delay(8000); chordListen = false } }
+    LaunchedEffect(chordListen) { if (chordListen) { chordPair = emptyList(); chordRefused = null; delay(8000); chordListen = false } }
 
     /** Everything behind the popup is out of the controller's reach while it's open. */
     val behind = Modifier.focusProperties { canFocus = !open }
@@ -949,7 +953,7 @@ internal fun GameControls(myDisplayId: Int, pkg: String, onBack: () -> Unit, inG
                             dir = dirSel, stickPad = tab.takeIf { it.key != null }, canReset = !nothingHere(), note = resetNote)
                         Popup.APPS -> AppsPanel(baseKey, appLabel, popupFirst, onPick = { popup = null; if (it != baseKey) onSwitchApp(it) },
                             onAll = { leavingFromPopup(); popup = null; onAllApps() }) { popup = null }
-                        Popup.CHORDS -> ChordsPanel(remap, popupFirst, chordListen, chordPair, onListen = { chordListen = !chordListen },
+                        Popup.CHORDS -> ChordsPanel(remap, popupFirst, chordListen, chordPair, chordRefused, onListen = { chordListen = !chordListen },
                             onDone = { chordPair = emptyList(); chordListen = false }, save = ::save) { popup = Popup.MORE }
                         Popup.DPAD -> DpadPopup(remap, popupFirst, ::save, focusDir = lastDir,
                             onEdit = { d -> dirSel = d; bindTab = Tab.CONTROLLER; slot = 0; popup = Popup.BIND }) { popup = null }
@@ -1019,7 +1023,8 @@ private fun BindPopup(
         // the title further from the Close pill (its hint is a button badge too); Reset only with something to reset (gd-D16)
         ModalHeader(if (onShift) "$title with ${shiftBtn!!.spoken(look)} held" else if (onAlt) "$title — ${fire.label.lowercase()}"
             else if (stickJob != null) title else "$title becomes", close, closeLabel = if (dir != null) "Back" else "Close", closeVisible = !listening,
-            status = if (stickJob != null && !onAlt && !onShift) "Now: ${stickJob.summary.lowercase()} · click → ${cur?.short(look) ?: src.label(look)}"
+            // b19 (GitHub #96): "Now: left stick · click → Select" for a right stick that works as the left one
+            status = if (stickJob != null && !onAlt && !onShift) "Now: ${(remap.asOtherName(if (src == ThorButton.L3) 0 else 1) ?: stickJob.summary).lowercase()} · click → ${cur?.short(look) ?: src.label(look)}"
                 else if (cur == null) (if (onAlt || onShift) "Now: nothing yet" else "Now: as usual") else "Now: ${cur.short(look)}",
             leading = { Spacer(Modifier.width(0.dp)) }) {
             ResetOrNote(listening, canReset, note, reset, resetAsk, first)
@@ -1063,8 +1068,9 @@ private fun BindPopup(
         if (tab != Tab.KEYBOARD && tab != Tab.MACRO) Row(rest, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             FieldLabel(if (src == ThorButton.L3 || src == ThorButton.R3) "Its click fires" else "How it fires", Modifier.width(84.dp))
             // dev build 17 (WP8): the segmented look, the captions under the names
+            // 1.5-beta2 (Q11): the shift button's own page offers Normal and Double only ([ShiftRules.fires])
             val fires = listOf(Fire.NORMAL to "one press", Fire.TURBO to "rapid presses", Fire.TOGGLE to "stays on",
-                Fire.LONG to "hold = 2nd action", Fire.DOUBLE to "twice = 2nd action")
+                Fire.LONG to "hold = 2nd action", Fire.DOUBLE to "twice = 2nd action").filter { it.first in ShiftRules.fires(src == remap.shift) }
             GlassSegmentedControl(fires.map { it.first.label }, fires.indexOfFirst { it.first == fire }, Modifier.weight(1f),
                 collapse = false, captions = fires.map { it.second }) { i ->
                 val f = fires[i].first
@@ -1073,6 +1079,8 @@ private fun BindPopup(
                 onSlot(if (f.hasAlt) 1 else 0)
             }
         }
+        // 1.5-beta2 (Q11): why only two, and a way it fires that it no longer offers (set before it became the shift)
+        if (tab != Tab.KEYBOARD && tab != Tab.MACRO && src == remap.shift) Caption(ShiftRules.firesLine(remap.fire[src]), rest)
     }
 }
 
@@ -1099,19 +1107,23 @@ private fun ControllerTab(src: ThorButton, cur: RemapTarget?, listening: Boolean
     val stick = src == ThorButton.L3 || src == ThorButton.R3
     Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (stick) Column(rest, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // b19 (GitHub #96): while this stick works as the other one, its inverts and swap do nothing: hidden (its shape stays,
+            // its drift is its own). On the other stick's page a line says its inverts apply to both. Swap on ends the merge
             if (src == ThorButton.L3) {
-                StickJobRows(remap.jobL, first) { save(remap.copy(jobL = it)) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StickJobRows(remap, 0, first, save)
+                if (!remap.asOther(0)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     GlassSwitchRow("Invert up / down", remap.invertLeftY, { save(remap.copy(invertLeftY = it)) }, Modifier.weight(1f), compact = true)
                     GlassSwitchRow("Invert left / right", remap.invertLeftX, { save(remap.copy(invertLeftX = it)) }, Modifier.weight(1f), compact = true)
-                    GlassSwitchRow("Swap with the right stick", remap.swapSticks, { save(remap.copy(swapSticks = it)) }, Modifier.weight(1f), compact = true) }
+                    GlassSwitchRow("Swap with the right stick", remap.swapSticks, { save(remap.withSwap(it)) }, Modifier.weight(1f), compact = true) }
+                if (remap.asOther(1)) Caption("The right stick also moves the game's left stick: these inverts apply to both.")
                 StickShapeRows(remap.stickL, stickPad) { save(remap.copy(stickL = it)) }
             } else {
-                StickJobRows(remap.jobR, first) { save(remap.copy(jobR = it)) }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StickJobRows(remap, 1, first, save)
+                if (!remap.asOther(1)) Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     GlassSwitchRow("Invert up / down", remap.invertRightY, { save(remap.copy(invertRightY = it)) }, Modifier.weight(1f), compact = true)
                     GlassSwitchRow("Invert left / right", remap.invertRightX, { save(remap.copy(invertRightX = it)) }, Modifier.weight(1f), compact = true)
-                    GlassSwitchRow("Swap with the left stick", remap.swapSticks, { save(remap.copy(swapSticks = it)) }, Modifier.weight(1f), compact = true) }
+                    GlassSwitchRow("Swap with the left stick", remap.swapSticks, { save(remap.withSwap(it)) }, Modifier.weight(1f), compact = true) }
+                if (remap.asOther(0)) Caption("The left stick also moves the game's right stick: these inverts apply to both.")
                 StickShapeRows(remap.stickR, stickPad) { save(remap.copy(stickR = it)) }
             }
             Spacer(Modifier.height(6.dp))
@@ -1248,15 +1260,25 @@ private fun DirArm(d: ThorButton, remap: PadRemap, modifier: Modifier, focus: Fo
     }
 }
 
-/** 1.3 — a stick's job: itself, or the mouse / wheel / 4 keys (Wayfinder plays it; the game sees it centred). */
+/** 1.3 — a stick's job: itself, or the mouse / wheel / 4 keys (Wayfinder plays it; the game sees it centred). b19 (GitHub
+ *  #96): or, second, the other stick ("Left stick" on the right stick's page, [side] 1): both sticks then move that one of
+ *  the game's, the one pushed further wins ([PadRemap.withAsOther]). Five choices: the control's tight look. */
 @Composable
-private fun StickJobRows(j: StickJob, first: FocusRequester? = null, set: (StickJob) -> Unit) {
+private fun StickJobRows(remap: PadRemap, side: Int, first: FocusRequester? = null, save: (PadRemap) -> Unit) {
     FieldLabel("What the stick does")
+    val j = if (side == 0) remap.jobL else remap.jobR
+    val set = { job: StickJob -> save(remap.withStickJob(side, job)) }
     val uses = StickUse.values()
-    GlassSegmentedControl(uses.map { it.label }, uses.indexOf(j.use), Modifier.fillMaxWidth(), collapse = false,
-        captions = uses.map { it.caption }, focusRequester = first) { i ->
-        val u = uses[i]
-        set(if (u == StickUse.STICK) StickJob() else j.copy(use = u))
+    val other = if (side == 1) "left" else "right"
+    val merged = remap.asOther(side)
+    GlassSegmentedControl(listOf(uses[0].label, PadRemap.STICK_NAMES[1 - side]) + uses.drop(1).map { it.label },
+        if (merged) 1 else uses.indexOf(j.use).let { if (it == 0) 0 else it + 1 }, Modifier.fillMaxWidth(), collapse = false,
+        captions = listOf(uses[0].caption, "like the $other one") + uses.drop(1).map { it.caption }, focusRequester = first) { i ->
+        when (i) {
+            0 -> set(StickJob())
+            1 -> save(remap.withAsOther(side, true))
+            else -> set(j.copy(use = uses[i - 1]))
+        }
     }
     when (j.use) {
         // b18h: Pointer speed is one name and one scale (Say.POINTER_SPEED; the trackpad's is the same curve, PointerSpeed)
@@ -1266,6 +1288,8 @@ private fun StickJobRows(j: StickJob, first: FocusRequester? = null, set: (Stick
             captions = listOf("↑ ↓ ← →", "PC games")) { set(j.copy(wasd = it == 1)) }
         StickUse.STICK -> {}
     }
+    // b19 (GitHub #96): the game's other stick rests (a game that also uses it loses it: the caption says where it goes)
+    if (merged) Caption("Both sticks move the game's $other stick; the one pushed further wins. Invert it on the $other stick's page.")
     // build 18 (GC4): 20 words at most (PageWordsTest) — "the one set below if bigger" is the deadzone row's own line
     if (!j.isDefault) Caption("The game no longer sees this stick. It acts past its deadzone only (at least 10 %): drift moves nothing.")
 }
@@ -1308,6 +1332,8 @@ private fun ChangesPanel(remap: PadRemap, first: FocusRequester, save: (PadRemap
         remap.pads.forEach { (c, d) -> ChangeRow("${partName(c, look)}  →  ${remap.partTarget(c)?.short(look) ?: PadRemap.PAD_PARTS[d] ?: "?"}") { save(remap.withPart(c, null)) } }
         remap.padFire.forEach { (c, _) -> remap.partFire(c)?.let { f -> ChangeRow("${partName(c, look)}  fires: ${f.label.lowercase()}") { save(remap.withPartFire(c, null)) } } }
         if (remap.swapSticks) ChangeRow("Sticks swapped") { save(remap.copy(swapSticks = false)) }
+        // b19 (GitHub #96): "Right stick  →  Left stick" (its remove: each stick its own again)
+        for (side in 0..1) remap.asOtherName(side)?.let { to -> ChangeRow("${PadRemap.STICK_NAMES[side]}  →  $to") { save(remap.withAsOther(side, false)) } }
         if (remap.invertLeftY) ChangeRow("Left stick inverted") { save(remap.copy(invertLeftY = false)) }
         if (remap.invertRightY) ChangeRow("Right stick inverted") { save(remap.copy(invertRightY = false)) }
         if (remap.invertLeftX) ChangeRow("Left stick: left / right inverted") { save(remap.copy(invertLeftX = false)) }
@@ -1345,7 +1371,7 @@ private fun PresetsPanel(pkg: String, remap: PadRemap, first: FocusRequester, sa
         // was "Swap A ↔ B and X ↔ Y" as four remaps: the same thing as the face-button switch,
         // under a second name — now it IS that switch (naming pass 2026-09-25)
         GlassButton(words.face, { xboxFace(); onClose() }, Modifier.fillMaxWidth(), size = ButtonSize.COMPACT, focusRequester = first)
-        GlassButton("Swap the sticks", { save(remap.copy(swapSticks = true)); onClose() }, Modifier.fillMaxWidth(), size = ButtonSize.COMPACT)
+        GlassButton("Swap the sticks", { save(remap.withSwap(true)); onClose() }, Modifier.fillMaxWidth(), size = ButtonSize.COMPACT)
         // round 8: emulator hotkeys — only what each emulator does BY DEFAULT on
         // Android (researched with sources 2026-09-25: RetroArch's keyboard table; the others only open
         // their menu with Back). Chords: Select held + a button; those two wait 60 ms before the game.
@@ -1368,7 +1394,8 @@ private fun PresetsPanel(pkg: String, remap: PadRemap, first: FocusRequester, sa
         FieldLabel("Web browsing and apps with a cursor")
         GlassButton(words.web, {
             // B → Android Back: Firefox keeps the pad's B for the web's gamepad API, so B did nothing there (1.3 test)
-            save(remap.copy(jobL = StickJob(StickUse.MOUSE), jobR = StickJob(StickUse.SCROLL),
+            // b19 (GitHub #96): both sticks get a job, so a merge from either ends ([PadRemap.withStickJob])
+            save(remap.withStickJob(0, StickJob(StickUse.MOUSE)).withStickJob(1, StickJob(StickUse.SCROLL)).copy(
                 buttons = remap.buttons + (ThorButton.A to RemapTarget.Mouse(0)) + (ThorButton.X to RemapTarget.Mouse(1)) +
                     (ThorButton.B to RemapTarget.Action(ThorAction.BACK)))); onClose()
         }, Modifier.fillMaxWidth(), size = ButtonSize.COMPACT)
@@ -1909,7 +1936,7 @@ private fun AppRow(pkg: String, current: Boolean, title: String? = null, changes
 // ── chords: two buttons together (phase 3) ────────────────────────────────────
 
 @Composable
-private fun ChordsPanel(remap: PadRemap, first: FocusRequester, listening: Boolean, pair: List<ThorButton>,
+private fun ChordsPanel(remap: PadRemap, first: FocusRequester, listening: Boolean, pair: List<ThorButton>, refused: ThorButton?,
                         onListen: () -> Unit, onDone: () -> Unit, save: (PadRemap) -> Unit, onClose: () -> Unit) {
     val g = LocalGlass.current
     val look = currentLook()
@@ -1927,7 +1954,9 @@ private fun ChordsPanel(remap: PadRemap, first: FocusRequester, listening: Boole
             "${Say.btn(ThorButton.SELECT, look)}). Those two then reach the game ${ExtEngine.CHORD_MS} ms late.")
         // dev build 17 (WP8, critique F7): the popup opens on its first chord (or "+ New chord"), not on Back
         Column(Modifier.focusRequester(first), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        remap.chords.forEach { c -> ChangeRow("${c.a.label(look)} + ${c.b.label(look)}   →   ${c.target.short(look)}") { save(remap.copy(chords = remap.chords - c)) } }
+        // 1.5-beta2 (Q11): one with the shift button (made before it became the shift) says it isn't played
+        remap.chords.forEach { c -> ChangeRow("${c.a.label(look)} + ${c.b.label(look)}   →   ${c.target.short(look)}" +
+            (if (ShiftRules.chordOff(c, remap.shift)) "   ·   " + ShiftRules.chordOffWords(remap.shift!!.spoken(look)) else "")) { save(remap.copy(chords = remap.chords - c)) } }
         if (pair.size == 2) {
             // the "+ New chord" button that had focus is gone now: focus goes to the first output
             // (nothing had it — the controller had to find its way back, review 2026-09-25)
@@ -1955,6 +1984,8 @@ private fun ChordsPanel(remap: PadRemap, first: FocusRequester, listening: Boole
                 }
             }
         } else Text("${PadRemap.MAX_CHORDS} chords at most — remove one to add another.", color = g.textSecondary, style = MaterialTheme.typography.labelMedium)
+        // 1.5-beta2 (Q11): the shift button was pressed for the new chord: refused, why
+        if (refused != null && pair.size < 2) Caption(ShiftRules.refusedLine(refused.spoken(look)))
         }
     }
 }
@@ -2313,9 +2344,9 @@ private fun MorePanel(remap: PadRemap, first: FocusRequester, m: MoreCtx, onPerf
         val opts = listOf<ThorButton?>(null) + PadRemap.SHIFTS
         GlassSegmentedControl(opts.map { it?.spoken(look) ?: "Off" }, opts.indexOf(remap.shift).coerceAtLeast(0), Modifier.fillMaxWidth(),
             collapse = false) { onShift(opts[it]) }
-        Caption(if (remap.shift == null) "Off: every button works as usual."
-            else "Hold ${remap.shift.spoken(look)}: buttons do only their “With ${remap.shift.spoken(look)} held” job (each button's page). " +
-                "${remap.shift.spoken(look)} alone reaches the game late.")
+        // 1.5-beta2 (Q11): alone, its own job when it has one (b19: Wayfinder plays it), else its tap, late (review: the
+        // whole line from ShiftRules, 20 words at most)
+        Caption(if (remap.shift == null) "Off: every button works as usual." else ShiftRules.caption(remap.shift, remap, look))
         // dev build 16 (WP6, critique m10): the parts only a connected controller has — what each becomes, how it fires (its
         // reader runs them; keys, actions and macros on them: build 17)
         if (m.parts.isNotEmpty()) {

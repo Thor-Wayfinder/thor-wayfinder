@@ -201,6 +201,28 @@ object ExtPadsCtl {
         InputMonitor.send("E home $key ${if (on) 1 else 0}")
         version.intValue++                                       // review H-STATUS-STALE-HOME: its page's header, its stand-ins, the words follow
     }
+    /** b19 (H7, ps-F9): [key]'s Home role ([ExtRules.homeRole]): Home (the default), Game + combos or Game only. [homeIsThors]
+     *  keeps meaning "its Home holds Wayfinder's combos": true for Home and Game + combos, so every older caller stays right. */
+    internal fun homeRole(ctx: Context, key: String): ExtRules.HomeRole {
+        init(ctx)
+        val pr = prefs ?: return ExtRules.HomeRole.HOME
+        val all = mapOf("homeg_$key" to pr.getBoolean("homeg_$key", false), "homet_$key" to pr.getBoolean("homet_$key", false))
+        return ExtRules.homeRole(all, key, pads.values.firstOrNull { it.key == key }?.mapping)
+    }
+    /** b19 (H7): its page's choice. Game only is today's switch off ("homeg_", "E home <key> 0"); Home and Game + combos are
+     *  its switch on, Game + combos with "homet_" too. Nothing new goes to its reader: the app decides where a tap goes. */
+    internal fun setHomeRole(ctx: Context, key: String, role: ExtRules.HomeRole) {
+        init(ctx)
+        prefs?.edit()?.apply { if (role == ExtRules.HomeRole.SPLIT) putBoolean("homet_$key", true) else remove("homet_$key") }?.apply()
+        setHomeIsThors(ctx, key, role != ExtRules.HomeRole.GAME)
+    }
+    /** b19 (H7): at a Home press of controller [src] (its source as its keys count: > 0, its own pad), whether its tap goes to
+     *  the game ([ExtRules.homeTapToGame]). [wayfinderOnTop] / [tour]: a Wayfinder window or the tour has the controller. */
+    fun homeTapsToGame(ctx: Context, src: Int, wayfinderOnTop: Boolean, tour: Boolean): Boolean {
+        if (src <= 0) return false
+        val pad = pads["hidraw${src - 1}"]?.takeIf { it.key.isNotEmpty() } ?: return false
+        return ExtRules.homeTapToGame(homeRole(ctx, pad.key), ExtRules.ownHome(pad.mapping), canPress(src), wayfinderOnTop, tour)
+    }
 
     /** Build 18 review (C): the controller being set up (its key; null: none) — learning, its presses answer the wizard and
      *  drive nothing else, so the hand's look names the Thor's keys while it is the hand ([ButtonNames.handLook]). Set by
@@ -244,13 +266,19 @@ object ExtPadsCtl {
         val style = appCtx?.let { padStyle(it, key) } ?: ButtonNames.thorStyle
         return PadLook(kind.print ?: style, outXbox(key), kind, pad?.pid?.toIntOrNull(16) ?: ControllerKind.pidOfKey(key),
             sideways = pad?.sideways == true && kind.single, noHome = pad?.noHome == true,
-            back = pad?.let { ownSpareName(it, "BK") }, ayn = pad?.let { ownSpareName(it, "AY") })
+            back = pad?.let { ownSpareName(it, "BK") }, ayn = pad?.let { ownSpareName(it, "AY") }, home = pad?.let { movedHome(it) })
     }
     /** Build 18 (A15): the name of [pad]'s own button that its mapping gives [target] ("BK" Back, "AY" AYN) — as [spares]'
      *  Own reads it (its field's [Vocab.spareName]); null = none of its own, or a field without a known name ([spares] says
      *  "its own button" there: in a combo the job's name, "Back", reads better). */
     private fun ownSpareName(pad: Pad, target: String): String? = ExtRules.mapTargets(pad.mapping)[target]?.let { f ->
-        runCatching { pad.fields.firstOrNull { it.idx == f } }.getOrNull()?.let { Vocab.spareName(it.page, it.usage) }
+        runCatching { pad.fields.firstOrNull { it.idx == f } }.getOrNull()?.let { Vocab.spareName(it.page, it.usage, pad.kind) }
+    }
+    /** 1.5-beta2 (GitHub #137): the name of the button [pad]'s mapping moved Home to ("touchpad click" after its PS took Back);
+     *  null = Home on its own Home button, or a field without a known name. */
+    private fun movedHome(pad: Pad): String? = ExtRules.mapTargets(pad.mapping)["HO"]?.let { f ->
+        runCatching { pad.fields.firstOrNull { it.idx == f } }.getOrNull()
+            ?.takeIf { !Vocab.homeField(it.page, it.usage, pad.kind) }?.let { Vocab.spareName(it.page, it.usage, pad.kind) }
     }
     /** Game controls' header on its tab: the positions it has in [gameKey] without a face of its own there. */
     fun usualXbox(key: String, gameKey: String): Boolean {
@@ -699,17 +727,18 @@ object ExtPadsCtl {
     fun standsIn(ctx: Context, src: Int, b: ThorButton): Boolean =
         standInsOf(ctx, src)?.let { if (b == ThorButton.BACK) it.back else b == ThorButton.AYN && it.ayn } == true
     /** Its Back and its AYN button — for its page, its status, the tour. */
-    data class Spares(val back: Say.Spare, val ayn: Say.Spare)
+    data class Spares(val back: Say.Spare, val ayn: Say.Spare, val home: String? = null)   // home: 1.5-beta2 (#137), [movedHome]
     fun spares(ctx: Context, pad: Pad): Spares {
         val t = ExtRules.mapTargets(pad.mapping)
         fun own(target: String): Say.Spare? = t[target]?.let { f ->
             val field = runCatching { pad.fields.firstOrNull { it.idx == f } }.getOrNull()
-            Say.Spare.Own(field?.let { Vocab.spareName(it.page, it.usage) } ?: "its own button")
+            Say.Spare.Own(field?.let { Vocab.spareName(it.page, it.usage, pad.kind) } ?: "its own button")
         }
         val si = ExtRules.standIns(pad.mapping, homeIsThors(ctx, pad.key))
         return Spares(
             own("BK") ?: if (si.back) Say.Spare.StandIn(Trigger(ThorButton.SELECT, modifier = ThorButton.HOME)) else Say.Spare.None,
-            own("AY") ?: if (si.ayn) Say.Spare.StandIn(Trigger(ThorButton.START, modifier = ThorButton.HOME)) else Say.Spare.None)
+            own("AY") ?: if (si.ayn) Say.Spare.StandIn(Trigger(ThorButton.START, modifier = ThorButton.HOME)) else Say.Spare.None,
+            movedHome(pad))
     }
     /** dev build 18f (review): [pad]'s Back is its touchpad's press ([ExtRules.backIsTouchClick]) — the touchpad card's words. */
     fun backIsTouchClick(pad: Pad): Boolean = ExtRules.backIsTouchClick(pad.mapping) { f ->
@@ -790,7 +819,7 @@ object ExtPadsCtl {
             e.putBoolean("seat_$key", true)
         // no unit: nothing of a kind to adopt (the key IS the kind's) — only its mark and its seat
         if (kind == null) { e.apply(); return }
-        for (pre in listOf("map_", "smap_", "side_", "gyro_", "own_", "homeg_", "sdz_")) {
+        for (pre in listOf("map_", "smap_", "side_", "gyro_", "own_", "homeg_", "homet_", "sdz_")) {
             val v = pr.all["$pre$kind"] ?: continue
             if (pr.contains("$pre$key")) continue
             when (v) { is String -> e.putString("$pre$key", v); is Boolean -> e.putBoolean("$pre$key", v) }

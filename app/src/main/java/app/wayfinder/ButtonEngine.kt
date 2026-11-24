@@ -54,6 +54,20 @@ class ButtonEngine(private val host: Host) {
         fun standsIn(src: Int, b: ThorButton): Boolean = false
         /** dev build 17: controller [src]'s AYN button pressed / let go (Home + Start standing in for it). */
         fun padAyn(src: Int, down: Boolean) {}
+        /** b19 (H7, ps-F9): controller [src]'s Home tap goes to the game this press — its Home is "Game + combos" and no
+         *  Wayfinder window or the tour has the controller ([ExtRules.homeTapToGame]). Asked once, at Home's press. */
+        fun homeTapToGame(src: Int): Boolean = false
+        /** b19 (H7): the game's PS / Guide tap on controller [src]'s own pad (its MODE pressed and let go), in place of
+         *  Android's Home ([nativePress]). */
+        fun gameHomeTap(src: Int) {}
+        /** b19 fix (H1a): controller [src]'s Home press goes to Android as it is (nothing of Wayfinder's owns it: the app's combos
+         *  are Off, or none of them is Home's). What a Home tap ends ([nativePress]) ends here too. */
+        fun homeUnowned(src: Int) {}
+        /** b19 (ps-F17): the Test page is in front with the controller ([PadTest]): Home, Back and the AYN button (and what a
+         *  reader withholds under a Home / Back the page took) only light up there. Asked at each first press ([taken]). */
+        fun testHolds(): Boolean = false
+        /** b19 (ps-F17): [b] of controller [src] pressed / let go, a press the Test page took ([testHolds]): lit there. */
+        fun testPress(b: ThorButton, down: Boolean, src: Int) {}
     }
 
     companion object {
@@ -108,6 +122,10 @@ class ButtonEngine(private val host: Host) {
         /** Device pass (P2-10): the AYN button's hold when it has combos — ForegroundAppService's AynPress waits its
          *  AYN_HOLD_MS (600) + 400 then ("time to press the combo's button"); the list must come before it. */
         const val AYN_COMBO_HOLD_MS = 1000L
+        /** 1.5-beta2 (Q1): the Guide tap's Mode held this long (~3 frames, as Back's replay) … */
+        const val GUIDE_TAP_MS = 60L
+        /** … and sent this long after the Home / Back it waited for is let go (the copy has read that release by then). */
+        const val GUIDE_AFTER_MS = 40L
     }
 
     /** Configurator capture mode: receives every press (button, down) and swallows keys. */
@@ -118,7 +136,12 @@ class ButtonEngine(private val host: Host) {
     private val lateKeys = LateKeyLog()
 
     // Per system button (Home/Back) tap state.
-    private class Taps { var count = 0; var holdFired = false; var resolve: Runnable? = null; var hold: Runnable? = null }
+    private class Taps {
+        var count = 0; var holdFired = false; var resolve: Runnable? = null; var hold: Runnable? = null
+        /** 1.5-beta2 (big test t5, F4): when this press went down (uptime) — how long it was held at its release
+         *  ([ChordRules.awayWait]) — and whether [resolve] is a counted tap only waiting in case its controller went away. */
+        var downAt = 0L; var awayWait = false
+    }
 
     /** One controller's presses (main thread only). dev build 14 (combos 5): with one held set for every controller,
      *  one player's Home and another player's X fired Game controls, and the X never reached that player's game. */
@@ -137,6 +160,9 @@ class ButtonEngine(private val host: Host) {
         /** Its Home now is a Home-less pad's Select + Start held (wfhid's "J 1 102 1"): a game's own combo as often as
          *  not — its release is never a Home tap (dev build 14, combos 10). Cleared at that Home's release. */
         var synthHome = false
+        /** b19 (H7, ps-F9): this Home press's tap goes to the game ([Host.homeTapToGame], read at its press): the press is
+         *  Wayfinder's even with nothing bound to Home, and an unbound tap is the game's MODE ([Host.gameHomeTap]). */
+        var homeToGame = false
         /** dev build 17 (theme G, D4): Select / Start held under its Home standing for its Back / AYN (what each stands
          *  for), till its release. */
         val standIns = HashMap<ThorButton, ThorButton>()
@@ -157,6 +183,26 @@ class ButtonEngine(private val host: Host) {
     }
     private val pads = HashMap<Int, Pad>()                 // by source (see the class header)
     private fun pad(src: Int) = pads.getOrPut(src) { Pad(src) }
+    /** b19 (ps-F17): the presses the Test page took ([Host.testHolds]), by source: none of them is in a [Pad] (no combo, tap,
+     *  hold, list or stand-in), and each release follows its press. Main thread. */
+    private val taken = PadTestRules.Taken()
+    /** 1.5-beta2 (big test t5, F4): the releases owed by controllers that went away ([gone]) while Wayfinder held presses of
+     *  theirs. Main thread. */
+    private val owedUps = OwedUps()
+
+    /** b19 (ps-F17): [b] (Home / Back) of [p]'s controller for the Test page — true = the page's press, or its release.
+     *  [first]: no key repeat (a first press decides again; a repeat follows its press). */
+    private fun testKey(p: Pad, b: ThorButton, down: Boolean, first: Boolean): Boolean {
+        if (down) {
+            if (!taken.press(p.src, b, first, host::testHolds)) return false
+            if (first) host.testPress(b, true, p.src)
+            return true
+        }
+        if (!taken.release(p.src, b)) return false
+        if (b == ThorButton.HOME) p.synthHome = false           // a Home-less pad's Select + Start Home: spent here
+        host.testPress(b, false, p.src)
+        return true
+    }
 
     /** dev build 16 (WP6): the controller (its counted source: 0 the Thor — a docked one playing as the Thor's too) whose
      *  combo fired the last action, and when — Game controls opens on its tab (the 1.5 s guess from the last withheld press
@@ -237,7 +283,7 @@ class ButtonEngine(private val host: Host) {
 
     // ── keys ───────────────────────────────────────────────────────────
     fun onKey(event: KeyEvent): Boolean {
-        val b = physicalButton(event) ?: return false
+        val b = physicalButton(event) ?: goneDeviceUp(event) ?: return false
         val down = event.action == KeyEvent.ACTION_DOWN
         if (down) app.wayfinder.ui.InputMode.notePadKey()   // build 18 (A0): a controller is driving (the keyboard lights a key)
         if (event.action != KeyEvent.ACTION_DOWN && event.action != KeyEvent.ACTION_UP) return false
@@ -247,12 +293,22 @@ class ButtonEngine(private val host: Host) {
             lateKeys.line(b.label, down, android.os.SystemClock.uptimeMillis(), event.eventTime)?.let { Log.w(TAG, it) }
         val src = ExtPadsCtl.srcOfDevice(event.device)
         val p = pad(src)
+        // 1.5-beta2 (big test t5, F4): a release owed by a controller that went away ([gone]) while Wayfinder held this press: its
+        // reader let go of it at rest, the "gone" line came first and dropped its presses. As a new press's release, Home's went
+        // to Android alone (Android went Home: its press had been Wayfinder's). Swallowed, with no tap, hold or combo
+        // 1.5-beta2 (review of F4): the combo recorder still hears it let go (as in b2j): it kept the button "held" and waited
+        if (!down && owedUps.released(src, b)) { Log.d(TAG, "${b.label} let go after its controller went away — nothing"); capture?.invoke(b, false); return true }
+        if (down && owedUps.pressed(src, b, event.repeatCount == 0)) return true
         // 1.4 (GitHub #43): the short Back we just pressed on the controller copy — the game's, untouched. dev build 17
         // (theme G): on that controller's own pad — keyed by the source its keys count as
         if (b == ThorButton.BACK && android.os.SystemClock.uptimeMillis() < (replayBackUntil[src] ?: 0L)) {
             if (!down) replayBackUntil.remove(src)
             return false
         }
+        // b19 (ps-F17): the Test page in front with the controller takes its Home and Back: lit there, nothing of Wayfinder's
+        // runs. Before Back's hotkey (it hands Back to the page: the page left), the capture and every step (Home's tap for the
+        // game too: no MODE). Decided at each first press, a release follows its press ([PadTestRules.Taken])
+        if (b.isSystem && testKey(p, b, down, event.repeatCount == 0)) return true
         // 1.4 (GitHub #43): Back while a game button is held (Select + Back: RetroArch's menu) = the game's hotkey. Build 18
         // (#81): not a press its reader withheld — that proves Back came first (its key just arrived after it). b18h (review):
         // withheld until it is let go ([Pad.withheld]), as the native layer counts it for the same Back (fx/wfmap.h).
@@ -292,7 +348,13 @@ class ButtonEngine(private val host: Host) {
                 p.held.add(b); systemHeld = true; p.chordUsed.add(b); p.swallowed.add(b)
                 return true
             }
-            if (b.isSystem) p.usedUpAt = 0L
+            // 1.5-beta2 (big test t4, F1): a new Home / Back press starts unused — a combo's second button marked used ([fireChord])
+            // whose release never reached [systemUp] can't eat this press's tap. Review: not a second DOWN of a press still held
+            // (the same press from two devices on one controller, b18g): Home + X then let go was a tap for the game
+            if (b.isSystem && b !in p.held) { p.usedUpAt = 0L; p.chordUsed.remove(b) }
+            // b19 (H7): where this Home press's tap goes, decided once at its press (a Wayfinder page coming up meanwhile, or
+            // the role changed, never splits one press)
+            if (b == ThorButton.HOME) p.homeToGame = host.homeTapToGame(src)
             // b18l (#81, b18w B1): the gate giving back what it let go at Home / Back's press — no hand's press: it keeps the time
             // it was pressed, and under the held Home / Back it makes no combo and touches nothing ([GateLifts.keyDown])
             val given = if (b.isSystem) ChordRules.PRESSED else p.lifts.keyDown(b, event.eventTime, p.held.any { it.isSystem })
@@ -345,13 +407,24 @@ class ButtonEngine(private val host: Host) {
                 systemDown(p, b, bindings); earlyPartners(p, b, event.eventTime, bindings)
                 p.swallowed.add(b); return true
             }
+            // 4b) b19 (H7): a Home whose tap goes to the game is ours with nothing bound too — its KEY_HOME never reaches
+            //     Android, even in an app whose combos are off (that one still says so, as below)
+            if (b == ThorButton.HOME && p.homeToGame) {
+                systemDown(p, b, bindings); earlyPartners(p, b, event.eventTime, bindings)
+                if (bindings.isEmpty()) { offHintSrc = src; main.removeCallbacks(offHintRunnable); main.postDelayed(offHintRunnable, HINT_MS) }
+                p.swallowed.add(b); return true
+            }
             // another button pressed while Home / Back is held: it's not a tap of Home / Back any
             // more (the layer off, Home + A released Home as a tap and left the game — review). b18l: not the gate's give-back
             if (!b.isSystem && given != ChordRules.GIVEN_UNDER) touchedDuringModifier(p)
             if (b == ThorButton.HOME && bindings.isEmpty()) { offHintSrc = src; main.removeCallbacks(offHintRunnable); main.postDelayed(offHintRunnable, HINT_MS) }
+            // b19 fix (H1a): this Home is Android's (KEY_HOME goes on): Keyboard & mouse's hold ends, as at a Home tap
+            if (b == ThorButton.HOME) host.homeUnowned(src)
             return false
         } else {
             p.held.remove(b)
+            // 1.5-beta2 (big test t5, F4): let go by Android (its device went away while it was held): no tap, hold or combo
+            if (event.isCanceled) cancelled(p, b)
             // b18l (#81, b18w B1): its key time, and whether the gate let it go at Home / Back's press ([GateLifts.keyUp]); a
             // Home / Back let go after a give-back that came at another time than this release — a hand's press: no tap
             if (!b.isSystem) p.lifts.keyUp(b, event.eventTime, p.held.any { it.isSystem })
@@ -364,16 +437,24 @@ class ButtonEngine(private val host: Host) {
             else releaseList(src, b)
             if (peek && b.isSystem) { Log.d(TAG, "${b.label} released after reading the combos — nothing"); p.chordUsed.add(b) }
             if (b == ThorButton.HOME && p.synthHome) { p.synthHome = false; p.chordUsed.add(b) }
+            // b19 (H7: a lone press held 0.5 s does nothing): a Home whose tap goes to the game, held that long alone,
+            // was for the combos (the list Off or Later, the DualSense's 10 s power-off hold) — never the game's tap
+            if (b == ThorButton.HOME && p.homeToGame && !ChordRules.gameTap(event.eventTime - event.downTime)) {
+                Log.d(TAG, "Home held ${event.eventTime - event.downTime} ms: no tap for the game"); p.chordUsed.add(b)
+            }
             // b18o review: a swallowed turbo pulse's UP ([GateLifts.pulseUp]) — swallowed with it, never the combo's release
             // (its taps were counted at the hand's press's own UP; counted at each pulse, one long press read as a double tap)
             val pulseUp = !b.isSystem && p.lifts.pulseUp(b)
             val swallow = p.swallowed.remove(b)
-            if (swallow && !pulseUp && !chordUp(p, b) && b.isSystem) {
+            // b19: a combo's turbo second button. The off halves are no release, the hand's let-go is ([GateLifts.comboUp],
+            // [onTurbo]). A button no turbo drives: every UP but a pulse's, as before
+            val released = b.isSystem || p.lifts.comboUp(b, pulseUp)
+            if (swallow && released && !chordUp(p, b) && b.isSystem) {
                 // used (a combo, its hold, the list read): pressed again at once, it's the same press (above)
                 if (b in p.chordUsed || p.taps.getValue(b).holdFired) p.usedUpAt = event.eventTime
                 systemUp(p, b, bindings)
             }
-            if (b.isSystem) { spendGated(p); updateSystemHeld() }
+            if (b.isSystem) { spendGated(p); updateSystemHeld(); guideAfterRelease(p) }   // 1.5-beta2 (Q1): a waiting Guide tap
             return swallow
         }
     }
@@ -391,6 +472,29 @@ class ButtonEngine(private val host: Host) {
      */
     private fun physicalButton(event: KeyEvent): ThorButton? = printedButton(event)
 
+    /** 1.5-beta2 (big test t5, F4): a Home / Back release Android cancelled ([KeyEvent.isCanceled]) whose device is gone by now:
+     *  a controller Wayfinder doesn't read turned off or unplugged while it was held (or AYN's pad set aside). With no device
+     *  it can't be told a controller's ([printedButton]); held on the Thor's (0, where such a device's keys count), it is that
+     *  press's release, with no tap ([cancelled]). Else null. */
+    private fun goneDeviceUp(event: KeyEvent): ThorButton? {
+        if (event.action != KeyEvent.ACTION_UP || !event.isCanceled || event.device != null) return null
+        val held = pads[0]?.held ?: return null
+        return ThorButton.fromKeyCode(event.keyCode)?.takeIf { it.isSystem && it in held }
+    }
+
+    /** 1.5-beta2 (big test t5, F4): [b] let go by Android, not a hand (its device went away while it was held): no tap, hold or
+     *  combo of it. Home / Back: used ([systemUp] ends there); a combo's second button: its taps and hold dropped. */
+    private fun cancelled(p: Pad, b: ThorButton) {
+        if (b.isSystem) { p.chordUsed.add(b); cancelHold(p, b) }
+        val iter = p.chordTaps.entries.iterator()
+        while (iter.hasNext()) {
+            val (k, t) = iter.next()
+            if (k.second != b) continue
+            t.hold?.let { h -> main.removeCallbacks(h) }; t.resolve?.let { r -> main.removeCallbacks(r) }
+            iter.remove()
+        }
+    }
+
     // ── Input layer: presses the game did NOT get (Home/Back held) — any thread ──
     /**
      * A button withheld from the game by the input layer (wfpad's gate, or a connected controller's reader: [src]). Keys
@@ -400,6 +504,10 @@ class ButtonEngine(private val host: Host) {
      */
     fun onGated(b: ThorButton, down: Boolean, src: Int = 0, shift: ThorButton? = null) = main.post {
         if (b.isSystem) return@post                       // Home/Back themselves still come via onKey
+        // b19 (ps-F17): under a Home / Back the Test page took, what its reader withholds is the page's too: lit, no combo, no
+        // stand-in (Home + Select lights both, no Back); its release follows its press
+        if (down && taken.gates(src)) { if (taken.under(src, b)) host.testPress(b, true, src); return@post }
+        if (!down && taken.release(src, b)) { host.testPress(b, false, src); return@post }
         // b18h (review): withheld until let go ([Pad.withheld]) — also while a press is being captured, so its release unmarks it
         pad(src).withheld.let { if (down) it.add(b) else it.remove(b) }
         capture?.let { it(b, down); return@post }
@@ -434,7 +542,7 @@ class ButtonEngine(private val host: Host) {
         if (ThorButton.HOME !in p.held || p.synthHome) return false
         val stands = when (b) { ThorButton.SELECT -> ThorButton.BACK; ThorButton.START -> ThorButton.AYN; else -> return false }
         val bindings = ControlsStore.effective(host.currentApp())
-        if (!owns(ThorButton.HOME, bindings)) return false
+        if (!owns(ThorButton.HOME, bindings) && !p.homeToGame) return false       // b19 (H7): a Home whose tap is the game's is ours too
         if (bindings.any { it.trigger.isChord && it.trigger.modifier == ThorButton.HOME && it.trigger.button == b }) return false
         if (!host.standsIn(p.src, stands)) return false
         touchedDuringModifier(p); main.removeCallbacks(hintRunnable); hideList(p.src)
@@ -470,7 +578,7 @@ class ButtonEngine(private val host: Host) {
         val bindings = ControlsStore.effective(host.currentApp())
         if (owns(b, bindings)) { if (!chordUp(p, b)) systemUp(p, b, bindings) }
         else if (!p.chordUsed.remove(b)) host.nativePress(b, p.src)
-        spendGated(p); updateSystemHeld()
+        spendGated(p); updateSystemHeld(); guideAfterRelease(p)
     }
 
     /** Controller [src]'s Home is now its Select + Start held (no Home button): see [Pad.synthHome]. */
@@ -484,14 +592,25 @@ class ButtonEngine(private val host: Host) {
      * about half the time. Now the pulses are no presses ([GateLifts.keyDown]: no key time, no combo, nothing touched) and
      * the button counts as held, from the hand's press, till the hand lets go ([ChordRules.early], Home's partners). Home,
      * Back and AYN are never turbo buttons here.
+     * b19: a combo's second button that is a turbo (AYN + R2, R3 + R2) is let go when the hand lets go, as a button that
+     * isn't turbo: its first off half was read as the release (a Hold never fired, a Double was two Taps).
      */
     fun onTurbo(b: ThorButton, held: Boolean, src: Int, at: Long, by: Int) = main.post {
         if (b.isSystem || b == ThorButton.AYN) return@post
         val p = if (held) pad(src) else pads[src] ?: return@post          // a release for a controller already gone: nothing
+        val was = b in p.lifts.turbo
         if (p.lifts.turboSaid(b, held, at, by, p.downAt[b])) p.downAt[b] = at
+        // b19: its hand let go. The release of its combo press, if it is one ([GateLifts.turboLetGo])
+        if (was && b !in p.lifts.turbo && p.lifts.turboLetGo(b)) chordUp(p, b)
     }
-    /** b18o: every turbo button [by] said held on controller [src] is let go (the input layer's engine ended: "TU 0"). */
-    fun turboGone(src: Int, by: Int) = main.post { pads[src]?.lifts?.turboGone(by) }
+    /** b18o: every turbo button [by] said held on controller [src] is let go (the input layer's engine ended: "TU 0"). b19:
+     *  each one let go is its combo press's release too, as at the hand's let-go ([onTurbo]). */
+    fun turboGone(src: Int, by: Int) = main.post {
+        val p = pads[src] ?: return@post
+        val was = p.lifts.turbo.toList()
+        p.lifts.turboGone(by)
+        for (b in was) if (b !in p.lifts.turbo && p.lifts.turboLetGo(b)) chordUp(p, b)
+    }
 
     /** A stick flick (see [ThorButton.isFlick]) on controller [src]: a press and release in one. */
     fun onFlick(b: ThorButton, src: Int = 0) = main.post {
@@ -535,7 +654,13 @@ class ButtonEngine(private val host: Host) {
     /** A connected controller went away (or the root helper did): what it held is forgotten — a controller on that node
      *  starts clean, and its Home can't stay "held" ([systemHeld]) for good. */
     fun gone(src: Int) = main.post {
+        taken.forget(src)                                 // b19 (ps-F17): what the Test page took of it (an AYN press too)
+        guideWaits.remove(src)                            // 1.5-beta2 (Q1): its waiting Guide tap goes with it
         val p = pads.remove(src) ?: return@post
+        // 1.5-beta2 (big test t5, F4): what Wayfinder swallowed of it is owed its release — its reader lets go at rest and that
+        // release can reach [onKey] after this ([OwedUps]). Its taps waiting below (a long press let go just before:
+        // [ChordRules.awayWait]) go with it
+        owedUps.gone(src, p.swallowed + p.capturedUps)
         for (t in p.taps.values + p.chordTaps.values) { t.hold?.let { main.removeCallbacks(it) }; t.resolve?.let { main.removeCallbacks(it) } }
         if (hintSrc == src && hintFor != null) { main.removeCallbacks(hintRunnable); hideList(src); hintFor = null; hintShownAt = 0L }
         if (shieldSrc == src && shieldFor != null) { shieldFor = null; host.shieldAnalog(false) }
@@ -553,6 +678,7 @@ class ButtonEngine(private val host: Host) {
      *  line, Home + Start standing in), as its presses count: AYN + X is that controller's combo. */
     fun onAyn(down: Boolean, src: Int = 0): Boolean {
         val b = ThorButton.AYN
+        if (testAyn(down, src)) return true                // b19 (ps-F17): the Test page's: no list, combo, hold or tap
         val p = pad(src)
         capture?.let { cb -> if (down) { p.capturedUps.add(b); cb(b, true) } else { p.capturedUps.remove(b); cb(b, false) }; return true }
         if (!down && p.capturedUps.remove(b)) return true
@@ -570,6 +696,17 @@ class ButtonEngine(private val host: Host) {
         val peek = mine && peeked()
         if (mine) { main.removeCallbacks(hintRunnable); hideList(src); hintFor = null; hintShownAt = 0L } else releaseList(src, b)
         return p.chordUsed.remove(b) || peek
+    }
+
+    /** b19 (ps-F17): controller [src]'s AYN button for the Test page ([Host.testHolds]): true = the page's press, or its
+     *  release. [onAyn]'s first step, and the service's own for the paths that never reach it (the AYN button left to AYN:
+     *  its drawer stays shut too). [first]: no key repeat. Main thread. */
+    fun testAyn(down: Boolean, src: Int, first: Boolean = true): Boolean {
+        val b = ThorButton.AYN
+        if (!down) return taken.release(src, b).also { if (it) host.testPress(b, false, src) }
+        if (!taken.press(src, b, first, host::testHolds)) return false
+        if (first) host.testPress(b, true, src)
+        return true
     }
 
     /** AYN is being used for a combo right now on controller [src] (its hold action must wait). */
@@ -621,6 +758,50 @@ class ButtonEngine(private val host: Host) {
         return true
     }
 
+    /** 1.5-beta2 (Q1, GitHub D#127): the controllers (as their presses count) whose Guide tap waits for their Home / Back to
+     *  be let go ([pressGuideOnPad]). Main thread. */
+    private val guideWaits = HashSet<Int>()
+
+    /** 1.5-beta2 (Q1, GitHub D#127, #3): a short Mode (Xbox / PS / Guide) press for the game on controller [src]'s own pad,
+     *  as [pressBackOnPad]'s Back: a connected controller's pad ("E p … 316"); the Thor's copy when the input layer runs ("G p
+     *  316": AYN's pad declares BTN_MODE, so the copy has it), else the docked controller's own reader. The copy and the
+     *  readers keep a virtual press silent while Home / Back is held (fx/wfmap.h): a combo's tap waits till that controller's
+     *  Home and Back are let go ([guideWaits], [guideAfterRelease]). false = no pad to press on (Game controls off here and no
+     *  controller of its own): nothing, never Android's Home. A Mode the game ignores is Android's Home (Generic.kcm). */
+    fun pressGuideOnPad(src: Int = 0): Boolean {
+        if (src > 0) { if (!ExtPadsCtl.canPress(src)) return false }
+        else if (!layerActive && ExtPadsCtl.seatRawSrc()?.takeIf { ExtPadsCtl.canPress(it) } == null) return false
+        if (pad(src).held.any { it.isSystem }) { guideWaits.add(src); Log.d(TAG, "Guide tap waits for Home / Back (controller $src)"); return true }
+        guideTap(src)
+        return true
+    }
+
+    /** [src]'s Home and Back are both let go: its waiting Guide tap goes, a moment later (the copy reads the release first;
+     *  pressed again meanwhile, it waits again). */
+    private fun guideAfterRelease(p: Pad) {
+        if (p.held.any { it.isSystem } || !guideWaits.remove(p.src)) return
+        // 1.5-beta2 (Q1, review): gone meanwhile ([gone] removed its pad), nothing: never a new empty pad for it
+        main.postDelayed({ val q = pads[p.src] ?: return@postDelayed
+            if (q.held.any { it.isSystem }) guideWaits.add(p.src) else guideTap(p.src) }, GUIDE_AFTER_MS)
+    }
+
+    /** The Mode press itself, let go [GUIDE_TAP_MS] later (held ~3 frames, as Back's): where [pressGuideOnPad] said. */
+    private fun guideTap(src: Int) {
+        val raw = if (src > 0) src else ExtPadsCtl.seatRawSrc()?.takeIf { !layerActive && ExtPadsCtl.canPress(it) }
+        when {
+            raw != null -> {
+                if (!ExtPadsCtl.canPress(raw)) return                // its pad went away meanwhile: nothing
+                ExtPadsCtl.press(raw, ThorInput.BTN_MODE, 1)
+                main.postDelayed({ ExtPadsCtl.press(raw, ThorInput.BTN_MODE, 0) }, GUIDE_TAP_MS)
+            }
+            layerActive -> {
+                InputMonitor.send("G p ${ThorInput.BTN_MODE} 1")
+                main.postDelayed({ InputMonitor.send("G p ${ThorInput.BTN_MODE} 0") }, GUIDE_TAP_MS)
+            }
+            else -> Log.d(TAG, "Guide tap: the input layer stopped meanwhile, nothing sent")
+        }
+    }
+
     // ── D-pad (from evdev, any thread): the Thor's, or what a connected controller's reader withheld ([src]) ──
     fun onHat(axis: Int, value: Int, src: Int = 0) = run {
         // device pass (P2-3): a D-pad press is a controller driving, as [onKey]'s keys are (the Thor's D-pad is a HAT: it
@@ -632,6 +813,9 @@ class ButtonEngine(private val host: Host) {
     private fun hat(axis: Int, value: Int, src: Int) {
         val p = pad(src)
         val dirs = ThorButton.values().filter { it.hatAxis == axis }
+        // b19 (ps-F17): a direction the Test page took is let go there, whatever holds by then
+        val now = if (value == 0) null else ThorButton.fromHat(axis, value)
+        for (d in dirs) if (d != now && taken.release(src, d)) host.testPress(d, false, src)
         if (value == 0) {
             dirs.forEach { d -> if (p.held.remove(d)) { val c = capture; if (c != null) c(d, false) else chordUp(p, d) } }
             return
@@ -639,6 +823,9 @@ class ButtonEngine(private val host: Host) {
         val b = ThorButton.fromHat(axis, value) ?: return
         // a direction replaced without passing the centre: its press ends (its combo's hold mustn't fire later)
         dirs.filter { it != b }.forEach { if (p.held.remove(it)) { val c = capture; if (c != null) c(it, false) else chordUp(p, it) } }
+        // b19 (ps-F17): under a Home / Back the Test page took, the D-pad is the page's too: lit, no combo (the Thor's raw hat
+        // and its gate's line say it twice: lit once)
+        if (b !in p.held && taken.gates(src)) { if (taken.under(src, b)) host.testPress(b, true, src); return }
         if (!p.held.add(b)) return
         capture?.let { it(b, true); return }
         touchedDuringModifier(p)
@@ -655,9 +842,12 @@ class ButtonEngine(private val host: Host) {
         if (cands.all { it.trigger.press == Press.TAP }) { fireChord(p, cands.first()); return true }
         p.chordUsed.add(m); cancelHold(p, m)
         main.removeCallbacks(hintRunnable); hideList(p.src)
+        // 1.5-beta2 (big test t5, F4): a counted tap only waiting in case its controller went away ([chordUp]) goes now — this
+        // press is a new one (its resolve drops the pair's count: looked up again below)
+        p.chordTaps[m to b]?.let { o -> o.resolve?.let { main.removeCallbacks(it); if (o.awayWait) it.run() } }
         val t = p.chordTaps.getOrPut(m to b) { Taps() }
-        t.resolve?.let { main.removeCallbacks(it) }; t.resolve = null
-        t.holdFired = false
+        t.resolve = null; t.awayWait = false
+        t.holdFired = false; t.downAt = android.os.SystemClock.uptimeMillis()
         cands.firstOrNull { it.trigger.press == Press.HOLD }?.let { h ->
             t.hold = Runnable {
                 t.holdFired = true; t.count = 0; t.hold = null
@@ -678,6 +868,7 @@ class ButtonEngine(private val host: Host) {
         val cands = ControlsStore.effective(host.currentApp()).filter { it.trigger.isChord && it.trigger.modifier == key.first && it.trigger.button == b }
         val maxTaps = cands.maxOfOrNull { when (it.trigger.press) { Press.DOUBLE_TAP -> 2; Press.TRIPLE_TAP -> 3; else -> 1 } } ?: 1
         val resolve = Runnable {
+            t.resolve = null; t.awayWait = false
             val n = t.count; p.chordTaps.remove(key)
             val press = when (n) { 1 -> Press.TAP; 2 -> Press.DOUBLE_TAP; else -> Press.TRIPLE_TAP }
             cands.firstOrNull { it.trigger.press == press }?.let { c ->
@@ -685,13 +876,19 @@ class ButtonEngine(private val host: Host) {
                 fire(p.src, c.action, fromHold = false, arg = c.arg)
             }
         }
-        if (t.count >= maxTaps) resolve.run() else { t.resolve = resolve; main.postDelayed(resolve, MULTI_TAP_MS) }
+        // 1.5-beta2 (big test t5, F4): a connected controller's long press acts a moment later — let go because it went away, its
+        // "gone" line drops it meanwhile ([ChordRules.awayWait])
+        val wait = ChordRules.awayWait(p.src, android.os.SystemClock.uptimeMillis() - t.downAt, seat = seatNow(p))
+        if (t.count >= maxTaps && wait == 0L) resolve.run()
+        else { t.resolve = resolve; t.awayWait = t.count >= maxTaps; main.postDelayed(resolve, if (t.awayWait) wait else MULTI_TAP_MS) }
         return true
     }
 
     private fun fireChord(p: Pad, chord: Binding) {
         val m = chord.trigger.modifier!!
-        p.chordUsed.add(m)
+        // 1.5-beta2 (big test t4, F1): its second button too when it is Home or Back — Home + Back fired its action, then Back's
+        // release was a Back tap 300 ms later (RetroArch's menu, Wayfinder sent to the back); Back + Home a Home tap
+        ChordRules.usedByCombo(m, chord.trigger.button).forEach { p.chordUsed.add(it) }
         cancelHold(p, m)
         main.removeCallbacks(hintRunnable); hideList(p.src)
         Log.d(TAG, "chord ${chord.trigger.label()} → ${chord.action}")
@@ -704,7 +901,10 @@ class ButtonEngine(private val host: Host) {
 
     private fun systemDown(p: Pad, b: ThorButton, bindings: List<Binding>) {
         val t = p.taps.getValue(b)
-        t.resolve?.let { main.removeCallbacks(it) }       // a further tap may be coming
+        // a further tap may be coming. 1.5-beta2 (big test t5, F4): a counted tap only waiting in case its controller went away
+        // ([systemUp]) goes now, as itself
+        t.resolve?.let { main.removeCallbacks(it); if (t.awayWait) it.run() }
+        t.awayWait = false; t.downAt = android.os.SystemClock.uptimeMillis()
         // b18g (WI-6c, #102): a hold still pending is this press's, never a second one — a second DOWN of a held Home / Back
         // (the same press from two devices on one controller, an UP lost) left the first press's hold posted with nothing to
         // cancel it: its move / swap fired 1 s later
@@ -727,17 +927,32 @@ class ButtonEngine(private val host: Host) {
         t.count++
         val singles = bindings.filter { it.trigger.button == b && !it.trigger.isChord }
         val maxTaps = singles.maxOfOrNull { when (it.trigger.press) { Press.DOUBLE_TAP -> 2; Press.TRIPLE_TAP -> 3; else -> 1 } } ?: 1
-        if (t.count >= maxTaps) resolveTaps(p.src, t, b, singles)
-        else t.resolve = Runnable { resolveTaps(p.src, t, b, singles) }.also { main.postDelayed(it, MULTI_TAP_MS) }
+        val toGame = b == ThorButton.HOME && p.homeToGame          // b19 (H7): this press's, kept for the wait below
+        // 1.5-beta2 (big test t5, F4): a connected controller's long press acts a moment later. Turned off while PS was held (a
+        // DualSense: 10 s), its reader lets go at rest and the "gone" line comes just after by another path: [gone] drops it then
+        val wait = ChordRules.awayWait(p.src, android.os.SystemClock.uptimeMillis() - t.downAt, seat = seatNow(p))
+        if (t.count >= maxTaps && wait == 0L) resolveTaps(p.src, t, b, singles, toGame)
+        else {
+            t.awayWait = t.count >= maxTaps
+            t.resolve = Runnable { t.resolve = null; t.awayWait = false; resolveTaps(p.src, t, b, singles, toGame) }
+                .also { main.postDelayed(it, if (t.awayWait) wait else MULTI_TAP_MS) }
+        }
     }
 
-    private fun resolveTaps(src: Int, t: Taps, b: ThorButton, singles: List<Binding>) {
+    /** 1.5-beta2 (review of F4): [p] is the Thor's (0) while a controller plays as the Thor's (docked, or by its switch): its
+     *  presses count as the Thor's and it can go away under a press too ([ChordRules.awayWait]'s [seat]). */
+    private fun seatNow(p: Pad): Boolean = p.src == 0 && ExtPadsCtl.seatPad() != null
+
+    /** [toGame] (b19, H7): an unbound Home tap is the game's PS / Guide ([Host.gameHomeTap]) instead of Android's Home. A
+     *  bound tap, double or triple tap still fires its action: the game gets nothing for that press. */
+    private fun resolveTaps(src: Int, t: Taps, b: ThorButton, singles: List<Binding>, toGame: Boolean = false) {
         val n = t.count; t.count = 0
         val press = when (n) { 1 -> Press.TAP; 2 -> Press.DOUBLE_TAP; else -> Press.TRIPLE_TAP }
         val binding = singles.firstOrNull { it.trigger.press == press }
         if (binding != null) { Log.d(TAG, "${b.label} ${press.label} → ${binding.action}"); fire(src, binding.action, fromHold = false, arg = binding.arg) }
         // not bound → keep Home/Back working; each press whole, one after the other (a copied pad's Back needs
         // its release before the next press — review 2026-10-01)
+        else if (toGame) repeat(n.coerceAtMost(3)) { i -> if (i == 0) host.gameHomeTap(src) else main.postDelayed({ host.gameHomeTap(src) }, 120L * i) }
         else repeat(n.coerceAtMost(3)) { i -> if (i == 0) host.nativePress(b, src) else main.postDelayed({ host.nativePress(b, src) }, 120L * i) }
     }
 }
@@ -758,6 +973,28 @@ internal object ChordRules {
      *  hold: swap apps at 1000) showed the list 150 ms before the hold and counted it read only at 1250. */
     fun listDelay(listMs: Long, holdMs: Long?): Long =
         if (holdMs == null) listMs else minOf(listMs, (holdMs - LIST_BEFORE_HOLD_MS).coerceAtLeast(0L))
+
+    /** b19 (H7): a Home whose tap goes to the game ("Game + combos") held this long alone is no tap: it was held for
+     *  the combos, whatever the combo list's setting (Off, Later), and turning a DualSense off (PS held 10 s) sends nothing. */
+    const val GAME_TAP_MS = 500L
+    /** b19 (H7): a lone Home press of [ms] (its UP's event time − its down time) is a tap the game may get. */
+    fun gameTap(ms: Long): Boolean = ms < GAME_TAP_MS
+
+    /** 1.5-beta2 (big test t4, F1): the buttons a combo that fired uses up, so their release is no tap: its first button [m], and
+     *  its second one [b] when that is Home or Back (Home + Back sent Back 300 ms after the action, Back + Home a Home). Any
+     *  other second button's release was never a tap. */
+    fun usedByCombo(m: ThorButton, b: ThorButton): Set<ThorButton> = if (b.isSystem) setOf(m, b) else setOf(m)
+
+    /** 1.5-beta2 (big test t5, F4): how long a release that would act at once waits instead, in case its controller just went
+     *  away: a controller turned off while a button is held (a DualSense: PS held 10 s) lets go of it at rest, and its "gone"
+     *  line ([ButtonEngine.gone]) comes a moment later by another path. */
+    const val AWAY_WAIT_MS = 200L
+    /** 1.5-beta2 (F4): the wait for a release on controller [src] after a press held [heldMs]: [AWAY_WAIT_MS] for a connected
+     *  controller's (src > 0) long press (at least [GAME_TAP_MS]); 0 for a hand's quick tap, and on the Thor (0: AYN's pad and
+     *  the copy never go away under a press). Review: [seat] = a controller plays as the Thor's (docked, or by its switch): its
+     *  presses come as the Thor's (0) and it goes away like any controller, so the Thor's long presses wait too then. */
+    fun awayWait(src: Int, heldMs: Long, seat: Boolean = false): Long =
+        if ((src > 0 || seat) && heldMs >= GAME_TAP_MS) AWAY_WAIT_MS else 0L
 
     /** The modifier a press of [b] completes on one controller: what its Select / Start stand for under its Home first
      *  ([standIns]: its Back / AYN — "AYN + X" wins over "Home + X" while Home + Start is held), then what it holds, in the
@@ -849,6 +1086,7 @@ internal object ChordRules {
  * b18o: and the turbo buttons the hand holds ([turboSaid]) — their on / off pulses on the copy are no presses ([keyDown]:
  * [ChordRules.PULSE]), never a give-back that was a hand's press either (TurboHomeTest). b18o review: and each pulse gets the
  * answer the hand's press got ([pulseDown]): a combo's turbo button never reaches the game while the hand holds it.
+ * b19: and that combo press is let go when the hand lets go ([comboUp], [turboLetGo]), never at an off half (TurboComboTest).
  */
 internal class GateLifts {
     /** Each button's last key UP from the copy (its event time). */
@@ -871,13 +1109,17 @@ internal class GateLifts {
     /** A button's key UP from the copy at [at] ([systemHeld]: Home / Back held on that controller). */
     fun keyUp(b: ThorButton, at: Long, systemHeld: Boolean) {
         upAt[b] = at
+        shown -= b                                        // b19: the copy shows it up
         if (ChordRules.liftedNow(b, systemHeld, at, sysDownAt)) lifted += b else lifted -= b
     }
 
     /** A button's key DOWN from the copy at [at]: a hand's press ([ChordRules.PRESSED]) or the gate giving it back. b18o: or a
      *  turbo's on-pulse ([ChordRules.PULSE]) — a turbo button the hand holds ([turbo]) whose own press came already: no
-     *  press, and no longer let go by the gate (it is on again). Its first DOWN at or after the hand's press is the press. */
+     *  press, and no longer let go by the gate (it is on again). Its first DOWN at or after the hand's press is the press.
+     *  b19: a pulse written before the hand let go that came after the line ([letGoAt]) is a pulse too, never a new press. */
     fun keyDown(b: ThorButton, at: Long, systemHeld: Boolean): Int {
+        shown += b                                        // b19: the copy shows it down (a press or a pulse)
+        letGoAt.remove(b)?.let { if (at < it) { lifted -= b; return ChordRules.PULSE } }
         turbos[b]?.let { t -> if (t.seen) { lifted -= b; return ChordRules.PULSE }; if (at >= t.at) t.seen = true }
         val g = ChordRules.given(b, lifted, systemHeld, at, sysUpAt)
         if (g != ChordRules.PRESSED) lifted -= b
@@ -902,6 +1144,10 @@ internal class GateLifts {
      *  and whether the press's own key DOWN came yet ([seen]: every DOWN after it is a pulse). */
     private class Turbo(val at: Long, var by: Int, var seen: Boolean)
     private val turbos = HashMap<ThorButton, Turbo>()
+    /** b19: when the hand let go of each turbo whose press was seen (the keys' clock), till that button's next key DOWN. TU
+     *  lines and the copy's keys reach the engine by two paths: the line can come before the copy's last on-pulse, written
+     *  just before the hand let go ([keyDown]: no press then; as a press it made a new combo press, a Tap after a Hold). */
+    private val letGoAt = HashMap<ThorButton, Long>()
     /** The buttons a turbo the hand holds drives — held, in the off half of their pulse or under a gate as well. */
     val turbo: Set<ThorButton> get() = turbos.keys
 
@@ -913,7 +1159,8 @@ internal class GateLifts {
     fun turboSaid(b: ThorButton, held: Boolean, at: Long, by: Int, lastDown: Long?): Boolean {
         val t = turbos[b]
         if (!held) {
-            if (t != null) { t.by = t.by and by.inv(); if (t.by == 0) turbos.remove(b) }
+            // b19: let go at [at], its press seen: a DOWN stamped before it is still this hold's pulse ([keyDown])
+            if (t != null) { t.by = t.by and by.inv(); if (t.by == 0) { turbos.remove(b); if (t.seen) letGoAt[b] = at } }
             return false
         }
         if (t != null && (t.by and by) == 0) { t.by = t.by or by; return false }
@@ -938,6 +1185,8 @@ internal class GateLifts {
     fun pressAnswered(b: ThorButton, swallowed: Boolean) {
         if (swallowed) swallowedPress += b else swallowedPress -= b
         pulsesDown -= b
+        if (swallowed) comboOpen += b else comboOpen -= b                 // b19: its release not read yet ([comboUp])
+        upIsRelease -= b
     }
 
     /** A turbo's pulse of [b] came down ([ChordRules.PULSE]): true = swallow it — the hand's press was swallowed (a combo's
@@ -947,6 +1196,67 @@ internal class GateLifts {
 
     /** A key UP of [b]: true = the UP of a pulse swallowed ([pulseDown]) — swallowed too, and no release of the combo. */
     fun pulseUp(b: ThorButton): Boolean = pulsesDown.remove(b)
+
+    // ── b19: a combo's turbo second button is held for as long as the hand holds it ──
+    /** What the copy shows down now: its last key DOWN (a press or a pulse) had no UP after it. */
+    private val shown = HashSet<ThorButton>()
+    /** A combo's second button whose press is open: swallowed as the combo's ([pressAnswered]), its release not read yet. */
+    private val comboOpen = HashSet<ThorButton>()
+    /** Its hand let go while the copy showed it down (an on half): the UP that follows is the release. */
+    private val upIsRelease = HashSet<ThorButton>()
+
+    /** A key UP of [b] ([pulse]: a swallowed pulse's UP, [pulseUp]): is it the release its combo reads (its taps, its hold)?
+     *  A button no turbo drives: every UP but a pulse's, as before b19. A turbo button the hand still holds, its press seen:
+     *  never (an off half: the release is the hand's, [turboLetGo]). The UP after a let-go in an on half: yes, once. */
+    fun comboUp(b: ThorButton, pulse: Boolean): Boolean {
+        if (upIsRelease.remove(b)) return comboOpen.remove(b)
+        if (turbos[b]?.seen == true) return false
+        comboOpen -= b
+        return !pulse
+    }
+
+    /** The hand let go of [b]'s turbo (its hold ended): true = that is its combo press's release now (the copy shows it up).
+     *  Shown down, the UP that follows is ([comboUp]). False for a press that was no combo's, or one already released. */
+    fun turboLetGo(b: ThorButton): Boolean {
+        if (b !in comboOpen) return false
+        if (b in shown) { upIsRelease += b; return false }
+        comboOpen -= b
+        return true
+    }
+}
+
+/**
+ * 1.5-beta2 (big test t5, F4): the releases owed by controllers that went away while Wayfinder held presses of theirs (it
+ * swallowed them). A connected controller turned off with PS held lets go of everything at rest; its "gone" line came first 3
+ * times in 9 and dropped its presses ([ButtonEngine.gone]), so Home's release looked like a new one and went to Android alone:
+ * Android went Home and the game left the front. Each owed release is swallowed once, with no tap, hold or combo; a new press
+ * of that button spends it (a new press, a new answer). Pure (ControllerGoneTest). Main thread.
+ */
+internal class OwedUps {
+    private val owed = HashMap<Int, HashSet<ThorButton>>()
+
+    /** Controller [src] went away while Wayfinder held [swallowed] of it (none: nothing owed). */
+    fun gone(src: Int, swallowed: Collection<ThorButton>) {
+        if (swallowed.isEmpty()) owed.remove(src) else owed[src] = HashSet(swallowed)
+    }
+
+    /** [b] pressed on [src] ([first]: no key repeat). True = the repeat of a press still owed: swallowed too. A first press
+     *  spends what [b] owed. */
+    fun pressed(src: Int, b: ThorButton, first: Boolean): Boolean {
+        val s = owed[src] ?: return false
+        if (b !in s) return false
+        if (!first) return true
+        s.remove(b); if (s.isEmpty()) owed.remove(src)
+        return false
+    }
+
+    /** [b] let go on [src]: true = a release owed — swallow it, nothing else. */
+    fun released(src: Int, b: ThorButton): Boolean {
+        val s = owed[src] ?: return false
+        if (!s.remove(b)) return false
+        if (s.isEmpty()) owed.remove(src)
+        return true
+    }
 }
 
 /**
@@ -981,4 +1291,17 @@ internal class LateKeyLog {
         const val PER_WINDOW = 5
         const val WINDOW_MS = 60_000L
     }
+}
+
+/** 1.5-beta2 (Q8, GitHub #51): the AYN button's taps, a double tap beside its tap and hold — pure (AynDoubleTapTest); the
+ *  service's AynPress counts them. No double tap set (the default): every tap acts at once, as before. One set: a tap let
+ *  go waits [DOUBLE_MS] for a second one (Home's and Back's own window), the second one's release acts at once. A hold or a
+ *  combo on either press spends the taps (as Home's: [ButtonEngine]'s systemUp). */
+internal object AynTaps {
+    /** How long a single tap waits for a second one, only while a double tap is set. */
+    const val DOUBLE_MS = 300L
+    /** The [n]th tap in a row was let go: wait for another one (true), or act now. */
+    fun waits(n: Int, doubleSet: Boolean): Boolean = doubleSet && n < 2
+    /** [n] taps in a row are the double tap (from 2 on, while one is set); else they are the tap. */
+    fun isDouble(n: Int, doubleSet: Boolean): Boolean = doubleSet && n >= 2
 }

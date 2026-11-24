@@ -331,9 +331,13 @@ object BackPillDefaults {
  * the subtitle at most 2 lines. (A14): the button legend ([ButtonLegend]) before [trailing], hidden when [trailing] is
  * wider than 40 % of the header (Games' search and Import).
  */
+/** b19 (V02): the Back pill's words on the page shown ([PageHeader]): "Back", or on a page the quick panel or an "Open
+ *  Wayfinder" combo opened over an app, where B goes back to it ("Back to game", MainActivity provides them). */
+val LocalPageBack = androidx.compose.runtime.compositionLocalOf { "Back" }
+
 @Composable
 fun PageHeader(title: String, onBack: () -> Unit, modifier: Modifier = Modifier, subtitle: String? = null,
-               overline: String? = null, backLabel: String = "Back", backModifier: Modifier = Modifier,
+               overline: String? = null, backLabel: String = LocalPageBack.current, backModifier: Modifier = Modifier,
                trailing: @Composable RowScope.() -> Unit = {}) {
     val g = LocalGlass.current
     val density = LocalDensity.current

@@ -238,7 +238,8 @@ object ExtPads {
 
     /** A controller's pad product id: from the table (what an emulator mapped), else 0xF000 + 12 bits of its key
      *  ([extPadProduct] — the id Eden already has), the next free one when another controller has it. Android finds its
-     *  buttons layout in /data/system/devices/keylayout (a copy of AYN's, written once); without it, 0x0111. */
+     *  buttons layout in /data/system/devices/keylayout (a copy of AYN's, written once; b19: removed when handling is
+     *  turned off and at uninstall, [removeLayouts]); without it, 0x0111. */
     private fun pidFor(ident: String, key: String): Int {
         val want = idents[ident]?.pid ?: run {
             val used = idents.filterKeys { it != ident }.values.map { it.pid }.toMutableSet()
@@ -247,9 +248,13 @@ object ExtPads {
         }
         return if (ensureLayout(want)) want else 0x0111
     }
-    /** AYN's buttons layout (of [from]: 0x0111 Nintendo, 0x0112 Xbox) copied as 2020:[pid]'s, once. */
-    internal fun ensureLayout(pid: Int, from: Int = 0x0111): Boolean = runCatching {
-        val dir = File("/data/system/devices/keylayout")
+    private const val LAYOUT_DIR = "/data/system/devices/keylayout"
+    /** b19: a layout being written is never removed meanwhile ([ensureLayout] and [removeLayouts] take it). */
+    private val layoutLock = Any()
+    /** AYN's buttons layout (of [from]: 0x0111 Nintendo, 0x0112 Xbox) copied as 2020:[pid]'s, once. Its first line is
+     *  [ExtRules.LAYOUT_MARK] (the same bytes as 1.5-beta1's): what [removeLayouts] knows it by. */
+    internal fun ensureLayout(pid: Int, from: Int = 0x0111): Boolean = synchronized(layoutLock) { runCatching {
+        val dir = File(LAYOUT_DIR)
         val f = File(dir, String.format("Vendor_2020_Product_%04x.kl", pid))
         if (f.isFile && f.length() > 0) return true
         val name = String.format("Vendor_2020_Product_%04x.kl", from)
@@ -257,11 +262,37 @@ object ExtPads {
             .map { File(it) }.firstOrNull { it.isFile } ?: return false
         if (!dir.isDirectory) dir.mkdirs()
         for (d in listOf(dir.parentFile!!, dir)) { d.setReadable(true, false); d.setExecutable(true, false) }
-        f.writeText("# Thor Wayfinder: a connected controller's pad, under its own id — the same layout as AYN's controller\n" + src.readText())
+        f.writeText(ExtRules.LAYOUT_MARK + " a connected controller's pad, under its own id — the same layout as AYN's controller\n" + src.readText())
         f.setReadable(true, false)
         Log.w(TAG, "buttons layout for 2020:${String.format("%04x", pid)} written")
         true
-    }.getOrDefault(false)
+    }.getOrDefault(false) }
+
+    /** b19 (SECURITY.md): our buttons layouts go when "Wayfinder handles controllers" is turned off ("E off") and when
+     *  Wayfinder is uninstalled ([InputMonitorTool]). Only regular files with our name AND our first line
+     *  ([ExtRules.isOurLayout]): nothing else in the folder, never through a link, only names we write are opened. Never
+     *  while handling is on: [on] is read under the lock [ensureLayout] holds, so a layout just written for a starting
+     *  reader stays (an "on" right after the removal writes it again before that reader starts). Folders stay as they
+     *  are. A pad still running keeps its layout (Android reads one when it opens the device). Returns how many went. */
+    internal fun removeLayouts(dir: File = File(LAYOUT_DIR), on: () -> Boolean = { wanted }): Int = synchronized(layoutLock) {
+        if (on() || !java.nio.file.Files.isDirectory(dir.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) 0 else {
+            var n = 0
+            for (f in dir.listFiles().orEmpty()) {
+                if (!ExtRules.isLayoutName(f.name)) continue
+                if (!java.nio.file.Files.isRegularFile(f.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)) continue
+                if (ExtRules.isOurLayout(f.name, layoutFirstLine(f)) && f.delete()) n++
+            }
+            if (n > 0) Log.w(TAG, "buttons layouts removed: $n")
+            n
+        }
+    }
+    /** A layout's first line, read no further than its first 64 bytes (the mark needs 17). null = unreadable. */
+    private fun layoutFirstLine(f: File): String? = runCatching {
+        f.inputStream().use { s ->
+            val b = ByteArray(64); val n = s.read(b)
+            if (n <= 0) "" else String(b, 0, n, Charsets.UTF_8).substringBefore('\n')
+        }
+    }.getOrNull()
 
     // ── dev build 15 (C1): AYN's hold list ──
     /** Names AYN's list has (the app confirmed them). */
@@ -325,6 +356,8 @@ object ExtPads {
                 wanted = false
                 holdOk.clear(); holdOff = false                     // the app takes our names off AYN's list now; "on" tells again
                 Thread { runCatching { synchronized(dockLock) { thorBack() } } }.apply { isDaemon = true; start() }; stopAll()
+                // b19 (SECURITY.md): our buttons layouts go too (sent at every connect while off: a 1.5-beta1 user's go)
+                work.execute { runCatching { removeLayouts() }.onFailure { Log.w(TAG, "layouts: ${it.javaClass.simpleName}") } }
             }
             "map" -> {
                 val key = p.getOrNull(2) ?: return
@@ -948,7 +981,8 @@ object ExtPads {
             runners.remove(slot, r)
             // dev build 15 (C2): a real give-back unless it is made again at once (a Joy-Con pair, the dock) — AYN's copy,
             // its own node, its touchpad back; one that can't be put back is said (the app: "turn it off and on").
-            // Review P4: up to 10 s (a node can take mknod 3 s + restorecon 3 s + 1 s for Android); later still, said
+            // Review P4: up to 10 s (b19 G3: the staged way takes one mknod + up to 1 s for Android to list the node;
+            // the direct way, its fallback, mknod 3 s + restorecon 3 s + 1 s); later still, said
             // after the "X" (the app keeps a gone controller 15 s for it) — never unbounded (dumpsys has no timeout)
             if (!r.keepNodes) ExtNodes.giveBack(r.hids, waitMs = 10_000, late = { l -> l.forEach { out(slot, "E restore $it") } })
                 .forEach { out(slot, "E restore $it") }

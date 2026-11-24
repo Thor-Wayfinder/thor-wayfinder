@@ -86,8 +86,10 @@ object PadRules {
     // ── one spelling of a controller's own controls (X8) ──
 
     /** The engine's token order — build 15's own-controls order (ExtCtl.tokens), extended: a moved entry comes out byte for
-     *  byte as build 15 sent it, and one profile always sends one line (PadRemap.fire's JSON order no longer changes it). */
-    private val ORDER = listOf("L", "k", "f", "tr", "sw", "dl", "il", "ir", "xl", "xr", "td", "dzl", "dzr", "ozl", "cvl", "ozr", "cvr",
+     *  byte as build 15 sent it, and one profile always sends one line (PadRemap.fire's JSON order no longer changes it).
+     *  b19 (GitHub #96): "ms" in the swap's place (PadRemap.engineTokens). Every name fx/wfmap.h's wf_parse knows is here
+     *  (PadRulesTest reads the engine's source for it), else a controller's line would keep it out of order at its end. */
+    internal val ORDER = listOf("L", "k", "f", "tr", "sw", "ms", "dl", "il", "ir", "xl", "xr", "td", "dzl", "dzr", "ozl", "cvl", "ozr", "cvr",
         "tlo", "thi", "sh", "apl", "apr", "bg")
     private val DEC = Regex("^[1-9][0-9]{0,8}$")
     private val HEX = Regex("^0x[0-9a-fA-F]{1,8}$")

@@ -64,6 +64,7 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.DarkMode
 import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Gavel
 import androidx.compose.material.icons.rounded.Info
@@ -74,6 +75,7 @@ import androidx.compose.material.icons.rounded.PhotoCamera
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Switch
@@ -177,7 +179,9 @@ fun hubBack(page: String): String {
     // build 18 (B12, pF21): a page no row opened (a deep link, a quick panel tile) → the row there that leads here. b18r3
     // (r1 BUG-2): its id from the registry (Nav.rowTo — the rows draw the same), not the page's name: Combos' row is "combos"
     rf.pending = rf.opener[page] ?: Nav.rowTo(page); rf.goingBack = true
-    val to = rf.from[page] ?: hubParent(page) ?: HubPage.HOME
+    // 1.5-beta2 (b2d pass, FAIL 2, Q5.16): a Test page whose controller has no page (never connected, forgotten) goes to
+    // the controllers at once, as its gone page's button (PadTestRules.backFrom: the keys with a page, as that page reads them)
+    val to = rf.from[page] ?: PadTestRules.backFrom(page) { ExtPadsCtl.byPlayer().map { it.key } } ?: hubParent(page) ?: HubPage.HOME
     // build 18 (B2, hF5): back to Search from a result — it opens with its query, on that result, keyboard closed
     if (to == HubPage.SEARCH) SearchState.returning = true
     return to
@@ -223,7 +227,9 @@ fun HubNavHost(myDisplayId: Int, page: String, pad: String? = null, go: (String)
         // dev build 16 (theme E, device tests S6 / S9): the page shown — its kind only, no package or controller
         if (BuildConfig.DEBUG) android.util.Log.d("ThorHub", "page ${page.substringBefore(':')}")
     }
-    val back = { go(hubBack(page)) }
+    // b19 (V02): on the page the quick panel or an "Open Wayfinder" combo opened over an app, a page's own onBack (a Done)
+    // goes back to the app, as B and its Back pill do (MainActivity's root layer)
+    val back = LocalLeave.current ?: { go(hubBack(page)) }
     when {
         page == HubPage.SCREENS -> ScreensPage(myDisplayId, back, go)
         // dev build 17 (WP11): the list of controllers, the Thor first; each one's page is ONE template (ControllerPage.kt)
@@ -601,6 +607,10 @@ private fun StripCell(label: String, value: String, modifier: Modifier, dot: and
         }
     }
 }
+
+/** 1.5-beta2: how the dark bottom screen wakes by touch: one touch, or two with "Wake with a double tap"
+ *  (DisplayBlanker's touch listener; the idle backstop skips its wake then, FAS). */
+internal fun wakeWords(): String = if (AppSettings.wakeDoubleTap) "tap it twice" else "touch it"
 
 private fun appsSummary(): String = AppConfigStore.configured().size.let { if (it == 0) "Each game's screen, controls, performance" else "$it games and apps set up" }
 
@@ -1046,7 +1056,7 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
         // dev build 16 (theme F): combos in the names of the controller in hand. Build 18 (B3): every card of the registry
         // (Search opens the page on it); (B6, hF13): a switch says what it does now — off, "Off — …"
         val look = app.wayfinder.ui.currentLook()
-        SettingCard(NavCards.BRIGHTNESS, "\"Both screens\" keeps the difference between them. " +
+        SettingCard(NavCards.BRIGHTNESS, "“Both screens” keeps the difference between them. " +
             (Say.combo(ThorAction.BRIGHTER, look)?.let { "$it / ${Say.combo(ThorAction.DIMMER, look) ?: "—"} change both screens." } ?: "")) {
             BrightnessSliders()
         }
@@ -1057,7 +1067,8 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
             when (AppSettings.gestureBlankMode) {
                 BlankGesture.OFF -> "Off — the bottom screen turns off with a combo or the quick panel"
                 BlankGesture.TAP -> "Tap the bottom screen with 3 fingers to turn it off; tap again to turn it back on"
-                BlankGesture.SWIPE -> "Swipe down with 3 fingers to turn it off; touch it to turn it back on"
+                // 1.5-beta2: a swipe up wakes it too, and with "Wake with a double tap" one touch does nothing
+                BlankGesture.SWIPE -> "Swipe down with 3 fingers to turn it off; swipe up, or ${wakeWords()}, to wake it"
             },
         ) {
             GlassSegmentedControl(listOf("Never", "Tap", "Swipe down"), AppSettings.gestureBlankMode.ordinal, Modifier.fillMaxWidth()) {
@@ -1071,7 +1082,7 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
             checked = AppSettings.wakeDoubleTap, onChecked = { AppSettings.setWakeDoubleTapOn(it) })
         SettingCard(
             NavCards.IDLE,
-            if (AppSettings.idleBlankEnabled) "After this long without a touch; touch it to turn it back on"
+            if (AppSettings.idleBlankEnabled) "After this long without a touch; ${wakeWords()} to turn it back on"
             else "Off — it stays on until you turn it off",
             checked = AppSettings.idleBlankEnabled, onChecked = { AppSettings.setIdleBlank(it) },
         ) {
@@ -1129,7 +1140,7 @@ private fun ScreensPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Un
             checked = awake, onChecked = { ActionRegistry.perform(ThorAction.TOGGLE_KEEP_AWAKE); awake = ForegroundAppService.isSecondKeptAwake() },
         )
         SettingCard(NavCards.FPS,
-            if (AppSettings.fpsCounter) "The real frames per second each screen's app draws (\"idle\" = nothing moving)" else "Off — no counter",
+            if (AppSettings.fpsCounter) "The real frames per second each screen's app draws (“idle” = nothing moving)" else "Off — no counter",
             checked = AppSettings.fpsCounter, onChecked = { AppSettings.setFpsCounterOn(it); ForegroundAppService.reapplyFps() }) {
             if (AppSettings.fpsCounter) {
                 // build 18 (B7, D14): every choice named — "Screen", "Corner", "Shows" (two had no label)
@@ -1315,7 +1326,7 @@ private fun AppearancePage(myDisplayId: Int, onBack: () -> Unit) {
         // registry's cards (Search opens the page on them)
         val own = AppSettings.customColors
         SettingCard(NavCards.THEME, when {
-            own -> "Your own colours: a flat look — no glass, no blur (here, the quick panel and \"Your combos\")"
+            own -> "Your own colours: a flat look — no glass, no blur (here, the quick panel and “Your combos”)"
             AppSettings.themeMode == ThemeMode.BLACK -> "Black: dark glass on pure black — OLED screens show true black and use less power (no aurora, no background blur)"
             else -> "Light, dark or black glass, your own colours — or follow the system"     // (B11, MORE-20a)
         }) {
@@ -1333,11 +1344,17 @@ private fun AppearancePage(myDisplayId: Int, onBack: () -> Unit) {
             // the four colours in the Theme card while they're chosen — Search's "Your own colours" lands on them
             if (own) CustomColorPickers(focusId = NavCards.OWN_COLOURS.id)
         }
-        MoreOptions(cards = if (own) listOf(NavCards.HUB_SCREEN) else listOfNotNull(NavCards.BACKDROP, NavCards.SEE_THROUGH, NavCards.REFRACTION.takeIf { app.wayfinder.ui.GlassLensConfig.supported }, NavCards.HUB_SCREEN)) {
+        // 1.5-beta2 (GitHub #134): the face buttons' colours, in every theme (ButtonColourPickers.kt)
+        SettingCard(NavCards.BUTTON_COLOURS, ButtonColourWords.line(AppSettings.buttonColourMode)) { ButtonColoursBody() }
+        // 1.5-beta2, checked on the Thor: Black paints pure black over what's behind (no real glass, no
+        // aurora), so the backdrop and the see-through sliders change nothing there; the edges' light (refraction) still shows
+        val black = AppSettings.themeMode == ThemeMode.BLACK
+        MoreOptions(cards = if (own) listOf(NavCards.HUB_SCREEN) else listOfNotNull(NavCards.BACKDROP.takeIf { !black }, NavCards.SEE_THROUGH.takeIf { !black }, NavCards.REFRACTION.takeIf { app.wayfinder.ui.GlassLensConfig.supported }, NavCards.HUB_SCREEN)) {
         // build 18 (B11, MORE-07): your colours have no glass — one line instead of three settings that change nothing
         if (own) Caption("Glass settings apply when Your own colours is off.")
         else {
-        SettingCard(
+        if (black) Caption("Black shows nothing behind Wayfinder: the backdrop and see-through settings apply to the other themes.")
+        if (!black) SettingCard(
             NavCards.BACKDROP,
             // build 18 (B11, hF21): "What's behind" — the glass blurs the screen under Wayfinder: the app there, or the wallpaper
             // (it promised "your background")
@@ -1349,20 +1366,24 @@ private fun AppearancePage(myDisplayId: Int, onBack: () -> Unit) {
                 (ctx as? MainActivity)?.applyBackdrop()
             }
         }
-        SettingCard(NavCards.SEE_THROUGH, "How much of what's behind shows through — here and in the quick panel (the AYN button)") {
+        if (!black) SettingCard(NavCards.SEE_THROUGH, "How much of what's behind shows through — here and in the quick panel (the AYN button)") {
             GlassLookSliders(onBlur = { (ctx as? MainActivity)?.applyBackdrop() })
         }
         // dev build 17 (WP8): on / off — the card's switch (was On / Off segments)
         if (app.wayfinder.ui.GlassLensConfig.supported) SettingCard(
             NavCards.REFRACTION,
             if (!AppSettings.refraction) "Plain frosted glass"
+            else if (black) "The glass edges catch the light"
             else if (AppSettings.backdrop == Backdrop.AURORA) "The glass bends the aurora at its edges and catches the light"
             // build 18 (round 2): the backdrop option's name (hF21: "your background" promised the wallpaper)
             else "The glass edges catch the light (what's behind stays live, so it's blurred, not bent)",
             checked = AppSettings.refraction, onChecked = { AppSettings.setRefractionOn(it) },
         )
         }
-        SettingCard(NavCards.HUB_SCREEN, "Where Wayfinder opens. On the top screen, \"Your combos\" fills the bottom one; on the bottom screen, the top stays free for your game.") {
+        // 1.5-beta2: the combos sheet only shows while its switch is on (MainActivity.showCompanion)
+        SettingCard(NavCards.HUB_SCREEN, "Where Wayfinder opens. " +
+            (if (AppSettings.controlsSheet) "On the top screen, “Your combos” fills the bottom; on the bottom, the top stays free for your game."
+             else "On the top screen, the bottom keeps what it shows; on the bottom, the top stays free for your game.")) {
             GlassSegmentedControl(listOf("Top screen", "Bottom screen"), if (AppSettings.hubOnTop) 0 else 1, Modifier.fillMaxWidth()) { i ->
                 AppSettings.setHubScreen(i == 0)
                 (ctx as? MainActivity)?.relocateIfNeeded(userInitiated = true)
@@ -1415,14 +1436,17 @@ private fun readableText(card: Long): Int {
 }
 
 @Composable
-private fun ColorPick(name: String, argb: Int, modifier: Modifier, onPick: (Int) -> Unit) {
+internal fun ColorPick(name: String, argb: Int, modifier: Modifier, head: (@Composable () -> Unit)? = null, onPick: (Int) -> Unit) {
     Column(modifier, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FieldLabel(name)
+        if (head != null) head() else FieldLabel(name)          // 1.5-beta2 (GitHub #134): Button colours heads it with the badge
         app.wayfinder.ui.ColorWheel(argb, 120.dp) { onPick(it) }
         // dev build 17 (WP8): the shared hex field (Stick lights has the same one)
         HexColorField(argb, onPick, previewSize = 22.dp, fieldWidth = 96.dp, textSize = 15.sp)
     }
 }
+
+/** Build 19: [Backup.make] refuses a file over [Backup.MAX_BYTES] (a restore couldn't read it). */
+private const val BACKUP_TOO_BIG = "The backup is too big to restore (over 2 MB), so it wasn't made"
 
 /** Back up / restore (Backup.kt): a backup made on this Thor restores everything; any other
  *  file only gives its game controls, filtered like a shared file. */
@@ -1442,12 +1466,13 @@ private fun BackupSection(myDisplayId: Int) {
     SectionHeader("Back up and restore")
     // build 18 (B20, MORE-D25): icons by job (all three were an "i")
     GlassListRow(NavCards.BACKUP.title, value = "a file in Download / Wayfinder", icon = Icons.Rounded.Save, id = NavCards.BACKUP.id) {
-        val (name, bytes) = Backup.make(ctx)
+        // build 19: a backup too big to restore is never saved
+        val (name, bytes) = Backup.make(ctx) ?: run { Overlays.pill(BACKUP_TOO_BIG, CueOrigin.Window(myDisplayId)); return@GlassListRow }
         Overlays.pill(if (ProfileShare.save(ctx, name, bytes)) "Backup saved in Download / Wayfinder: $name"
             else "The backup couldn't be saved", CueOrigin.Window(myDisplayId))
     }
     GlassListRow("Send a backup…", value = "Drive, mail, another app", icon = Icons.Rounded.Share) {
-        val (name, bytes) = Backup.make(ctx)
+        val (name, bytes) = Backup.make(ctx) ?: run { Overlays.pill(BACKUP_TOO_BIG, CueOrigin.Window(myDisplayId)); return@GlassListRow }
         if (!ProfileShare.send(ctx, name, bytes, "Send the backup")) Overlays.pill("Couldn't open the share menu", CueOrigin.Window(myDisplayId))
     }
     GlassListRow("Restore from a file…", value = "you'll see what it contains first", icon = Icons.Rounded.Restore, id = "restore") {
@@ -1460,9 +1485,9 @@ private fun BackupSection(myDisplayId: Int) {
         color = LocalGlass.current.textTertiary, style = MaterialTheme.typography.bodySmall)
     if (incoming != null || error != null) RestoreDialog(incoming, error, onRestore = { inc ->
         incoming = null; error = null
-        if (inc.trusted && inc.prefs != null) { Backup.restoreAll(ctx, inc.prefs); Backup.restartApp(ctx) }
+        if (inc.trusted && inc.prefs != null) { Backup.restoreAll(ctx, inc.prefs, inc.controllers); Backup.restartApp(ctx) }
         else {
-            Backup.restoreMappings(inc.mappings)
+            Backup.restoreMappings(ctx, inc.mappings + inc.own)
             Overlays.pill("Game controls imported" + if (inc.report.macrosOff > 0) " — macros stay off until you turn them on" else "",
                 CueOrigin.Window(myDisplayId))
         }
@@ -1482,8 +1507,14 @@ private fun RestoreDialog(inc: Backup.Incoming?, error: String?, onRestore: (Bac
             Text(error ?: "That file can't be used.", color = g.textSecondary, style = MaterialTheme.typography.bodyLarge)
         } else if (inc.trusted) {
             Text("A backup from ${inc.made}, made by Wayfinder on this Thor.", color = g.textPrimary, style = MaterialTheme.typography.bodyLarge)
-            Text("It brings back everything: combos, app and game controls, the quick panel, keyboard, lights, sound and sleep settings. " +
+            // build 19: the controllers named only where the backup or this Thor has something of theirs (BackupRules.sheet)
+            val pads = inc.sheet == BackupRules.Sheet.WITH_CONTROLLERS
+            Text("It brings back everything: combos, app and game controls, " + (if (pads) "your controllers' settings and their own controls, " else "") +
+                "the quick panel, keyboard, lights, sound and sleep settings. " +
                 "What you have now is replaced, and Wayfinder restarts.", color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
+            if (inc.sheet == BackupRules.Sheet.BEFORE_CONTROLLERS)
+                Text("It was made before backups held controllers, so your controllers' settings and their own controls stay as they are.",
+                    color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
         } else {
             Text("This backup can't be fully restored here.", color = g.textPrimary, style = MaterialTheme.typography.bodyLarge)
             Text("It comes from another Thor or an earlier install of Wayfinder, or it was changed. Only the Wayfinder " +
@@ -1491,7 +1522,8 @@ private fun RestoreDialog(inc: Backup.Incoming?, error: String?, onRestore: (Bac
                 color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
             val games = inc.mappings.count { it.game != null }
             Text("For safety, only its game controls are taken: ${inc.mappings.size - games} app${if (inc.mappings.size - games == 1) "" else "s"}" +
-                " and $games game${if (games == 1) "" else "s"}. Its Wayfinder combos and settings are not imported.",
+                " and $games game${if (games == 1) "" else "s"}" + (if (inc.own.isNotEmpty()) ", and ${inc.own.size} for your controllers" else "") +
+                ". Its Wayfinder combos and settings are not imported.",
                 color = g.textSecondary, style = MaterialTheme.typography.bodyMedium)
             for (l in inc.report.lines()) Text(l, color = g.warn, style = MaterialTheme.typography.bodyMedium)
         }
@@ -1523,8 +1555,9 @@ private fun Troubleshooting(go: (String) -> Unit) {
     // dev build 17 (WP11, theme H; critique K10): every place from the registry (NavPaths.kt — a moved row moves its path, a
     // dead one fails NavPathsTest). dev build 17 (WP9): each "Fix" opens the page on the card its text names
     val items = listOf(
-        Fix("A game sees two controllers, or buttons act twice",
-            "Wayfinder gives games a copy of the controller and hides AYN's. Set ${Say.path(NavCards.LAYER)} to Nowhere and back — or restart the game.", NavCards.LAYER),
+        Fix("A game sees two controllers", CtlWords.twoListed(Say.path(NavCards.THOR_NAME)), NavCards.THOR_NAME),   // 1.5-beta2 (GitHub #102)
+        // b2 (review): its own question again, its row opening the place that fixes it (with #102's row it opened the name option)
+        Fix("Buttons act twice", "Set ${Say.path(NavCards.LAYER)} to Nowhere and back, or restart the game.", NavCards.LAYER),
         // build 18 (B5, hF7): the Hub's status line points here ("Thor is player 2 — see Help")
         Fix("Some games ignore the Thor",
             "Some games only listen to player 1: the Hub's status line says when the Thor isn't — set ${NavCards.LAYER.title} to Nowhere and back, " +
@@ -1566,6 +1599,9 @@ private fun Troubleshooting(go: (String) -> Unit) {
         // dev build 15 (C6): nothing hidden is listed any more — what's left is an emulator's saved place
         Fix("An emulator lost a controller",
             "Emulators remember a controller by its id and place: map it once in the emulator (once more after this update). Wayfinder keeps both: a controller off for less than 30 minutes, or reconnected, keeps its place. Changing the player order changes places.", NavCards.ORDER),
+        // 1.5-beta2: a remade copy gets a new id; RetroArch keeps port 1 on the old one until it restarts
+        Fix("RetroArch ignores the Thor's D-pad",
+            "When Wayfinder restarts, or Game controls stop and start again, Android gives the controller a new id and RetroArch keeps waiting on the old one (“configured in port 2”). Close RetroArch and open it again."),
         // dev build 15 (WP2, D1 / critique M2): each controller's own face — in games too. Build 18 (B23): its page by the path
         Fix("A controller's face buttons are swapped in a game",
             "Each controller uses its own face buttons: on a PlayStation or Xbox one the bottom button confirms — in games too, so an emulator set up before sees them swapped. Map it again in the emulator, or choose “Like the Thor” on its page (${Nav.place(NavPages.CONTROLLER_PAGE)}).", page = HubPage.CONTROLLER),
@@ -1581,7 +1617,7 @@ private fun Troubleshooting(go: (String) -> Unit) {
     // QA2: a bottom screen stuck black while touch still works — whatever did it, one press brings it back. Build 18 (B20,
     // MORE-D25 / MORE-D26): a card like the questions (its answer inside), its row with the fix's icon (was an "i")
     SettingCard("Bottom screen stays black", short = "Touch still works on it? One press turns it back on, whatever turned it off.",
-        more = "Another app, AYN's own bottom-off, a brightness at 0. \"Bottom screen off / on\" does the same when the screen is dark. " +
+        more = "Another app, AYN's own bottom-off, a brightness at 0. “${ThorAction.TOGGLE_SECOND_SCREEN.title}” does the same when the screen is dark. " +
             "If one app stays black, move it to the top and back.") {
         GlassListRow("Turn it back on", icon = Icons.Rounded.Build, id = "fix:bottom") { ForegroundAppService.repairBottomScreen() }
     }
@@ -1711,6 +1747,33 @@ private fun HelpPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> Unit)
             else "Off — Wayfinder never checks. New versions are on the GitHub page.") +
                 (UpdateCheck.available?.let { " Version $it is out." } ?: ""),
             checked = UpdateCheck.enabled, onChecked = { UpdateCheck.setEnabled(ctx, it) })
+        // b19 (I12): what the Guide's sites saved (cookies, their storage, the page cache), one store for every game, so here
+        // and not on a game's page. Two presses, as every row that drops something; the pins, notes and offline copies stay
+        val guideAsk = app.wayfinder.ui.rememberConfirmState()
+        GlassListRow(NavCards.GUIDE_DATA.title, value = if (guideAsk.asked) "Press again: sites forget your sign-ins, cookie choices and checks"
+            else "cookies and what sites saved · your pins, offline copies and notes stay",
+            icon = Icons.Rounded.DeleteOutline, id = NavCards.GUIDE_DATA.id) {
+            guideAsk.press {
+                GuideCache.clearSiteData(ctx) { ok ->
+                    Overlays.pill(if (ok) "The Guide's site data is cleared" else "The Guide's site data couldn't be cleared",
+                        CueOrigin.Window(myDisplayId))
+                }
+            }
+        }
+        // 1.5-beta2 (Q10, b19's row 3b): the pinned pages' offline copies, Wayfinder's own files (the clear above leaves them).
+        // Two presses, as every row that drops something; counted again at each press, and with none a press does nothing.
+        // The pins stay: each copy is saved again the next time its page loads online
+        var copies by remember { mutableIntStateOf(GuideCache.copies(ctx)) }
+        val copiesAsk = app.wayfinder.ui.rememberConfirmState()
+        GlassListRow(NavCards.GUIDE_COPIES.title, value = if (copiesAsk.asked) GuideCopies.asked(copies) else GuideCopies.line(copies),
+            icon = Icons.Rounded.DeleteOutline, id = NavCards.GUIDE_COPIES.id) {
+            copies = GuideCache.copies(ctx)
+            if (copies > 0) copiesAsk.press {
+                val failed = GuideCache.dropCopies(ctx)
+                copies = GuideCache.copies(ctx)
+                Overlays.pill(GuideCopies.done(failed), CueOrigin.Window(myDisplayId))
+            } else copiesAsk.cancel()
+        }
         GlassListRow("Support Wayfinder", value = "Support me on Ko-fi · ko-fi.com/thorwayfinder", icon = Icons.Rounded.Coffee,
             end = RowEnd.EXTERNAL) { openKofi(ctx, myDisplayId) }
         GlassListRow("Open-source licenses", Modifier.onFocusChanged { if (it.isFocused) footerScope.launch { delay(60); footer.bringIntoView() } },
@@ -1770,7 +1833,7 @@ private fun featuresSummary(): String = listOf(Features.moreCombos, AppSettings.
 private fun SoundPage(myDisplayId: Int, onBack: () -> Unit) =
     SubPage(myDisplayId, NavPages.title(HubPage.SOUND), "Each screen's volume, the speaker fix and a headphones EQ", onBack) {
         // build 18 (B3): the registry's cards (Search opens the page on them)
-        SettingCard(NavCards.VOLUME, "\"Both screens\" keeps the difference between them. Top and Bottom set how loud each screen is compared with the other.") {
+        SettingCard(NavCards.VOLUME, "“Both screens” keeps the difference between them. Top and Bottom set how loud each screen is compared with the other.") {
             VolumeSliders()
         }
         SpeakerFixCard()
@@ -1845,13 +1908,26 @@ private fun HeadphoneEqCard() {
 @Composable
 private fun HintsPage(myDisplayId: Int, onBack: () -> Unit) =
     SubPage(myDisplayId, NavPages.title(HubPage.HINTS), "What Wayfinder shows on its own — each can go", onBack) {
+        // b19 (MORE-D21): Show it puts a hint up as it will appear. Leaving the page (B, a link) or Wayfinder (Home: ON_STOP)
+        // takes it down at once, so it never stays over the launcher
+        val owner = LocalLifecycleOwner.current
+        androidx.compose.runtime.DisposableEffect(owner) {
+            val o = androidx.lifecycle.LifecycleEventObserver { _, e -> if (e == Lifecycle.Event.ON_STOP) ForegroundAppService.hidePreview() }
+            owner.lifecycle.addObserver(o)
+            onDispose { owner.lifecycle.removeObserver(o); ForegroundAppService.hidePreview() }
+        }
+        // the service shows it: without it, no button (no row where A would do nothing)
+        val live = ForegroundAppService.isRunning
         // 1.3 (GitHub #13): the Recents hint — smaller, off, or in a corner (it covered the middle card's icon). Build 18 (B11,
         // MORE-18 / MORE-11 / pF19): the keys drawn as the hand's badges (A7's tokens) — no font arrows, no typed Select / Start
         // (Create / Options on a DualSense); Select closes every app on its second press (E8, decision H8)
         SettingCard(NavCards.RECENTS_HINT, when (AppSettings.recentsHint) {
             // device pass: the choice is "Symbols" (was "Compact" here) — icons stand for the words
-            1 -> "Symbols: one slim line, icons for the words — ${Say.keyMenu(ThorButton.A)} open · ${Say.keyMenu(ThorButton.Y)} close · ${Say.keyMenu(ThorButton.B)} back"
-            2 -> "Off — the buttons still work: ${Say.keyMenu(ThorButton.A)} opens, ${Say.keyMenu(ThorButton.Y)} closes, " +
+            // 1.5-beta2: every key the hint shows (HeldWords.recents), X closes a card too
+            1 -> "Symbols: one slim line, icons for the words — ${Say.keyMenu(ThorButton.A)} open · ${Say.keyMenu(ThorButton.Y)} / " +
+                "${Say.keyMenu(ThorButton.X)} close · ${Say.key(ThorButton.SELECT)} twice close all · ${Say.key(ThorButton.START)} home · " +
+                "${Say.keyMenu(ThorButton.B)} back"
+            2 -> "Off — the buttons work:${Say.keyMenu(ThorButton.A)} opens, ${Say.keyMenu(ThorButton.Y)} or ${Say.keyMenu(ThorButton.X)} closes, " +
                 "${Say.key(ThorButton.SELECT)} twice closes all, ${Say.key(ThorButton.START)} goes home, ${Say.keyMenu(ThorButton.B)} goes back"
             else -> "One line: what the buttons do in Recent apps, for a few seconds when it opens"
         }) {
@@ -1860,6 +1936,7 @@ private fun HintsPage(myDisplayId: Int, onBack: () -> Unit) =
             // build 18 (B17, MORE-D07): the card's own spacing (no Spacer)
             if (AppSettings.recentsHint != 2) GlassSegmentedControl(listOf("Top", "Top left", "Top right", "Bottom left", "Bottom right"),
                 AppSettings.recentsHintAt, Modifier.fillMaxWidth(), label = "Where") { AppSettings.chooseRecentsHint(AppSettings.recentsHint, it) }
+            if (AppSettings.recentsHint != 2 && live) ShowIt { ForegroundAppService.showPreview(HintPreview.RECENTS, myDisplayId) }
         }
         // 1.4 (GitHub #52): the pop-ups. Build 18 (B11 addendum, ps-F7): Home, Back and AYN in the hand's names
         SettingCard(NavCards.COMBO_LIST, when (AppSettings.chordHint) {
@@ -1868,6 +1945,8 @@ private fun HintsPage(myDisplayId: Int, onBack: () -> Unit) =
             else -> "${Say.hold(Say.btn(ThorButton.HOME), cap = true)}, ${Say.btn(ThorButton.BACK)} or ${Say.btn(ThorButton.AYN)}: the combos you can press show after a moment"
         }) {
             GlassSegmentedControl(listOf("Soon", "Later", "Off"), AppSettings.chordHint, Modifier.fillMaxWidth()) { AppSettings.chooseChordHint(it) }
+            // b19 (MORE-D21): at once (Soon and Later differ only in the wait; holding Home here still shows the real one)
+            if (AppSettings.chordHint != 2 && live) ShowIt { ForegroundAppService.showPreview(HintPreview.COMBOS, myDisplayId) }
         }
         // build 18 (B18, MORE-D20): with Wayfinder on the bottom screen the sheet can't show — the card says so, on or off, and where
         SettingCard(NavCards.YOUR_COMBOS,
@@ -1876,6 +1955,11 @@ private fun HintsPage(myDisplayId: Int, onBack: () -> Unit) =
             else "Off — the bottom screen keeps what it shows",
             checked = AppSettings.controlsSheet, onChecked = { AppSettings.setControlsSheetOn(it) })
     }
+
+/** b19 (MORE-D21): a hint card's Show it: the hint as it will appear, on this screen, for its few seconds. It never takes the
+ *  focus or a touch; a new press (or the other card's) replaces it. */
+@Composable
+private fun ShowIt(onClick: () -> Unit) = GlassButton("Show it", onClick, size = ButtonSize.COMPACT, icon = Icons.Rounded.Visibility)
 
 /** 1.4: AYN's own charging switches (the quick panel's tiles), readable and set here too. */
 @Composable
@@ -2010,7 +2094,9 @@ private fun FeaturesPage(myDisplayId: Int, onBack: () -> Unit, go: (String) -> U
         // value and the way there (dev build 17, WP9: it opens the Controller page on that card). Build 18 (B11 addendum,
         // MORE-D22): a card like its siblings, the way there its row (the icon and the loose caption are gone)
         SettingCard(NavCards.FEATURES_GC.title, "Each game its own buttons, gyro and macros") {
-            GlassListRow("Where", value = if (Features.gameControls) PadLayerCtl.mode.label else "Off", end = RowEnd.CHEVRON,
+            // 1.5-beta2: never "Off" while apps set to On still get them (the Controller page's card)
+            val ownOn = AppConfigStore.version.intValue.let { PadLayerCtl.appsOwnOn() }
+            GlassListRow("Where", value = if (Features.gameControls) PadLayerCtl.mode.label else if (ownOn) "Apps set to On" else "Off", end = RowEnd.CHEVRON,
                 id = NavCards.FEATURES_GC.id) { goTo(NavCards.LAYER, go) }
         }
         // dev build 16 (theme F): its combo as the controller in hand says it
@@ -2278,6 +2364,11 @@ internal fun ControllerScreenCard() {
                 else -> { AppSettings.setFocusStickyOn(false); AppSettings.setFocusLock(true, top = false) }
             }
             ForegroundAppService.reapplyFocusLock()
+        }
+        // 1.5-beta2 (GitHub #145): a top lock set in the Thor's own settings is kept; said, with how to take it back
+        if (AppSettings.thorTopLock) {
+            androidx.compose.foundation.layout.Spacer(Modifier.height(8.dp))
+            Caption("The Thor's own setting holds the controller on the top screen. Pick a choice here and Wayfinder takes over.")
         }
         // 1.4: the controller goes with a game you move — not for "Always top / bottom"
         if (mode <= 1) {

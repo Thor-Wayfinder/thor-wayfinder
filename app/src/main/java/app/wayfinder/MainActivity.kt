@@ -125,6 +125,9 @@ class MainActivity : ComponentActivity() {
         // (savedInstanceState) shows its saved page: its composition says what it is, as before.
         val first = if (savedInstanceState == null) firstPage(intent) else null
         if (first?.startsWith("play:") == true) gameControls = this
+        // b19 (V02): a page the quick panel or an "Open Wayfinder" combo opened over an app: one B goes back to it. A window
+        // recreated by a change (the Dark theme tile, a screen of another size) keeps its mark
+        if (first != null) markLeave(intent, first, wasInFront = false) else if (savedInstanceState != null) restoreLeave(savedInstanceState)
 
         @Suppress("DEPRECATION")
         val myDisplayId = windowManager.defaultDisplay.displayId
@@ -161,19 +164,39 @@ class MainActivity : ComponentActivity() {
                     mutableStateOf(intent?.getStringExtra("pad")?.takeIf { GameTabRules.padKeyOk(it) })
                 }
                 LaunchedEffect(deepLink.value) { deepLink.value?.let { (p, k) -> pad = k; page = p; deepLink.value = null } }
+                // b19 (V02): left to the app by B ([backToApp]), the next open starts on the home, as after B up the whole
+                // chain. Set while the window is stopped: its recomposer is paused then, so the page left is never drawn as
+                // the home on its way out
+                val owner = LocalLifecycleOwner.current
+                androidx.compose.runtime.DisposableEffect(owner) {
+                    val o = androidx.lifecycle.LifecycleEventObserver { _, e ->
+                        if (e == Lifecycle.Event.ON_STOP && leftToApp) { leftToApp = false; page = HubPage.HOME } }
+                    owner.lifecycle.addObserver(o)
+                    onDispose { owner.lifecycle.removeObserver(o) }
+                }
+                // b19 (V02): the page the quick panel or an "Open Wayfinder" combo opened over an app ([leave]), while it shows
+                val lv = leave.value
+                val toApp = lv != null && lv.page == page
+                val leaveNow = remember(lv, toApp) { if (toApp && lv != null) ({ backToApp(lv) }) else null }
                 // B / Back goes up one level; the Hub home itself leaves the app as usual. dev build 16 (WP7): the window's
                 // root layer — a list, a popup or a sheet open in the page is deeper, and closes first
-                app.wayfinder.ui.BackLayer(enabled = page != HubPage.HOME, onBack = {
+                app.wayfinder.ui.BackLayer(enabled = BackToAppRules.rootEnabled(page, lv?.page), onBack = {
                     // Game controls (opened from a game): Back returns to the game
                     if (page.startsWith("play:")) { finish(); ForegroundAppService.gameControlsClosed() }
+                    // b19 (V02): the marked page goes back to its app at once (never up to More or the Hub)
+                    else if (BackToAppRules.back(page, lv?.page) == BackToAppRules.Back.TO_APP) lv?.let { backToApp(it) }
                     else page = hubBack(page)
                 }) {
+                    // b19 (V02): the marked page's Back pill names the app ("Back to game"); a page's own onBack agrees
+                    androidx.compose.runtime.CompositionLocalProvider(app.wayfinder.ui.LocalPageBack provides (if (toApp) lv!!.words else "Back"),
+                        LocalLeave provides leaveNow) {
                     // build 18 (E5, pF04): Keyboard & mouse opened over Wayfinder — B closes it and the Hub stays (B left the
                     // app with the deck still "Sending to: Wayfinder"). Deeper than the page, shallower than its lists and sheets.
                     // Review (E5): never in Game controls — it belongs to the game under it, and B goes back to that game
                     app.wayfinder.ui.BackLayer(enabled = app.wayfinder.deck.InputDeck.shown.value && !page.startsWith("play:") &&
                         app.wayfinder.deck.InputDeck.targetPkg == packageName, onBack = { app.wayfinder.deck.InputDeck.hide() }) {
                         HubNavHost(myDisplayId, page, pad) { page = it }
+                    }
                     }
                 }
             }
@@ -224,6 +247,7 @@ class MainActivity : ComponentActivity() {
         // turns it into Home and Wayfinder's own page went home
         if (event.keyCode == KeyEvent.KEYCODE_BUTTON_MODE) return true
         if (padFallback.shouldDrop(event)) return true   // R3/L3/Start must not "click"
+        padNav.focusForKey(event)   // b19 fix: the window's view has the focus before a key reaches it (ui.PadNav.focusForKey)
         return super.dispatchKeyEvent(event)
     }
 
@@ -239,6 +263,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // b19 fix (H1a, F2): a page asked of this window while it is in front gets no new onResume (no hubShown): it needs the
+        // controller all the same, so Keyboard & mouse's hold ends, as for a window that comes up (ForegroundAppService.onHubShown)
+        if (resumed === this) app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.FOCUS)
+        // b19 fix (H1a, review): and it is seen: Keyboard & mouse covering its screen closes (the Hub on the bottom under the deck)
+        if (resumed === this) ForegroundAppService.windowAsked(windowDisplay())
         // b18i (D1): where this window is asked to be — Game controls beside the game, else the Hub's screen (onResume relocates)
         askedScreen = screenAsked(intent)
         // b18i (review): a window opened as Game controls beside the game relaunches what it was asked last — a Hub page too (its
@@ -253,6 +282,11 @@ class MainActivity : ComponentActivity() {
             // the window comes forward, as before the compass named the home (d3 N2)
             val show = HubPage.toShow(it, shownPage, Tour.done(this)) ?: return
             if (show == HubPage.TOUR && shownPage == HubPage.TOUR) return
+            // b19 (V02): asked over an app, the page is marked; a window that was in front (not stopped since it was resumed)
+            // keeps the mark it has. b19 fix: not the lifecycle state — a stopped window brought forward runs onRestart and
+            // onStart before this (Android 13 delivers its intent with a resume), so it was always STARTED here and a warm open
+            // (the Hub window left behind by the first B) was never marked
+            if (intent.hasExtra(BackToApp.EXTRA)) markLeave(intent, show, wasInFront = !stoppedSinceResume)
             deepLink.value = show to intent.getStringExtra("pad")?.takeIf { k -> GameTabRules.padKeyOk(k) }
             // b18i (D1): a window already in front made Game controls may get no new onResume (Android delivers the intent to
             // a resumed window as it is): the service hears it is up all the same — its controller hand-off waits for that
@@ -329,6 +363,37 @@ class MainActivity : ComponentActivity() {
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
         askedScreen?.let { outState.putInt(KEY_SCREEN, it) }   // b18i (D1): a recreated window stays on its screen
+        // b19 (V02): only a change keeps it (onStop clears it otherwise, and comes first: API 28+)
+        leave.value?.let { outState.putString(KEY_LEAVE_PAGE, it.page); outState.putInt(KEY_LEAVE_SCREEN, it.screen); outState.putString(KEY_LEAVE_WORDS, it.words) }
+    }
+
+    /** b19 (V02): the page the quick panel or an "Open Wayfinder" combo opened over an app ([BackToApp]), the screen that app
+     *  is on, and the Back pill's words there. One B on that page goes back to the app ([backToApp]). It lasts while the window
+     *  stays up: a stop that isn't a change (Home, a touch on the other screen's app, Recents, that B) ends it. */
+    private class Leave(val page: String, val screen: Int, val words: String)
+    private val leave = mutableStateOf<Leave?>(null)
+    /** b19 (V02): B went back to the app: the window's stop puts the home back (setContent's observer). Main thread. */
+    private var leftToApp = false
+    /** b19 fix (V02): the window was stopped (or is not resumed yet) since its last onResume: not in front when an intent
+     *  comes ([onNewIntent]'s mark). Set by onStop, cleared by onResume. Main thread. */
+    private var stoppedSinceResume = true
+
+    /** b19 (V02): [i]'s mark, when it is the one asked for the page [shown] ([BackToApp.taken]). */
+    private fun markLeave(i: Intent, shown: String, wasInFront: Boolean) {
+        val a = BackToApp.taken(i.getLongExtra(BackToApp.EXTRA, 0L), shown, wasInFront, android.os.SystemClock.uptimeMillis()) ?: return
+        val label = runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(a.pkg, 0)).toString() }.getOrNull()
+        val gamey = GameApps.isGame(this, a.pkg) || GameProfiles.runningIn(a.pkg) != null
+        leave.value = Leave(a.page, a.screen, BackToAppRules.pill(a.page, a.page, gamey, label))
+    }
+    private fun restoreLeave(b: Bundle) {
+        val p = b.getString(KEY_LEAVE_PAGE) ?: return
+        leave.value = Leave(p, b.getInt(KEY_LEAVE_SCREEN), b.getString(KEY_LEAVE_WORDS) ?: "Back")
+    }
+    /** b19 (V02): one B on the marked page. The window goes behind, as Android's own Back at the home does (finish() left an
+     *  empty Wayfinder entry in Recents, b18n #10), and the controller goes back to the app's screen. */
+    private fun backToApp(l: Leave) {
+        leftToApp = moveTaskToBack(true)
+        if (leftToApp) ForegroundAppService.backToApp(l.screen)
     }
 
     /** Device pass (d3 N2): what this window is — Game controls or the Hub — is decided when a page is asked of it, not at its next
@@ -408,6 +473,13 @@ class MainActivity : ComponentActivity() {
             a !== gameControls && here == d
         } == true
 
+        /** b19 (V02): a Wayfinder window is in front (the Hub, Game controls, the tour; on either screen). Main thread. */
+        fun inFront(): Boolean = resumed != null
+
+        /** b2 (review F1): a Wayfinder window is in front on display [d] (the Hub, Game controls, the tour): Keyboard & mouse
+         *  can't take the controller from it (DeckHoldRules.ownInFront). Main thread. */
+        fun frontOn(d: Int): Boolean = resumed?.windowDisplay() == d
+
         /** b18i (review, D1 option C): a Wayfinder window is going away — Game controls closed by B (still [gameControls] until its
          *  stop) or by Home + X again (still [resumed] until its pause). What is in front on its screen isn't settled yet. */
         fun closing(): Boolean = listOfNotNull(gameControls, resumed).any { it.isFinishing }
@@ -420,6 +492,9 @@ class MainActivity : ComponentActivity() {
         /** b18i (D1): the intent's screen for Game controls opened beside the game (a display id; ForegroundAppService). */
         const val EXTRA_SCREEN = "screen"
         private const val KEY_SCREEN = "wf_screen"
+        private const val KEY_LEAVE_PAGE = "wf_leave_page"
+        private const val KEY_LEAVE_SCREEN = "wf_leave_screen"
+        private const val KEY_LEAVE_WORDS = "wf_leave_words"
     }
 
     private fun targetDisplay(): Int? {
@@ -482,6 +557,7 @@ class MainActivity : ComponentActivity() {
         // An existing Hub task can be brought forward on the "wrong" screen too.
         if (relocateIfNeeded()) return
         resumed = this
+        stoppedSinceResume = false   // b19 fix (V02): in front from now until onStop
         // b18j (D1): Game controls in front: no sheet over it on its screen — before it takes the controller there
         if (gameControls === this) sheetsOffHere()
         // the Hub takes the controller while it's open (the lock gives it back when it's left); b18i (D1): Game controls on
@@ -501,6 +577,9 @@ class MainActivity : ComponentActivity() {
         // The gyro popup's live preview stops with the page: the game's own gyro was dead, and the
         // sensor ran all night, after leaving by touch or Home (review 2026-09-25)
         GyroEngine.setPreview(null)
+        // b19 (V02): a page left (Home, a touch, Recents, B to the app) comes back as a plain Hub page; a change keeps it
+        if (!isChangingConfigurations) leave.value = null
+        stoppedSinceResume = true   // b19 fix (V02): the next intent (with its resume) finds a window that wasn't in front
         // b18g (WI-5): Game controls too — token-guarded, a no-op unless this window set the service's Hub mark (hubOn). One
         // that set it (shown before it was known as Game controls) left the counter off over the game after it closed
         ForegroundAppService.hubHidden(System.identityHashCode(this))

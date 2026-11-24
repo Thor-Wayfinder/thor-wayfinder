@@ -106,6 +106,7 @@ internal object ExtNodes {
 
     /** Helper start: what a helper that died left removed (this boot only: /dev is made anew at boot) comes back. */
     fun cleanupLeftovers() {
+        exec.execute { runCatching { clearStage() } }                      // before any give-back below (one thread)
         val f = file() ?: return
         if (!f.isFile) return
         val lines = runCatching { f.readLines().take(65) }.getOrDefault(emptyList())
@@ -118,6 +119,24 @@ internal object ExtNodes {
         }
         recs.clear()
         runCatching { f.delete() }
+    }
+
+    /** b19 G3: what a helper killed mid-restore left in the staging folder (root's own, 0700: no app reaches it) goes,
+     *  each staged name whose helper is gone, and the folder with it when empty. A folder that isn't root's own is left
+     *  alone (restoreNode then takes the direct way). Nothing at all without an external controller. */
+    private fun clearStage() {
+        val st = try { Os.lstat(ExtRules.STAGE_DIR) } catch (e: ErrnoException) { return }
+        if (!ExtRules.stageDirOk(OsConstants.S_ISDIR(st.st_mode), st.st_uid, st.st_mode)) return
+        val me = Os.getpid()
+        var n = 0
+        for (name in File(ExtRules.STAGE_DIR).list().orEmpty()) {
+            val pid = ExtRules.stagePid(name) ?: continue
+            if (!ExtRules.stageEntryStale(pid, me, File("/proc/$pid").exists())) continue   // a helper still running
+            val e = runCatching { Os.lstat("${ExtRules.STAGE_DIR}/$name") }.getOrNull() ?: continue
+            if (OsConstants.S_ISCHR(e.st_mode) && runCatching { Os.remove("${ExtRules.STAGE_DIR}/$name") }.isSuccess) n++
+        }
+        if (n > 0) Log.w(TAG, "a previous helper left $n staged node(s): removed")
+        runCatching { Os.remove(ExtRules.STAGE_DIR) }                          // only if empty (rmdir)
     }
 
     private fun giveBackNow(list: List<ExtRules.Rec>, hids: Set<String>): List<String> {
@@ -142,26 +161,113 @@ internal object ExtNodes {
         if (d.reader >= 0 && !d.enabled) PadLayer.setEnabled(d.reader, true)
     }
 
-    /** mknod with its mode AT CREATION (a node made 0600 then chmod-ed was opened by EventHub before the chmod and
-     *  ignored), root:input, its SELinux label — then, once Android opened it, the original 0660
-     *  (a world-readable controller node lets any app read the controller). A missed one heals itself: /dev is made
-     *  anew at boot, AYN makes its copy again at every connect. */
+    /** A node given back. EventHub opens a /dev/input node once, by path, when its name appears (inotify IN_CREATE; a node
+     *  made 0600 then chmod-ed was opened before the chmod and ignored), so it must be complete
+     *  before its name is there. b19 G3, the staged way ([staged]): made in root's own folder on /dev's tmpfs with its
+     *  final owner (root:input), mode ([ExtRules.NODE_MODE]: 0666, the Thor's stock mode) and label,
+     *  then hard-linked in: link() raises IN_CREATE (a rename would not: IN_MOVED_TO, which nobody watches) and the link
+     *  shares the inode, so the node never shows half set up (still root:root, not yet labelled). The direct way
+     *  ([direct], until b19 the only one) stays as the fallback when the Thor refuses a step of it, and for
+     *  `setprop debug.wayfinder.nodestage 0`. A missed one heals itself: /dev is made anew at boot, AYN makes its copy
+     *  again at every connect. */
     private fun restoreNode(r: ExtRules.Rec): Boolean {
         if (!sameDevice(r)) return true                                     // gone, or its number reused: nothing to do
         val path = "/dev/input/${r.event}"
         if (runCatching { Os.lstat(path) }.isSuccess) return true            // there already
-        if (!run("mknod", "-m", "666", path, "c", r.maj.toString(), r.min.toString())) { Log.w(TAG, "restore ${r.event} failed: mknod"); return false }
+        val how = if (prop("debug.wayfinder.nodestage") == "0") Staged.NO
+            else runCatching { staged(r, path) }.getOrElse { Log.w(TAG, "restore ${r.event}: ${it.javaClass.simpleName}"); Staged.NO }
+        return when (how) {
+            Staged.LINKED -> { waitListed(path); Log.i(TAG, "${r.event} put back"); true }
+            Staged.GONE -> true                                             // went meanwhile, or there already (EEXIST)
+            Staged.NO -> direct(r, path)
+        }
+    }
+
+    private enum class Staged { LINKED, GONE, NO }
+
+    /** The staged way: the node made in [ExtRules.STAGE_DIR] (0700 root, same filesystem as /dev/input) as 0600, given
+     *  root:input, [ExtRules.NODE_MODE] and the label of its FINAL path, then hard-linked to [path]. Its name appears
+     *  only when it is ready. The staged name always goes, the folder too when it is empty. NO = a step refused: the
+     *  direct way. */
+    private fun staged(r: ExtRules.Rec, path: String): Staged {
+        val name = ExtRules.stageName(r.event, Os.getpid()) ?: return Staged.NO
+        val tmp = "${ExtRules.STAGE_DIR}/$name"
+        var step = "folder"
+        var ours = false                                                    // nothing in a folder that isn't ours is touched
+        var made = false
+        try {
+            made = runCatching { Os.mkdir(ExtRules.STAGE_DIR, "700".toInt(8)) }.isSuccess  // there already: checked below
+            val st = Os.lstat(ExtRules.STAGE_DIR)
+            if (!ExtRules.stageDirOk(OsConstants.S_ISDIR(st.st_mode), st.st_uid, st.st_mode)) {
+                Log.w(TAG, "restore ${r.event}: no staging folder"); return Staged.NO
+            }
+            if (st.st_dev != Os.stat("/dev/input").st_dev) { Log.w(TAG, "restore ${r.event}: staging folder on another filesystem"); return Staged.NO }
+            ours = true
+            runCatching { Os.remove(tmp) }
+            // toybox, as the direct way (android.system.Os has no mknod); in root's own folder 0600 is only tidiness
+            if (!run("mknod", "-m", "600", tmp, "c", r.maj.toString(), r.min.toString())) { Log.w(TAG, "restore ${r.event}: mknod refused"); return Staged.NO }
+            step = "check"; val node = Os.lstat(tmp)
+            if (!OsConstants.S_ISCHR(node.st_mode) || ExtRules.devMajor(node.st_rdev) != r.maj || ExtRules.devMinor(node.st_rdev) != r.min) {
+                Log.w(TAG, "restore ${r.event}: staged node not as made"); return Staged.NO
+            }
+            step = "chown"; Os.chown(tmp, 0, AID_INPUT)
+            step = "chmod"; Os.chmod(tmp, ExtRules.NODE_MODE.toInt(8))
+            step = "label"; if (!label(tmp, path)) { Log.w(TAG, "restore ${r.event}: label not set"); return Staged.NO }
+            if (!sameDevice(r)) return Staged.GONE                         // the controller went meanwhile
+            step = "link"
+            try { Os.link(tmp, path) } catch (e: ErrnoException) { if (e.errno == OsConstants.EEXIST) return Staged.GONE; throw e }
+            return Staged.LINKED
+        } catch (e: ErrnoException) {
+            Log.w(TAG, "restore ${r.event}: $step ${OsConstants.errnoName(e.errno)}"); return Staged.NO
+        } finally {
+            if (ours) runCatching { Os.remove(tmp) }                        // the staged name only: the link stays
+            if (ours || made) runCatching { Os.remove(ExtRules.STAGE_DIR) } // the folder, only if empty (rmdir)
+        }
+    }
+
+    /** The label ueventd and restorecon give the FINAL path (input_device), not the staged one's (`/dev(/.*)?` =
+     *  device), set on the staged node and read back. No label anywhere (SELinux off): nothing to set. */
+    private fun label(tmp: String, finalPath: String): Boolean {
+        val folder = xattr("/dev/input")
+        val want = ExtRules.pickLabel(lookup(finalPath), folder) ?: return folder == null
+        Os.setxattr(tmp, "security.selinux", (want + "\u0000").toByteArray(), 0)
+        return xattr(tmp)?.trimEnd('\u0000') == want
+    }
+    /** file_contexts' label for a path (hidden android.os.SELinux; the helper runs in app_process: no hidden-API checks). */
+    private fun lookup(p: String): String? = runCatching {
+        Class.forName("android.os.SELinux").getMethod("fileSelabelLookup", String::class.java).invoke(null, p) as String?
+    }.getOrNull()
+    private fun xattr(p: String): String? = runCatching { String(Os.getxattr(p, "security.selinux"), Charsets.UTF_8) }.getOrNull()
+
+    /** Up to 1 s for Android to list it (enableControllers, next, must see it; the wait no longer guards a mode). Stops
+     *  early if the node went (AYN took it: it deletes the node of what it holds). */
+    private fun waitListed(path: String) {
+        val until = System.currentTimeMillis() + 1000
+        while (System.currentTimeMillis() < until && PadLayer.snapshot().none { it.path == path }) {
+            if (runCatching { Os.lstat(path) }.isFailure) break
+            Thread.sleep(100)
+        }
+    }
+
+    /** The direct way (until b19 the only one): mknod with its final mode AT CREATION ([ExtRules.NODE_MODE]: EventHub
+     *  opens it the moment it appears, still root:root), then root:input and restorecon, then up to 1 s for Android to
+     *  list it. Nothing is set back after: the mode is the Thor's stock one from the start (until 2026-10-24 a chmod 660
+     *  followed the wait). */
+    private fun direct(r: ExtRules.Rec, path: String): Boolean {
+        Log.w(TAG, "restore ${r.event}: the direct way")
+        if (!run("mknod", "-m", ExtRules.NODE_MODE, path, "c", r.maj.toString(), r.min.toString())) { Log.w(TAG, "restore ${r.event} failed: mknod"); return false }
         // made, then gone at once (ENOENT): AYN opened it and took it into its slot (it deletes the node it holds) — the
         // controller is back the way it was before Wayfinder, not a failure (seen on the Thor: handling off → "could not
         // be put back" and unlinking stopped for the boot)
-        val gone = { e: Throwable -> (e as? ErrnoException)?.errno == OsConstants.ENOENT }
         val own = runCatching { Os.chown(path, 0, AID_INPUT) }
-        own.exceptionOrNull()?.let { if (gone(it)) return true; Log.w(TAG, "restore ${r.event}: chown ${(it as? ErrnoException)?.errno}") }
+        own.exceptionOrNull()?.let {
+            val errno = (it as? ErrnoException)?.errno
+            if (errno == OsConstants.ENOENT) return true
+            Log.w(TAG, "restore ${r.event}: chown $errno")
+        }
         run("restorecon", path)
-        val until = System.currentTimeMillis() + 1000
-        while (System.currentTimeMillis() < until && PadLayer.snapshot().none { it.path == path }) Thread.sleep(100)
-        val mode = runCatching { Os.chmod(path, "660".toInt(8)) }
-        return mode.isSuccess || mode.exceptionOrNull().let { e -> if (e != null && gone(e)) true else { Log.w(TAG, "restore ${r.event}: chmod ${(e as? ErrnoException)?.errno}"); false } }
+        waitListed(path)
+        return true
     }
 
     /** Every gamepad of these controllers Android has off — not ours, not the Thor's while docked — on again. */
@@ -340,8 +446,9 @@ internal object ExtNodes {
 
     @Volatile private var offThisBoot: Boolean? = null
     /** `setprop debug.wayfinder.unlink 0` (if C0b fails on a Thor: today's Android-off everywhere), or stopped for this
-     *  boot by a failed restore / AYN re-making its copy. */
-    private fun unlinkAllowed(): Boolean {
+     *  boot by a failed restore / AYN re-making its copy. 1.5-beta2 (GitHub #102): the input layer asks it too before it
+     *  sets AYN's pad aside (PadLayer, [ParkRules.allowed]): one switch for every node Wayfinder takes out of the list. */
+    internal fun unlinkAllowed(): Boolean {
         if (prop("debug.wayfinder.unlink") == "0") return false
         val off = offThisBoot ?: (runCatching { File(file()?.parentFile, "ext_nodes_off").readText().trim() }.getOrNull()
             .let { it != null && it == bootId() }).also { offThisBoot = it }

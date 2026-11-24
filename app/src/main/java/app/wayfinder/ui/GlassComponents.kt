@@ -598,13 +598,24 @@ fun ControllerTextField(
     // Android's insets see only a keyboard window on this screen — Wayfinder Keyboard's keys on the other one with "Keep a
     // thin bar" off have none: its own word says it is up (else B closed the keys, the next B only left the field)
     @OptIn(androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
-    val imeShown = androidx.compose.foundation.layout.WindowInsets.Companion.isImeVisible ||
-        app.wayfinder.keyboard.ThorKeyboardService.upForOwnField
+    val insetsIme = androidx.compose.foundation.layout.WindowInsets.Companion.isImeVisible
+    // 1.5-beta2: Wayfinder Keyboard serving: its own word only. A window that isn't edge-to-edge (Guide & notes)
+    // kept saying "up" in its insets after B closed the keys, so the typing never ended and the next A did nothing
+    val imeShown = if (app.wayfinder.keyboard.ThorKeyboardService.instance != null)
+        app.wayfinder.keyboard.ThorKeyboardService.upForOwnField else insetsIme
     var imeSeen by remember { mutableStateOf(false) }
     androidx.compose.runtime.LaunchedEffect(imeShown, editing) {
         if (!editing) imeSeen = false
         else if (imeShown) imeSeen = true
         else if (imeSeen) { kotlinx.coroutines.delay(150); if (editing) stop() }
+    }
+    // 1.5-beta2 (big test t8): the typing ends (Back, another page, another row, the box gone): Wayfinder Keyboard's keys
+    // go with it. keyboard.hide() goes through this window's insets, which see only a keyboard WINDOW on this screen: with
+    // the keys on the other one and "Keep a thin bar" off there is none, and the keys stayed up with the controller
+    androidx.compose.runtime.DisposableEffect(editing) {
+        val typing = editing
+        if (typing) app.wayfinder.keyboard.ThorKeyboardService.ownTyping(true)
+        onDispose { if (typing) app.wayfinder.keyboard.ThorKeyboardService.ownTyping(false) }
     }
     // dev build 17 (WP8): the one focus look, inside its edge (hasFocus: the gate or the field while typing)
     Box(modifier.focusIndicator(shape, inset = true).then(surface)) {

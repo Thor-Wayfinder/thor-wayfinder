@@ -80,6 +80,30 @@ internal object ExtRules {
     fun backIsTouchClick(mapping: String?, fieldOf: (Int) -> Pair<Int, Int>?): Boolean =
         mapTargets(mapping)["BK"]?.let(fieldOf)?.let { (page, usage) -> page == 0xFF01 && usage == 14 } == true
 
+    // ── b19 (H7, ps-F9): what a connected controller's own Home button does ──
+
+    /** A connected controller's own Home: [HOME] (a tap goes home, a hold shows your combos: the default), [SPLIT] ("Game +
+     *  combos": a tap goes to the game as its PS / Guide press, a hold is still your combos) or [GAME] ("Game only": every
+     *  press is the game's, its reader told "E home <key> 0"). In the order its page shows them. */
+    enum class HomeRole { HOME, SPLIT, GAME }
+    /** It has a Home button of its own ("HO=" naming a field in its [mapping], as [standIns] reads it). A Home-less pad's
+     *  Select + Start Home is never a tap (ButtonEngine's synthHome): it keeps its on / off switch. */
+    fun ownHome(mapping: String?): Boolean = "HO" in mapTargets(mapping)
+    /** Controller [key]'s Home role from the app's prefs [all] (thor_extpads) and its [mapping]: "homeg_<key>" = true is Game
+     *  only and wins (its meaning since dev build 14, so older backups restore unchanged); "homet_<key>" = true is Game +
+     *  combos on a controller with its own Home ([ownHome]); else Home. */
+    fun homeRole(all: Map<String, *>, key: String, mapping: String?): HomeRole = when {
+        all["homeg_$key"] == true -> HomeRole.GAME
+        all["homet_$key"] == true && ownHome(mapping) -> HomeRole.SPLIT
+        else -> HomeRole.HOME
+    }
+    /** At a Home press: its tap goes to the game (ButtonEngine: the game's MODE on its own pad, never Android's Home). Only
+     *  [HomeRole.SPLIT] on a controller with its own Home ([ownHome]) whose pad is there to press on ([live]: made, not away),
+     *  with no Wayfinder window holding the controller ([wayfinderOnTop]) and the tour not in front ([tour]): there its tap
+     *  does Home's usual job. Docked or playing as the Thor's, its Home counts as the Thor's (source 0): never asked. */
+    fun homeTapToGame(role: HomeRole, ownHome: Boolean, live: Boolean, wayfinderOnTop: Boolean, tour: Boolean): Boolean =
+        role == HomeRole.SPLIT && ownHome && live && !wayfinderOnTop && !tour
+
     // ── C1: names ──
 
     /** The name Android shows for a controller's pad: its [title] (66 characters at most, controls made spaces) +
@@ -154,6 +178,19 @@ internal object ExtRules {
         }
         return base
     }
+
+    // ── b19 G3 (SECURITY.md): the buttons layouts Wayfinder writes go when handling is off and at uninstall ──
+
+    /** The first line of every buttons layout Wayfinder writes ([ExtPads.ensureLayout]): what makes a file in
+     *  /data/system/devices/keylayout ours to remove (1.5-beta1's files start with it too). */
+    const val LAYOUT_MARK = "# Thor Wayfinder:"
+    private val LAYOUT_NAME = Regex("^Vendor_2020_Product_[0-9a-f]{4}\\.kl$")
+    /** A name [ExtPads.ensureLayout] writes (2020:pid, lower-case hex): only those are even opened. */
+    fun isLayoutName(name: String): Boolean = LAYOUT_NAME.matches(name)
+    /** Ours = our name AND our first line. Anything else in the folder (AYN's, the system's, another app's) is never
+     *  touched, whatever its name. */
+    fun isOurLayout(name: String, firstLine: String?): Boolean =
+        isLayoutName(name) && firstLine?.startsWith(LAYOUT_MARK) == true
 
     /** R1: the cable plugged while the Bluetooth link is still up (or the other way): a controller with a serial whose
      *  reader still runs waits for that link to go ([HANDOVER_MS]), then takes its kept pad. After that: a fresh reader
@@ -315,6 +352,38 @@ internal object ExtRules {
     /** st_rdev → major / minor (bionic's sys/sysmacros.h encoding). */
     fun devMajor(rdev: Long): Int = (((rdev ushr 32) and 0xfffff000L) or ((rdev ushr 8) and 0xfffL)).toInt()
     fun devMinor(rdev: Long): Int = (((rdev ushr 12) and 0xffffff00L) or (rdev and 0xffL)).toInt()
+
+    // ── b19 G3: a node given back is put together out of sight first (ExtNodes.restoreNode) ──
+
+    /** Where a node is put together before it goes back: on /dev's tmpfs (link() can't cross filesystems), outside
+     *  /dev/input (EventHub, wfpad and ExtNodes watch it), its name not starting with "input" and without "v4l-touch"
+     *  (EventHub watches /dev itself for those names). */
+    const val STAGE_DIR = "/dev/wayfinder-stage"
+    /** The mode a node given back ends in, either way (octal, as toybox mknod -m takes it): the Thor's stock mode. Every
+     *  /dev/input node on this ROM is crw-rw-rw-, and AYN's com.odin.mapping (uid 1000, no input group) opens only
+     *  those, so a raw node given back can be taken into AYN's slot as before b19. 2026-10-24 (I10 had 0660). */
+    const val NODE_MODE = "666"
+    /** The staging folder is root's own: a real folder (lstat: a symlink isn't one), uid 0, nothing for group or others. */
+    fun stageDirOk(isDir: Boolean, uid: Int, mode: Int): Boolean = isDir && uid == 0 && (mode and 0x3f) == 0
+    private val STAGED = Regex("^event[0-9]{1,4}\\.([0-9]{1,7})$")
+    /** A staged node's name, "eventN.<pid>": two helpers overlapping at a restart never share one. null = not an event
+     *  name (never a path) or no pid. */
+    fun stageName(event: String, pid: Int): String? =
+        if (Regex("^event[0-9]{1,4}$").matches(event) && pid in 1..9_999_999) "$event.$pid" else null
+    /** The helper that staged [name] (a leftover is removed once that pid is gone); null = not one of our names. */
+    fun stagePid(name: String): Int? = STAGED.find(name)?.groupValues?.get(1)?.toIntOrNull()?.takeIf { it > 0 }
+    /** b19 fix (G3): a staged node of helper [pid] is a leftover, removed by helper [me]'s cleanup: its own (a pid used
+     *  again), or one whose helper is gone ([alive]: /proc/<pid> is there). A live helper's stays: it may be giving that
+     *  node back right now (an app restart during its stopForExit), and without it its link() fails and that give-back
+     *  falls to the direct way (a node seen before it is root:input). */
+    fun stageEntryStale(pid: Int, me: Int, alive: Boolean): Boolean = pid == me || !alive
+    /** An SELinux label as read (an xattr, NUL-terminated) or looked up: printable, no spaces, user:role:type:level. */
+    fun labelOk(s: String?): Boolean = s != null && s.length in 7..255 && s.split(':').size >= 4 && s.all { it in '!'..'~' }
+    /** The label a staged node gets: the one the FINAL path is given ([lookup]: file_contexts for /dev/input/eventN,
+     *  what ueventd and restorecon give it), else the folder's own ([folder]: /dev/input's, the same rule). Never the
+     *  staged path's: restorecon there gives `device` (`/dev(/.*)?`). null = neither is a label. */
+    fun pickLabel(lookup: String?, folder: String?): String? =
+        lookup?.trimEnd('\u0000')?.takeIf(::labelOk) ?: folder?.trimEnd('\u0000')?.takeIf(::labelOk)
 
     /** One removed / switched-off device (C2), as the records file keeps it: `<eventN> <maj>:<min> <inputN> <kind>
      *  <ownerHid> <reader>`. */

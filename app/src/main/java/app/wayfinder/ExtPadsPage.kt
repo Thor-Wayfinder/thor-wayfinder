@@ -294,7 +294,8 @@ internal fun ExtPadPage(myDisplayId: Int, key: String, onBack: () -> Unit, go: (
 
 /**
  * dev build 17 (theme G, D4): the Thor's Back and AYN button on controller [pad] — which buttons they are (its own, Home +
- * Select / Home + Start standing in, or none), set up with the wizard's two steps ([setUp]: [WizardSteps.SPARE]); after its
+ * Select / Home + Start standing in, or none), set up with the wizard's two steps ([setUp]: [WizardSteps.SPARE]; 1.5-beta2,
+ * GitHub #137: [WizardSteps.ROW], its Home too, so three); after its
  * Home + Back held 5 s, its controls are off until turned back on here. Its page's "Home and combos" section.
  */
 @Composable
@@ -388,7 +389,9 @@ internal object WizardHolds {
         // dev build 16 review (E-WIZ-HOME-HINT): wfhid knows only its map's Home ("L h"). Once this run learnt Home on a
         // field, THAT field is its Home (its "L k" cancels) and the map's one is a button like any other
         val ho = homeLearned(learned)
-        val isHome = if (ho != null) field == ho else home
+        // 1.5-beta2 (GitHub #137, review R4): its Home step answered "Not on it" (Home cleared on the page's row): no button
+        // is its Home in this run, as the hint says ([homeCancels]); wfhid still times "L h" on the map's old Home
+        val isHome = if (learned["HO"] == "-1") false else if (ho != null) field == ho else home
         return when {
             isHome -> if (acceptedDown[field] == "HO") Act.NONE else Act.CANCEL
             field in acceptedDown -> Act.NONE
@@ -415,6 +418,13 @@ internal object WizardHolds {
     /** build 18 (C1): a press of [field] on step [target] that is its Home, on any step but "Press Home": ignored. */
     fun homeIgnored(mapping: String, learned: Map<String, String>, target: String, field: Int): Boolean =
         target != "HO" && field == homeField(mapping, learned)
+    /** 1.5-beta2 (GitHub #137): wfhid's Home hold while learning ("L h" = Cancel), HX_LEARN_HOME_MS. */
+    const val HOME_HOLD_MS = 1500L
+    /** 1.5-beta2 (GitHub #137): on the page's row (two-step mode) its Home pressed on another step answers it as a TAP:
+     *  taken when let go before its hold cancels ([downAt]: when it went down, ms; [now]: when it was let go). The Xbox
+     *  button on "Press the button for its Back" did nothing at all, so Home and Back could not be swapped. A hold still
+     *  cancels and answers nothing (build 18 C1). */
+    fun homeTapTaken(downAt: Long, now: Long): Boolean = downAt > 0 && now >= downAt && now - downAt < HOME_HOLD_MS
     /** dev build 16 review (E-WIZ-DOUBLE-SKIP): ONE skip per hold — two buttons already set held together (Select + Start,
      *  a pad's Home) said "L k" twice and skipped two steps, the second unseen (a working button saved as not there).
      *  [down] = the fields of skip holds still held (their release takes them out). True = this one skips. */
@@ -433,6 +443,12 @@ internal object WizardHolds {
  *  "Back and AYN buttons" row). Pure (WizardStepsTest). */
 internal object WizardSteps {
     val SPARE = setOf("BK", "AY")
+    /** 1.5-beta2 (GitHub #137): the page's row ("Home, Back and AYN buttons") asks its Home too, when its drawing has
+     *  one ([asked]: a controller without Home keeps the two steps). Home could not be moved or cleared from the page. */
+    val ROW = setOf("HO", "BK", "AY")
+    /** 1.5-beta2 (GitHub #137): Wayfinder's own buttons on a controller. They trade buttons ([merged]) instead of refusing
+     *  ([takenElsewhere]): Back on the Xbox button puts Home on Share, where Back was. A game button is never traded. */
+    val TRADE = listOf("HO", "BK", "AY")
     /** Every step's target, in the wizard's order. */
     val targets: List<String> get() = STEPS.map { it.target }
     /** Build 18 (C6, VD-11): every step's question as written (its position word marked `*…*`). */
@@ -447,13 +463,52 @@ internal object WizardSteps {
     fun takenElsewhere(mapping: String, field: Int, asked: Collection<String>, only: Set<String>?): Boolean =
         only != null && mapping.split(' ').any { t ->
             val k = t.substringBefore('=', ""); val v = t.substringAfter('=', "").trimEnd('i')
-            k.isNotEmpty() && k !in asked && v != "-1" && v == field.toString()
+            // 1.5-beta2 (GitHub #137): Home, Back and AYN are never "taken": they trade ([merged])
+            k.isNotEmpty() && k !in asked && k !in TRADE && v != "-1" && v == field.toString()
+        }
+    /** "S=1 HO=12 …" (wfhid's D line) as target → "<field>[i]", in its order. */
+    fun parse(mapping: String): LinkedHashMap<String, String> {
+        val m = LinkedHashMap<String, String>()
+        mapping.split(' ').filter { '=' in it }.forEach { m[it.substringBefore('=')] = it.substringAfter('=') }
+        return m
+    }
+    private fun fieldOf(v: String?): Int? = v?.trimEnd('i')?.toIntOrNull()?.takeIf { it >= 0 }
+    /** The mapping the wizard saves (pure, was in SetupWizard's finish): [before] (the mapping in use) with this run's answers
+     *  [learned] in ("-1" = not on it). A BUTTON field ([isButton]) learnt for one target leaves the targets it had before
+     *  ("-1"), else one press gave both; a hat is shared by the four directions on purpose. 1.5-beta2 (GitHub #137): Home,
+     *  Back and AYN ([TRADE]) trade instead: the one that lost its button gets the one its taker had (else one another
+     *  learnt Home / Back / AYN left), when that one is still free; none free: "-1" as before. */
+    fun merged(before: Map<String, String>, learned: Map<String, String>, isButton: (Int) -> Boolean): LinkedHashMap<String, String> {
+        val m = LinkedHashMap(before)
+        learned.forEach { (t, f) -> m[t] = f }
+        val learntButtons = learned.filterValues { v -> fieldOf(v)?.let(isButton) == true }
+        for ((t, f) in m.entries.toList()) {
+            if (t in learned) continue
+            val fi = fieldOf(f) ?: continue
+            val taker = learntButtons.entries.firstOrNull { fieldOf(it.value) == fi }?.key ?: continue
+            m[t] = "-1"
+            if (t !in TRADE || taker !in TRADE) continue
+            val free = (listOf(taker) + TRADE.filter { it != taker && it in learned }).mapNotNull { before[it] }
+                .firstOrNull { c -> val cf = fieldOf(c); cf != null && isButton(cf) && m.values.none { fieldOf(it) == cf } }
+            if (free != null) m[t] = free
+        }
+        return m
+    }
+    private val TRADE_NAME = mapOf("HO" to "Home", "BK" to "Back", "AY" to "the AYN button")
+    /** 1.5-beta2 (GitHub #137): what a trade did, said after "Got it." (pure): " Home moves to the button Back was on." /
+     *  " Back is now on no button.", or "" when nothing moved. [before] the mapping in use, [after] = [merged]. */
+    fun tradeNote(before: Map<String, String>, after: Map<String, String>, learned: Map<String, String>): String =
+        TRADE.filter { it !in learned && fieldOf(before[it]) != null && fieldOf(after[it]) != fieldOf(before[it]) }.joinToString("") { t ->
+            val name = TRADE_NAME.getValue(t).replaceFirstChar { it.uppercase() }
+            val now = fieldOf(after[t])
+            val from = TRADE.firstOrNull { k -> k != t && now != null && fieldOf(before[k]) == now }
+            if (from != null) " $name moves to the button ${TRADE_NAME.getValue(from)} was on." else " $name is now on no button."
         }
 }
 
 /** A controller's buttons, set up by pressing each one when asked — a layer of its page (dev build 17, WP11: hosted by the
  *  template in ControllerPage.kt). dev build 17 (theme G): its Back and AYN button too; [only] = just those targets
- *  ([WizardSteps.SPARE]: the page's "Back and AYN buttons" row). */
+ *  ([WizardSteps.SPARE]: the page's "Back and AYN buttons" row; 1.5-beta2, GitHub #137: [WizardSteps.ROW], its Home too). */
 @Composable
 internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = null) {
     val ctx = LocalContext.current
@@ -479,6 +534,8 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
     // the controller ended learn mode itself (a minute without a press, dev build 14): it drives games again until Continue
     var paused by remember { mutableStateOf(false) }
     val lastAt = remember { longArrayOf(0L) }
+    // 1.5-beta2 (GitHub #137): its Home pressed on another step of the row, answered when let go: field, when, step (-1: none)
+    val homeTap = remember { longArrayOf(-1L, 0L, -1L) }
     val main = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
     // build 18 (C6, CTL-04): the layer opens at the top of its page (the header in view, not where its row was) with Skip
     // focused — it opened with nothing focused, the header scrolled away
@@ -486,16 +543,12 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
     val skipF = remember { FocusRequester() }
     LaunchedEffect(Unit) { pageScroll?.animateScrollTo(0); skipF.requestAfterLayout() }
 
+    fun isButton(f: Int) = pad.fields.firstOrNull { it.idx == f }?.kind == 'b'
     fun finish(save: Boolean) {
         if (save) {
-            // start from the mapping in use; what was learned replaces it, a skipped step keeps it
-            val m = LinkedHashMap<String, String>()
-            pad.mapping.split(' ').filter { '=' in it }.forEach { m[it.substringBefore('=')] = it.substringAfter('=') }
-            learned.forEach { (t, f) -> m[t] = f }
-            // a BUTTON field learned for one target leaves the targets it had before (kept from the mapping in use) -
-            // else one press gave both. A hat is shared by the four directions on purpose.
-            val learntButtons = learned.filter { (_, f) -> pad.fields.firstOrNull { it.idx.toString() == f.trimEnd('i') }?.kind == 'b' }
-            for ((t, f) in m.entries.toList()) if (t !in learned && learntButtons.values.any { it.trimEnd('i') == f.trimEnd('i') }) m[t] = "-1"
+            // start from the mapping in use; what was learned replaces it, a skipped step keeps it. A BUTTON field learned
+            // for one target leaves the targets it had before; 1.5-beta2 (GitHub #137): Home, Back and AYN trade instead
+            val m = WizardSteps.merged(WizardSteps.parse(pad.mapping), learned) { f -> isButton(f) }
             // dev build 16 (WP5): "Not on it" is kept as "T=-1" (wfhid: the same as not mapped) — the drawings leave those
             // parts out; one said before stays until its step is answered again. Only beside a real mapping (a line of
             // nothing but -1 would be a mapping with no button at all)
@@ -513,22 +566,49 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
         heard = ""; step.intValue = (step.intValue + 1).coerceAtMost(steps.size); if (step.intValue >= steps.size) finish(true)
     }
 
+    // 1.5-beta2 (GitHub #137): no long dash in the line (plain words)
+    val refused = "That button already does something else. Press another, or Not on it."
+    /** A button [f] for step [s]: taken (true), or refused / not for it. [held]: still down (a press, not a tap let go). */
+    fun takeButton(s: Step, f: Int, held: Boolean): Boolean {
+        if (s.kind == 2 || learned.any { (t, x) -> t != s.target && x.trimEnd('i') == f.toString() }) return false
+        // dev build 17 (theme G): the two steps alone never take a button from another one (a face button lost to Back)
+        if (WizardSteps.takenElsewhere(pad.mapping, f, steps.map { it.target }, only)) { heard = refused; return false }
+        learned[s.target] = "$f"; if (held) acceptedDown[f] = s.target
+        return true
+    }
+    /** Step [i] answered: on to the next one. 1.5-beta2 (GitHub #137): "Got it." says what a trade moved. */
+    fun answered(i: Int, now: Long) {
+        lastAt[0] = now
+        val before = WizardSteps.parse(pad.mapping)
+        heard = "Got it." + WizardSteps.tradeNote(before, WizardSteps.merged(before, learned) { f -> isButton(f) }, learned)
+        step.intValue = i + 1
+        if (step.intValue >= steps.size) main.postDelayed({ finish(true) }, 600)
+    }
     fun hear(f: Int, v: Int, rest: Int) {
         val fld = pad.fields.firstOrNull { it.idx == f } ?: return
-        if (fld.kind == 'b' && v == 0) { acceptedDown.remove(f); skipDown.remove(f); return }   // let go (dev build 16: before the 400 ms below)
+        val now = android.os.SystemClock.uptimeMillis()
+        if (fld.kind == 'b' && v == 0) {                                 // let go (dev build 16: before the 400 ms below)
+            acceptedDown.remove(f); skipDown.remove(f)
+            // 1.5-beta2 (GitHub #137): its Home let go on the step it was pressed on, before its hold: a tap, the answer
+            val tap = homeTap[0] == f.toLong() && homeTap[2] == step.intValue.toLong() && WizardHolds.homeTapTaken(homeTap[1], now)
+            if (homeTap[0] == f.toLong()) homeTap[0] = -1L
+            val j = step.intValue
+            if (tap && j < steps.size && takeButton(steps[j], f, held = false)) answered(j, now)
+            return
+        }
         val i = step.intValue; if (i >= steps.size) return
         val s = steps[i]
-        val now = android.os.SystemClock.uptimeMillis()
         if (now - lastAt[0] < 400) return                                // still letting go of the last one
         fun usedElsewhere() = learned.any { (t, x) -> t != s.target && x.trimEnd('i') == f.toString() }
         when (fld.kind) {
             'b' -> {
-                // build 18 (C1): its Home answers only "Press Home" (its hold still cancels, through onHold)
-                if (WizardHolds.homeIgnored(pad.mapping, learned, s.target, f)) return
-                if (s.kind == 2 || usedElsewhere()) return
-                // dev build 17 (theme G): the two steps alone never take a button from another one (a face button lost to Back)
-                if (WizardSteps.takenElsewhere(pad.mapping, f, steps.map { it.target }, only)) { heard = "That button already does something else — press another, or Not on it."; return }
-                learned[s.target] = "$f"; acceptedDown[f] = s.target
+                // build 18 (C1): its Home answers only "Press Home" (its hold still cancels, through onHold). 1.5-beta2
+                // (GitHub #137): on the page's row its tap answers when let go (Back on the Xbox button)
+                if (WizardHolds.homeIgnored(pad.mapping, learned, s.target, f)) {
+                    if (only != null) { homeTap[0] = f.toLong(); homeTap[1] = now; homeTap[2] = i.toLong() }
+                    return
+                }
+                if (!takeButton(s, f, held = true)) return
             }
             'h' -> { if (s.kind != 1) return; learned[s.target] = "$f" }    // a hat: the direction is decoded by it
             'a' -> {
@@ -538,7 +618,7 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
                     1 -> { val want = if (s.target == "DU" || s.target == "DL") -1 else 1; learned[s.target] = if (dir == want) "$f" else "${f}i" }
                     else -> {
                         if (usedElsewhere()) return
-                        if (WizardSteps.takenElsewhere(pad.mapping, f, steps.map { it.target }, only)) { heard = "That button already does something else — press another, or Not on it."; return }
+                        if (WizardSteps.takenElsewhere(pad.mapping, f, steps.map { it.target }, only)) { heard = refused; return }
                         learned[s.target] = "$f"
                         if (s.target == "L2") learned["LT"] = "$f"           // an analog trigger: the axis too
                         if (s.target == "R2") learned["RT"] = "$f"
@@ -547,17 +627,14 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
             }
             else -> return
         }
-        lastAt[0] = now
-        heard = "Got it."
-        step.intValue = i + 1
-        if (step.intValue >= steps.size) main.postDelayed({ finish(true) }, 600)
+        answered(i, now)
     }
     // dev build 16 (theme E): left or skipped from the controller itself — its Home held = Cancel (nothing saved), a
     // button already set held = "Not on it"
     fun onHold(home: Boolean, f: Int) {
         val target = steps.getOrNull(step.intValue)?.target
         when (WizardHolds.act(home, f, learned, acceptedDown, target == null)) {
-            WizardHolds.Act.CANCEL -> { if (BuildConfig.DEBUG) android.util.Log.d("ThorWizard", "cancel"); finish(false) }
+            WizardHolds.Act.CANCEL -> { if (BuildConfig.DEBUG) android.util.Log.d("ThorWizard", "cancel"); homeTap[0] = -1L; finish(false) }
             WizardHolds.Act.NOT_ON_IT -> if (WizardHolds.firstSkip(skipDown, f)) {
                 if (BuildConfig.DEBUG) android.util.Log.d("ThorWizard", "skip $target"); notOnIt(); heard = "Not on it — next." }
             WizardHolds.Act.NONE -> {}
@@ -594,7 +671,9 @@ internal fun SetupWizard(node: String, done: () -> Unit, only: Set<String>? = nu
             .joinToString(" · ")
         "AY" -> listOfNotNull("Now: ${Say.spare(spares.ayn, look) ?: "none"}",
             "tap: " + if (AppSettings.aynButtonOurs) AppSettings.aynTap.title else ThorAction.AYN_DRAWER.title,
-            if (AppSettings.aynButtonOurs) "hold: " + (AppSettings.aynHold?.title ?: "same as a tap") else null).joinToString(" · ")
+            if (AppSettings.aynButtonOurs) "hold: " + (AppSettings.aynHold?.title ?: "same as a tap") else null,
+            // 1.5-beta2 (Q8, GitHub #51): its double tap, when one is set
+            AppSettings.aynDouble?.takeIf { AppSettings.aynButtonOurs }?.let { "double tap: ${it.title}" }).joinToString(" · ")
         else -> null
     }
     val askStyle = MaterialTheme.typography.headlineSmall

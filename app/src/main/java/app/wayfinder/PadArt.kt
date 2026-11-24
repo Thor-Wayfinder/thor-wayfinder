@@ -226,7 +226,8 @@ object PadArts {
     fun of(look: PadLook, notOn: Set<String> = emptySet(), homeWayfinder: Boolean = true,
            gyro: Boolean = look.kind.gyro, parts: Boolean = true, kept: Pair<String?, String?> = null to null): PadArt {
         val k = look.kind
-        val h = Home(Vocab.name(ThorButton.HOME, look), homeWayfinder, look.noHome, "HO" in notOn, parts, kept.first, kept.second)
+        // 1.5-beta2 (GitHub #137): the drawing names the button itself (PS), not where its mapping moved Home
+        val h = Home(Vocab.name(ThorButton.HOME, look.copy(home = null)), homeWayfinder, look.noHome, "HO" in notOn, parts, kept.first, kept.second, look.home)
         val g = gyro && k.gyro
         val art = when {
             k == ControllerKind.THOR -> return THOR
@@ -276,7 +277,7 @@ object PadArts {
      *  (Select + Start held is its Home), [absent] marked "Not on it", [parts] editable when it goes to the game. dev build
      *  17 (theme G): [back] / [ayn] its own Back / AYN buttons' names (they stay with Wayfinder: the note says so). */
     private class Home(val name: String, val wayfinder: Boolean, val noHome: Boolean, val absent: Boolean, val parts: Boolean,
-                       val back: String? = null, val ayn: String? = null)
+                       val back: String? = null, val ayn: String? = null, val moved: String? = null)   // moved: 1.5-beta2 (#137)
 
     /** dev build 17 (theme G): how far under the Home note its Back / AYN's own note goes — 40 units: a motion pill pushes
      *  the Nintendo Pro's note down, just above the inspector. */
@@ -294,7 +295,7 @@ object PadArts {
             h.noHome -> { notes += ArtNote("${h.name} = Home", note.x, note.y, 32f); keptAt(note.y + KEPT_UNDER) }
             // build 18 (GC11, ps-F11): where there is room, the key's job written by it ("Home"), as the Thor's
             h.wayfinder -> { parts += ArtPart(PartKind.WAYFINDER, x, y, r = rd, glyph = glyph, label = homeLabel?.let { "Home" }, labelAt = homeLabel,
-                labelSize = 28f); notes += ArtNote(keptNote(h.name, h.back, h.ayn)!!, note.x, note.y, 32f) }
+                labelSize = 28f); notes += ArtNote(keptNote(h.moved?.let { "Home ($it)" } ?: h.name, h.back, h.ayn)!!, note.x, note.y, 32f) }
             h.parts -> {
                 ctls += ArtCtl(ArtId.HOME, ArtSrc.Part(PadRemap.HOME_CODE), x, y, maxOf(30f, rd + 6f), ArtShape.Small(rd, rd + 12f, glyph), tag)
                 keptAt(if (tag.align == 0 && abs(tag.y - note.y) < TAG_H) tag.y + TAG_H / 2 + 30f else note.y)

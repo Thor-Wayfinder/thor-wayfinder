@@ -37,7 +37,23 @@ class PadNav(
             hx > dead || x > dead -> KeyEvent.KEYCODE_DPAD_RIGHT
             else -> 0
         }
+
+        /** Pure (JVM test): a key reaching the window gives its view the focus first: its press (not a repeat), and only when
+         *  the view has none ([hasFocus]; null: no view yet). */
+        fun takesFocus(down: Boolean, repeat: Int, hasFocus: Boolean?): Boolean = down && repeat == 0 && hasFocus == false
+
+        /** b19 fix (device h1fix, the Guide data row's first A): key [e] reaches the window whose view is [v]: [v] gets the
+         *  focus first when it has none ([takesFocus]). Compose 1.6 can leave its view without the window's focus while an
+         *  element still shows the focus look (a page reached by intents: a focus request cancelled by a newer one cleared the
+         *  view's focus). The key then reached nothing: Android made A a centre key that only gave the view its focus back,
+         *  and the first A did nothing. Every Wayfinder window the controller drives calls it before its own dispatch. */
+        fun focusForKey(v: View?, e: KeyEvent) {
+            if (v != null && takesFocus(e.action == KeyEvent.ACTION_DOWN, e.repeatCount, v.hasFocus())) v.requestFocus()
+        }
     }
+
+    /** [focusForKey] for this window's view ([focusView]). */
+    fun focusForKey(e: KeyEvent) = focusForKey(focusView(), e)
 
     /** A joystick move: its direction is pressed / held / let go — true = consumed (Android's own adapter never runs on
      *  it). Anything else: false. */

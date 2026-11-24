@@ -136,10 +136,13 @@ internal fun thorSummary(player: Int = 0, after: String? = null): String = Contr
 private fun ThorNameCard() {
     val ctx = LocalContext.current
     var named by remember { mutableStateOf(ExtPadsCtl.thorNamed(ctx)) }
+    // 1.5-beta2 (b2d pass, polish): "set them up again" (it said "map them again": the glossary says setting up again)
+    // 1.5-beta2 (GitHub #102, repair): not "games list every controller, hidden ones too": AYN's pad is out of Android's
+    // list while Game controls run (PadPark), so the option is for a game that still shows two
     SettingCard(NavCards.THOR_NAME,
         (if (named) "Games list it as “Odin Controller (Wayfinder)”" else "Off — games list it as “Odin Controller”") +
-            " — it tells the Thor's real controller apart: games list every controller, hidden ones too (Eden shows two " +
-            "“Odin Controller”). Emulators that saved your buttons under the old name may ask you to map them again. Works " +
+            " — it tells the Thor's real controller apart when a game still shows two “Odin Controller”. " +
+            "Emulators that saved your buttons under the old name may ask you to set them up again. Works " +
             "while Game controls are on.",
         checked = named, onChecked = { named = it; ExtPadsCtl.setThorNamed(ctx, it) })
 }
@@ -154,6 +157,9 @@ private fun combosValue(look: PadLook): String =
 internal fun GameControlsWhereCard() {
     val ctx = LocalContext.current
     var layerMode by remember { mutableStateOf(PadLayerCtl.mode) }
+    // 1.5-beta2 (big test t3, F8): with Nowhere an app set to On still gets Game controls there: never "Off" then (read
+    // again when an app's setting changes)
+    val ownOn = AppConfigStore.version.intValue.let { PadLayerCtl.appsOwnOn() }
     // dev build 17 (WP9): the line says what happens now (≤ 20 words, PageWordsTest); the rest behind "?" — the emergency off
     // in the Thor's names, or the docked controller's (critique F1)
     SettingCard(
@@ -163,13 +169,15 @@ internal fun GameControlsWhereCard() {
             PadLayerCtl.Mode.SET_UP -> "Only the games you set up get Game controls; elsewhere the Thor's controller as it is." +
                 // dev build 16 (theme F): the combo as the controller in hand says it
                 (Say.combo(ThorAction.GAME_CONTROLS, currentLook())?.let { " Set one up in Game controls ($it)." } ?: "")
-            PadLayerCtl.Mode.NOWHERE -> "Off: Game controls, gyro and macros do nothing."
+            PadLayerCtl.Mode.NOWHERE -> if (ownOn) "Nowhere, except apps set to On in their Game controls. They stop when you leave the app."
+                else "Off: Game controls, gyro and macros do nothing."
         } + " Games get an identical copy of the controller. One app differently: Games. Emergency off from anywhere: " +
             "${Say.emergencyOff(ctx)}.",
     ) {
         // build 18 (A21 adoption): what each choice does, while it is focused
         GlassSegmentedControl(PadLayerCtl.Mode.values().map { it.label }, layerMode.ordinal, Modifier.fillMaxWidth(),
-            hints = listOf("every app gets Game controls", "only the games you changed", "Game controls do nothing")) {
+            hints = listOf("every app gets Game controls", "only the games you changed",
+                if (ownOn) "only apps set to On get them" else "Game controls do nothing")) {
             layerMode = PadLayerCtl.Mode.values()[it]; PadLayerCtl.setMode(ctx, layerMode)
         }
     }
@@ -211,7 +219,9 @@ private fun statusOf(ctx: Context, pad: ExtPadsCtl.Pad?, look: PadLook, docked: 
         back = Say.spare(ExtPadsCtl.spares(ctx, pad).back, look),
         // its Home goes to the game: Game controls is the Thor's combo, on the Thor
         gameControls = Say.combo(ThorAction.GAME_CONTROLS, if (homeOurs) look else ButtonNames.thorLook), gcOnThor = !homeOurs,
-        docked = docked?.key == pad.key, seated = seat?.key == pad.key)
+        docked = docked?.key == pad.key, seated = seat?.key == pad.key,
+        // b19 (H7): Game + combos while it plays as itself (docked or playing as the Thor's, its Home is the Thor's Home)
+        homeTap = ExtPadsCtl.homeRole(ctx, pad.key) == ExtRules.HomeRole.SPLIT && docked?.key != pad.key && seat?.key != pad.key)
 }
 
 /**
@@ -227,14 +237,7 @@ internal fun ControllerDetailPage(myDisplayId: Int, ref: CtlRef, onBack: () -> U
     val pad = (ref as? CtlRef.Pad)?.let { r -> ExtPadsCtl.byPlayer().firstOrNull { it.key == r.key } }
     // b18g (WI-6, g1 O2): "Forget it" confirmed on this page — the page that stays says so (it said "It disconnected")
     var forgot by remember(ref.key) { mutableStateOf(false) }
-    if (ref is CtlRef.Pad && pad == null) {
-        SubPage(myDisplayId, if (forgot) "Controller forgotten" else "Controller gone",
-            if (forgot) "The next time it connects, it's made again" else "It disconnected (turned off, out of battery or out of range)", onBack) {
-            // build 18 (C7 addendum, ps-F4): a way back is an arrow (a blue × reads as PlayStation's ✕)
-            GlassActionButton("Back to the controllers", Icons.AutoMirrored.Rounded.ArrowBack, Modifier.fillMaxWidth()) { onBack() }
-        }
-        return
-    }
+    if (ref is CtlRef.Pad && pad == null) { ControllerGone(myDisplayId, onBack, forgot); return }
     // debug builds: a test hook opens it on its wizard (device test S9) — once
     var wizard by remember(ref.key) { mutableStateOf(BuildConfig.DEBUG && ExtPadsCtl.wizardNext == ref.key) }
     // dev build 17 (theme G): the wizard's two steps alone — its Back and AYN button ("Back and AYN buttons")
@@ -246,6 +249,9 @@ internal fun ControllerDetailPage(myDisplayId: Int, ref: CtlRef, onBack: () -> U
     val docked = ExtPadsCtl.dockedPad()
     val caps = ControllerRules.caps(thor = pad == null, kind = pad?.kind ?: ControllerKind.THOR, away = pad?.away == true,
         touchpad = pad?.proto == "sony")                                // dev build 18f: wfhid reads its touchpad
+    // 1.5-beta2 (Q5): Back from its Test page while it's away (its Test it row hidden) lands on the row in its place, not on
+    // the page's first content. Before SubPage takes the row
+    remember(ref.key) { app.wayfinder.ui.ReturnFocus.pending?.let { app.wayfinder.ui.ReturnFocus.pending = ControllerRules.landing(it, caps) } }
     CompositionLocalProvider(LocalPadLook provides look) {
     SubPage(myDisplayId, pad?.name ?: NavPages.title(HubPage.THOR), CtlWords.status(statusOf(ctx, pad, look, docked)), onBack) {
         val g = LocalGlass.current
@@ -392,12 +398,30 @@ internal fun ControllerDetailPage(myDisplayId: Int, ref: CtlRef, onBack: () -> U
                     // Home": "Its Home is the Thor's" was hard to parse) — a press and a hold now, the rest behind "?". Round 2:
                     // CtlWords' words, so a Home named Home (Switch Pro…) or a Home-less one's Select + Start reads right
                     val home = Vocab.name(ThorButton.HOME, look)
-                    SettingCard(CtlWords.homeTitle(home),
+                    // b19 (H7, ps-F9): a Home button of its own has three choices (Home, Game + combos, Game only); a Home-less
+                    // one's Select + Start keeps the switch (it is never a tap)
+                    val own = ExtRules.ownHome(pad.mapping)
+                    if (own) {
+                        var role by remember(ref.key, own) { mutableStateOf(ExtPadsCtl.homeRole(ctx, pad.key)) }
+                        // playing as the Thor's (docked or by its switch) its Home is the Thor's Home: Game + combos waits.
+                        // b19 fix: then the seat's sentence alone (Game + combos' line after it said the opposite, in 35 words)
+                        val asThors = ExtPadsCtl.seatPad()?.key == pad.key && role == ExtRules.HomeRole.SPLIT
+                        SettingCard(CtlWords.roleTitle(home),
+                            short = if (asThors) CtlWords.roleSeat else CtlWords.roleLine(home, role, combos),
+                            more = CtlWords.ROLE_MORE) {
+                            GlassSegmentedControl(CtlWords.HOME_ROLES, role.ordinal, Modifier.fillMaxWidth(), hints = CtlWords.HOME_ROLE_HINTS) { i ->
+                                val r = ExtRules.HomeRole.values()[i]
+                                role = r; homeThor = r != ExtRules.HomeRole.GAME
+                                ExtPadsCtl.setHomeRole(ctx, pad.key, r)
+                            }
+                        }
+                    } else SettingCard(CtlWords.homeTitle(home),
                         short = CtlWords.homeLine(home, on = homeThor, combos = combos),
                         more = "Wayfinder's combos need it on; the Thor's own Home always works.",
                         checked = homeThor, onChecked = { homeThor = it; ExtPadsCtl.setHomeIsThors(ctx, pad.key, it) })
                     // dev build 17 (theme G, D4): its Back and its AYN button (and its controls back after Home + Back held 5 s)
-                    PadSparesRows(pad) { wizardOnly = WizardSteps.SPARE }
+                    // 1.5-beta2 (GitHub #137): its Home too (when it has one), so Home and Back can be swapped or cleared
+                    PadSparesRows(pad) { wizardOnly = WizardSteps.ROW }
                     // dev build 18f: its touchpad moves Android's pointer — on by default, PlayStation controllers
                     if (caps.touchpad) PadTouchpadCard(pad, look)
                     // (C9): its combos are the Thor's — said once, with the one it presses for Game controls
@@ -454,6 +478,18 @@ internal fun ControllerDetailPage(myDisplayId: Int, ref: CtlRef, onBack: () -> U
             }
         }
     }
+    }
+}
+
+/** A controller that isn't connected: its page, or (b19, device pass O2) its Test page, in one wording. [forgot]: "Forget
+ *  it" was confirmed on its page. [backLabel]: where Back goes (its page goes back to the controllers, its Test page to its
+ *  page). */
+@Composable
+internal fun ControllerGone(myDisplayId: Int, onBack: () -> Unit, forgot: Boolean = false, backLabel: String = "Back to the controllers") {
+    SubPage(myDisplayId, if (forgot) "Controller forgotten" else "Controller gone",
+        if (forgot) "The next time it connects, it's made again" else "It disconnected (turned off, out of battery or out of range)", onBack) {
+        // build 18 (C7 addendum, ps-F4): a way back is an arrow (a blue × reads as PlayStation's ✕)
+        GlassActionButton(backLabel, Icons.AutoMirrored.Rounded.ArrowBack, Modifier.fillMaxWidth()) { onBack() }
     }
 }
 

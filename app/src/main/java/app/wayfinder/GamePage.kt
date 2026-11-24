@@ -54,6 +54,7 @@ import app.wayfinder.ui.LocalEntryFocus
 import app.wayfinder.ui.RowEnd
 import app.wayfinder.ui.SectionHeader
 import app.wayfinder.ui.arrivalTo
+import app.wayfinder.ui.focusId
 import app.wayfinder.ui.rememberEntryFocus
 import app.wayfinder.ui.reportingFocusRequester
 import app.wayfinder.ui.requestAfterLayout
@@ -205,13 +206,17 @@ private fun GameAppSections(appPkg: String, key: String, inGame: Boolean, go: (S
             ButtonsMode.CUSTOM -> "Custom for $appLabel"
             ButtonsMode.OFF -> "Off — all buttons go to $appLabel"
         }) {
-            GlassSegmentedControl(ButtonsMode.values().map { it.label }, cfg.buttonsMode.ordinal, Modifier.fillMaxWidth()) { i ->
+            // b19: the card's id on the control Back from its combos lands on: the choice itself, unless "Edit its combos" is
+            // drawn (the choice is already a focus group whose enter is the current option, so the D-pad order is unchanged)
+            val onRow = GamePageRules.combosRowHasId(cfg.buttonsMode == ButtonsMode.CUSTOM, inGame)
+            GlassSegmentedControl(ButtonsMode.values().map { it.label }, cfg.buttonsMode.ordinal,
+                Modifier.fillMaxWidth().then(if (onRow) Modifier else Modifier.focusId(NavCards.APP_COMBOS.id))) { i ->
                 val mode = ButtonsMode.values()[i]
                 set { it.copy(buttonsMode = mode) }
                 if (mode == ButtonsMode.CUSTOM && !inGame) { app.wayfinder.ui.ReturnFocus.clicked = NavCards.APP_COMBOS.id; go(HubPage.controlsFor(appPkg)) }
             }
             if (cfg.buttonsMode == ButtonsMode.CUSTOM) {
-                if (!inGame) GlassListRow("Edit its combos", icon = Icons.Rounded.Tune, id = NavCards.APP_COMBOS.id) { go(HubPage.controlsFor(appPkg)) }
+                if (onRow) GlassListRow("Edit its combos", icon = Icons.Rounded.Tune, id = NavCards.APP_COMBOS.id) { go(HubPage.controlsFor(appPkg)) }
                 else Caption("Edit them in ${Say.path(NavCards.APP_COMBOS, name = appLabel, inWayfinder = true)}.")
             }
         }

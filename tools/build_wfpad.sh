@@ -27,4 +27,9 @@ if [ "$1" = "test" ]; then
   "$CC" --target=aarch64-linux-android30 -O2 -Wall -Wextra -fPIE -pie -o tools/wfuhid_test fx/wfuhid_test.c
   MSYS_NO_PATHCONV=1 "$ADB" push "$(cygpath -w "$PWD/tools/wfuhid_test")" /data/local/tmp/wfuhid_test >/dev/null
   MSYS_NO_PATHCONV=1 "$ADB" shell 'chmod 755 /data/local/tmp/wfuhid_test; /data/local/tmp/wfuhid_test' </dev/null
+  # 1.5-beta2 (GitHub #102): AYN's pad set aside while the copy runs (fx/wfpark.h) — plain files, no root. The same binary
+  # as root: "wfpark_test probe" (a device of its own through Android) and "wfpark_test fakepad" (a fake pad for a test wfpad)
+  "$CC" --target=aarch64-linux-android30 -O2 -Wall -Wextra -fPIE -pie -o tools/wfpark_test fx/wfpark_test.c
+  MSYS_NO_PATHCONV=1 "$ADB" push "$(cygpath -w "$PWD/tools/wfpark_test")" /data/local/tmp/wfpark_test >/dev/null
+  MSYS_NO_PATHCONV=1 "$ADB" shell 'chmod 755 /data/local/tmp/wfpark_test; /data/local/tmp/wfpark_test' </dev/null
 fi

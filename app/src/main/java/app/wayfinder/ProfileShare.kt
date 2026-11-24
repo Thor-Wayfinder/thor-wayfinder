@@ -69,13 +69,15 @@ object ProfileShare {
         private fun s(n: Int) = if (n == 1) "" else "s"
     }
 
-    /** One parsed, cleaned file — not saved yet. */
+    /** One parsed, cleaned file — not saved yet. Build 19: or one of a controller's own controls from a backup ([pad]
+     *  its controller key, [pkg] "*" for every game; [off]: switched off in the backup). */
     class Incoming(
         val pkg: String, val appName: String, val game: String?, val title: String,
         val face: FaceStyle?, val remap: PadRemap, val report: Report,
+        val pad: String? = null, val off: Boolean = false,
     ) {
-        /** The profile it goes to: the game's (created if new) or the app's. */
-        val key get() = if (game != null) GameProfiles.key(pkg, game) else pkg
+        /** The profile it goes to: the game's (created if new) or the app's; a controller's own: "<that>@<controller>". */
+        val key get() = (if (game != null) GameProfiles.key(pkg, game) else pkg).let { if (pad != null) "$it@$pad" else it }
     }
 
     // ── export ─────────────────────────────────────────────────────────────
@@ -176,15 +178,40 @@ object ProfileShare {
     /** Is [pkg] installed here? (the preview says so: a profile for a missing app waits for it) */
     fun installed(ctx: Context, pkg: String) = runCatching { ctx.packageManager.getApplicationInfo(pkg, 0); true }.getOrDefault(false)
 
-    /** Save it: the game's profile (created) or the app's. */
+    /** Build 19: one of a controller's own controls in a backup that isn't this Thor's ([Backup.parse]): [key]
+     *  "<base>@<controller>" ([BackupRules.ownKey]), [cfg] its stored controls. Only its face and its controls are taken,
+     *  through the filter with the controller's own parts kept. null = not one. */
+    fun own(ctx: Context, key: String, cfg: JSONObject, off: Boolean): Incoming? {
+        if (!BackupRules.ownKey(key)) return null
+        val pkg = key.substringBefore('@').substringBefore('#')
+        return ownEntry(key, cfg, off, if (pkg == PadProfiles.EVERY) pkg else label(ctx, pkg))
+    }
+    /** [own] without the app's name lookup (the JVM tests). */
+    internal fun ownEntry(key: String, cfg: JSONObject, off: Boolean, appName: String): Incoming? {
+        if (!BackupRules.ownKey(key)) return null
+        val base = key.substringBefore('@')
+        val game = base.substringAfter('#', "").takeIf { it.isNotEmpty() }
+        val report = Report()
+        val remap = PadRemap.fromJson(cfg.optJSONObject("remap"))?.let { strip(it, report, keepMacrosOn = false, ownParts = true) } ?: PadRemap()
+        return Incoming(base.substringBefore('#'), appName, game, game ?: appName, FaceStyle.parse(cfg.optString("face")), remap, report,
+            pad = key.substringAfter('@'), off = off)
+    }
+
+    /** Save it: the game's profile (created) or the app's. Build 19: a controller's own controls go to its own entry only
+     *  ([BackupRules.importOwn]): never a Thor game profile. */
     fun apply(inc: Incoming): Boolean = runCatching {
-        if (inc.game != null) GameProfiles.create(inc.pkg, inc.game, inc.title)
-        Profiles.update(inc.key) { it.copy(face = inc.face ?: it.face, remap = inc.remap.takeIf { r -> !r.isEmpty }) }
+        if (inc.pad != null) BackupRules.importOwn(PadProfiles, inc.key, inc.face, inc.remap, inc.off)
+        else {
+            if (inc.game != null) GameProfiles.create(inc.pkg, inc.game, inc.title)
+            Profiles.update(inc.key) { it.copy(face = inc.face ?: it.face, remap = inc.remap.takeIf { r -> !r.isEmpty }) }
+        }
     }.onFailure { android.util.Log.w("ThorShare", "import failed: $it") }.isSuccess
 
     // ── the filter ─────────────────────────────────────────────────────────
 
-    private fun strip(r: PadRemap, rep: Report, keepMacrosOn: Boolean): PadRemap {
+    /** [ownParts] (build 19, a controller's own controls from a backup): its own parts are kept, part to part
+     *  ([PadRemap.fromJson] checked them), except one made into its Home: a system key, removed and counted as one. */
+    internal fun strip(r: PadRemap, rep: Report, keepMacrosOn: Boolean, ownParts: Boolean = false): PadRemap {
         // held keys combine across buttons (the injected meta state folds every key down), so
         // Ctrl / Alt anywhere in the file + Tab / Space / Esc anywhere = a system shortcut
         fun hasMod(t: RemapTarget): Boolean = when (t) {
@@ -218,7 +245,9 @@ object ProfileShare {
         val fire = r.fire.filter { (k, f) -> !f.hasAlt || k in alt }
         val shifted = r.shifted.mapNotNull { (k, v) -> keep(v)?.let { k to it } }.toMap()
         // dev build 16 (WP4): a shared file never carries a controller's own parts (an import lands on a Thor key)
-        return r.copy(buttons = buttons, alt = alt, chords = chords, fire = fire, shifted = shifted, pads = emptyMap(), padFire = emptyMap())
+        if (!ownParts) return r.copy(buttons = buttons, alt = alt, chords = chords, fire = fire, shifted = shifted, pads = emptyMap(), padFire = emptyMap())
+        val pads = r.pads.filter { (_, d) -> (d != PadRemap.HOME_CODE).also { ok -> if (!ok) rep.keys++ } }
+        return r.copy(buttons = buttons, alt = alt, chords = chords, fire = fire, shifted = shifted, pads = pads)
     }
 
     private val PKG = Regex("^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z0-9_]+)+$")

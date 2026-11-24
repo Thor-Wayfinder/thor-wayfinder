@@ -90,6 +90,8 @@ data class GlassColors(
     val optionWell: Color,         // an unselected option's opaque base under its glass
     // build 18 (A23)
     val positive: Color,           // what went right ("All set", "working ✓"): a green that reads on the card
+    // 1.5-beta2 (GitHub #134): Appearance's Button colours — the face buttons' badges (ControlGlyphs' faceBadge)
+    val faces: ButtonColours = ButtonColours(),
 )
 
 // dev build 17 (WP8): the derived tokens — they only follow light / dark ("Your own colours" sets [GlassColors.dark] from its
@@ -118,6 +120,10 @@ val GlassColors.pressVeil: Color get() = Color(0x33FFFFFF)
 val GlassColors.recess: Color get() = Color.Black.copy(alpha = 0.035f)
 /** A warning notice's tint: the bright amber, whatever [GlassColors.warn] is for text. */
 internal val GlassColors.warnWash: Color get() = Color(TokenArgb.WARN).copy(alpha = if (dark) 0.22f else 0.35f)
+/** 1.5-beta2 (GitHub #134): a neutral button badge's chip and rim (shoulders, sticks, system buttons, the D-pad, the AYN chip;
+ *  the face buttons in "One colour") — ControlGlyphs' literals, unchanged. */
+internal val GlassColors.glyphChip: Color get() = if (dark) Color(0x33FFFFFF) else Color(0x1A000000)
+internal val GlassColors.glyphRim: Color get() = if (dark) Color(0x66FFFFFF) else Color(0x40000000)
 
 val LocalGlass = staticCompositionLocalOf<GlassColors> { error("GlassColors not provided") }
 
@@ -153,8 +159,8 @@ fun CappedFontScale(max: Float = 1.1f, content: @Composable () -> Unit) {
 class CustomColours(val bg: Int, val card: Int, val text: Int, val accent: Int)
 
 /** dev build 17 (WP8): the theme's colours from its three inputs — the composable theme and (WP10) the overlays read this
- *  one answer. [custom] = "Your own colours" (null: off). */
-fun glassColorsFor(dark: Boolean, black: Boolean, custom: CustomColours?): GlassColors {
+ *  one answer. [custom] = "Your own colours" (null: off). 1.5-beta2 (GitHub #134): [faces] = Button colours (any theme). */
+fun glassColorsFor(dark: Boolean, black: Boolean, custom: CustomColours?, faces: ButtonColours = ButtonColours()): GlassColors {
     val themed = if (black) {
         // 1.3: pure black (OLED) — no aurora, frost a touch lighter so the panels still read
         GlassColors(
@@ -237,7 +243,7 @@ fun glassColorsFor(dark: Boolean, black: Boolean, custom: CustomColours?): Glass
         )
     }
     // 1.4 (GitHub #24): your own colours — flat: solid background and cards, no aurora
-    if (custom == null) return themed
+    if (custom == null) return themed.copy(faces = faces)
     val bg = Color(custom.bg); val card = Color(custom.card); val text = Color(custom.text); val acc = Color(custom.accent)
     val lightBg = bg.luminance() > 0.5f
     val cardArgb = TokenArgb.of(custom.card)
@@ -261,6 +267,7 @@ fun glassColorsFor(dark: Boolean, black: Boolean, custom: CustomColours?): Glass
         focusRing = Color(TokenArgb.focusRing(!lightBg, TokenArgb.of(custom.accent), TokenArgb.of(custom.text), cardArgb)),
         optionWell = Color(TokenArgb.optionWell(!lightBg, cardArgb)),
         positive = Color(TokenArgb.positive(!lightBg, cardArgb)),       // build 18 (A23): the green that reads on their card
+        faces = faces,
     )
 }
 
@@ -277,7 +284,7 @@ object GlassTokens {
     /** The colours a Wayfinder window on [ctx]'s display draws with — black and "Your own colours" included. */
     fun resolve(ctx: android.content.Context): GlassColors = isDark(ctx).let { dark ->
         glassColorsFor(dark, dark && app.wayfinder.AppSettings.themeMode == app.wayfinder.ThemeMode.BLACK,
-            app.wayfinder.AppSettings.customColours())
+            app.wayfinder.AppSettings.customColours(), app.wayfinder.AppSettings.buttonColours())
     }
 }
 
@@ -285,7 +292,7 @@ object GlassTokens {
 fun ThorGlassTheme(dark: Boolean, content: @Composable () -> Unit) {
     // dev build 17 (WP8): one builder (glassColorsFor) — WP10's overlays read the same answer
     val colors = glassColorsFor(dark, dark && app.wayfinder.AppSettings.themeMode == app.wayfinder.ThemeMode.BLACK,
-        app.wayfinder.AppSettings.customColours())
+        app.wayfinder.AppSettings.customColours(), app.wayfinder.AppSettings.buttonColours())   // 1.5-beta2 (GitHub #134)
     val scheme = if (colors.dark)
         darkColorScheme(primary = colors.accent, background = colors.base, surface = Color(0xFF161B3A))
     else

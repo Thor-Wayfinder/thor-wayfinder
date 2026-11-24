@@ -126,6 +126,9 @@ typedef struct {
     /* b18o: the buttons its pad pulses for a hand that holds a turbo button, said to Wayfinder ("TU", fx/wfmap.h
        [wf_turbo_held]) — never cleared but by the diff (what no longer counts is said let go) */
     unsigned char tsaid[WF_NK];
+    /* b19: the shift button's lone tap said to Wayfinder ("W", fx/wfmap.h [wf_shift_ext]) when its job is Wayfinder's,
+       cleared only by the diff (a tap no longer running is said let go) */
+    wf_tap_said tapsaid;
 } hx_t;
 
 static hx_t HX;
@@ -592,18 +595,39 @@ static void hx_engine_init(void) {
     HX.have_out = 0;
 }
 
+/** b19 (b18p side finding): the shift button's lone tap when its own job is Wayfinder's, said as "W <shift> 1" as it starts
+ *  and "W <shift> 0" 60 ms on (fx/wfmap.h [wf_shift_ext]). A tap no longer running is said let go ([hx_swap_map] zeroes it). */
+static void hx_tap_say(void) {
+    int c[2], v[2], n = wf_shift_ext(&HX.ws, &HX.wm, &HX.tapsaid, c, v);
+    for (int i = 0; i < n; i++) hx_sayf("W %d %d", c[i], v[i]);
+}
+
+/** b19 review: the loop wakes until the shift button's lone tap is over (a pad that reports only on change sends nothing
+ *  meanwhile): the copy's tap and the "W <shift> 0" alike. [hx_tap_timer]: a tap is set, over or not (wfhid.c's loop wakes
+ *  every 15 ms). [hx_tap_over], after the loop's flush: a tap past its end is forgotten (that flush let it go), so the loop
+ *  sleeps again. Before, the wake held only while the tap's end was ahead of the loop's clock: a report flushed in its last
+ *  ms, the clock past it at the loop's top, and nothing let it go until the controller's next report. As wfpad's loop. */
+static int hx_tap_timer(void) { return HX.ws.shift_tap_until != 0; }
+static void hx_tap_over(void) {
+    if (!HX.ws.shift_tap_until || HX.ws.now_ms < HX.ws.shift_tap_until) return;
+    HX.ws.shift_tap_until = 0;
+    hx_tap_say();                                 /* (that flush said it let go already: nothing more) */
+}
+
 /** Push the engine's output: only the differences. b18l (GitHub #81, b18w B1): when Home or Back changes, in up to three
  *  reports — Home's change / Back's release first, then the rest (the gate letting go of what is held, or giving it back),
  *  Back's press last (fx/wfmap.h [wf_frames]). In one report Home came last (its code after the buttons): X let go before
  *  Home's press was no partner of it in the app, R2 given back before Home's release made "Home + R2".
  *  b18o: first, what the hand holds as turbo buttons ("TU <code> <1|0> <ms>", fx/wfmap.h [wf_turbo_held]) — said with or
- *  without our pad (it is the hand's): Wayfinder takes their pulses for no presses. */
+ *  without our pad (it is the hand's): Wayfinder takes their pulses for no presses.
+ *  b19: then the shift button's lone tap when its job is Wayfinder's ([hx_tap_say]), with or without our pad too. */
 static void hx_flush(void) {
     {
         int c[WF_APP_HI - WF_APP_LO + 1], v[WF_APP_HI - WF_APP_LO + 1];
         int n = wf_turbo_held(&HX.ws, &HX.wm, HX.tsaid, c, v, WF_APP_HI - WF_APP_LO + 1);
         for (int i = 0; i < n; i++) hx_sayf("TU %d %d %ld", c[i], v[i], HX.ws.now_ms);
     }
+    hx_tap_say();
     if (!hx_emit || HX.pad_down) return;          /* (our pad down for a moment: [hx_pad_up] sends the whole state) */
     wf_out o; wf_compute(&HX.ws, &HX.wm, &o);
     if (HX.vback) o.key[WF_BACK] = 1;             /* dev build 17 (theme G): a Back handed to the game ([hx_vpress]) */
@@ -684,11 +708,15 @@ static void hx_app_sticks(int force) {
 
 /** A release for every key / action Wayfinder plays that is held now: before the source state is thrown away ([next]
  *  NULL), or before map [next] is swapped in — then only what [next] no longer gives to Wayfinder (the rest keeps its
- *  meaning, and stays held). */
+ *  meaning, and stays held).
+ *  b19: never the shift button (its press is never said: fx/wfmap.h [wf_ext_event]); and a held button [next] makes the
+ *  shift button is let go even if its job stays Wayfinder's ([wf_shift_takes]: its release is the shift's from then on). */
 static void hx_ext_release(const wf_map *next) {
+    int takes = next ? wf_shift_takes(&HX.ws, &HX.wm, next) : 0;
     for (int i = 0; i < HX.ws.nk; i++) {
         int k = HX.ws.keys[i];
-        if (HX.ws.key[k] && HX.wm.keymap[k] == WF_EXT && (!next || next->keymap[k] != WF_EXT)) hx_sayf("W %d 0", k);
+        if (HX.ws.shift && k == HX.ws.shift) continue;
+        if (HX.ws.key[k] && HX.wm.keymap[k] == WF_EXT && (!next || next->keymap[k] != WF_EXT || k == takes)) hx_sayf("W %d 0", k);
     }
     static const int DIRS[4] = { WF_HAT_UP, WF_HAT_DOWN, WF_HAT_LEFT, WF_HAT_RIGHT };
     for (int i = 0; i < 4; i++)

@@ -223,7 +223,7 @@ class FocusCue(private val service: AccessibilityService, private val ctlDisplay
             setTextColor(color)
             setTextSize(TypedValue.COMPLEX_UNIT_DIP, sp * ctx.resources.configuration.fontScale.coerceIn(0.85f, 1.1f))
             setLineSpacing(0f, 1.15f)
-            text = glyphs(t, textSize, glyphsTo, g.dark, under, color, letters)
+            text = glyphs(t, textSize, glyphsTo, g, under, color, letters)     // 1.5-beta2 (GitHub #134): the theme, Button colours in it
         }
         val compact = content is CueContent.Table && content.compact
         val view: View = when (content) {
@@ -343,7 +343,7 @@ private val LONE_LETTER = Regex("(?<![\\w\\-/'’])[ABXY](?![\\w\\-/'’])")
  * Y before [end] is a lettered badge too ([ButtonLetterDrawable]); (E4 addendum, MORE-D19) a [CueIcons] character anywhere is
  * its icon, in [color].
  */
-private fun glyphs(t: CharSequence, textPx: Float, end: Int, dark: Boolean, under: Int, color: Int, letters: Boolean): CharSequence {
+private fun glyphs(t: CharSequence, textPx: Float, end: Int, g: app.wayfinder.ui.GlassColors, under: Int, color: Int, letters: Boolean): CharSequence {
     var out: android.text.SpannableStringBuilder? = null
     fun span(d: android.graphics.drawable.Drawable, from: Int, to: Int, spoken: String? = null) {
         (out ?: android.text.SpannableStringBuilder(t).also { out = it })
@@ -353,11 +353,11 @@ private fun glyphs(t: CharSequence, textPx: Float, end: Int, dark: Boolean, unde
     val side = (textPx * 1.3f).roundToInt()
     for (i in 0 until end) {
         val mark = FaceMark.ofSymbol(t[i]) ?: continue
-        span(ButtonGlyphDrawable(mark, dark, under).apply { setBounds(0, 0, side, side) }, i, i + 1)
+        span(ButtonGlyphDrawable(mark, g, under).apply { setBounds(0, 0, side, side) }, i, i + 1)
     }
     if (letters) for (m in LONE_LETTER.findAll(t.subSequence(0, end))) {
         val b = ButtonLetterDrawable.letterOf(m.value) ?: continue
-        span(ButtonLetterDrawable(b, dark, under).apply { setBounds(0, 0, side, side) }, m.range.first, m.range.last + 1)
+        span(ButtonLetterDrawable(b, g, under).apply { setBounds(0, 0, side, side) }, m.range.first, m.range.last + 1)
     }
     val iconSide = (textPx * 1.15f).roundToInt()
     for (i in t.indices) {

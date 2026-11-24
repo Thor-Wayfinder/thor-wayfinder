@@ -25,6 +25,11 @@ object GamePageRules {
         else -> Start.CONTROLS
     }
 
+    /** b19: which control of the app settings' "Wayfinder combos" card carries its id ([NavCards.APP_COMBOS]), the one Back
+     *  from its combos lands on: "Edit its combos" where it's drawn (Custom, from the Hub), else the card's choice (an app
+     *  on Usual or Off whose combos a link opened: Back landed on "Opens on", the page's first control). */
+    fun combosRowHasId(custom: Boolean, inGame: Boolean): Boolean = custom && !inGame
+
     /** What the app settings edit (AppConfig fields) … */
     val APP_FIELDS = setOf("route", "reopenOnMove", "buttonsMode", "backToGame", "companion")
     /** … what Game controls edits (its drawing, Performance, More) — never the same field (the test) … */

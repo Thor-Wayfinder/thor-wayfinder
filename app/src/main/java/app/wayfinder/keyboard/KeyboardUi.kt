@@ -12,9 +12,11 @@ import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -96,26 +98,66 @@ fun ThorKeyboardPanel(
     // dev build 15 (WP2): the badges name the buttons of the controller in hand (IME and overlay alike), as menuSwap
     // picks them
     val g = LocalGlass.current
+    // 1.5-beta2: no dead space between keys, like other keyboards. The gaps (6 dp between keys, 6 / 8 dp between
+    // rows) and the board's margins belong to the keys' touch areas: half a gap on each side, the whole margin at an edge
+    // ([KeyGeometry], review R4: the edges took no touch). Each key draws its face that far in, so the faces are the size
+    // and place they were (review R3: wide keys too)
+    val rowGap = keyInset(overlay) * 2
     Column(
         modifier
             // The overlay has the system blur behind it; the IME window doesn't — so
             // it gets a nearly opaque base, or the app's text shows through the keys.
             .background(if (overlay) g.surfaceOverlay else g.surfaceSolid)
-            .padding(horizontal = 8.dp, vertical = 6.dp),
-        verticalArrangement = Arrangement.spacedBy(if (overlay) 8.dp else 6.dp),
+            .padding(top = 6.dp),
     ) {
-        TopBar(kb, overlay, preview, onHide, moveLabel, onMove)
+        Box(Modifier.padding(horizontal = BOARD_SIDE)) { TopBar(kb, overlay, preview, onHide, moveLabel, onMove) }
         if (kb.helpOpen) {
-            KeyboardControlsLegend(Modifier.fillMaxWidth().weight(1f), big = overlay)
-        } else {
-            kb.rows().forEachIndexed { r, row ->
-                Row(Modifier.fillMaxWidth().weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    row.forEachIndexed { c, key ->
-                        KeyCap(kb, key, r, c, focused = kb.focus == r to c, big = overlay, modifier = Modifier.weight(key.weight).fillMaxHeight())
-                    }
+            KeyboardControlsLegend(Modifier.fillMaxWidth().weight(1f)
+                .padding(start = BOARD_SIDE, end = BOARD_SIDE, top = rowGap, bottom = BOARD_BOTTOM), big = overlay)
+        } else androidx.compose.foundation.layout.BoxWithConstraints(Modifier.fillMaxWidth().weight(1f)) {
+            KeyRows(kb, overlay, maxWidth.value, maxHeight.value)
+        }
+    }
+}
+
+/** 1.5-beta2 (no dead space, review R3 / R4): the key rows filling [width] x [height] dp, every touch area against its
+ *  neighbours and the board's edges ([KeyGeometry]), each face inset by its share of the old gaps and margins. A function of
+ *  its own: one more lambda level in the panel risks the Compose compiler's StackOverflow (see [KeyboardControlsLegend]). */
+@Composable
+private fun KeyRows(kb: KeyboardController, overlay: Boolean, width: Float, height: Float) {
+    val inset = keyInset(overlay)
+    val rowGap = inset * 2
+    val rows = kb.rows()
+    // 1.5-beta2 (Q7): the number row a little lower than the letters (the same-screen keyboard grows for it)
+    val heights = KeyGeometry.touch(rows.indices.map { r -> if (r == 0 && kb.numberRowShown()) 0.8f else 1f }, height,
+        gap = rowGap.value, start = rowGap.value, end = BOARD_BOTTOM.value)
+    Column(Modifier.fillMaxSize()) {
+        rows.forEachIndexed { r, row ->
+            val widths = KeyGeometry.touch(row.map { it.weight }, width, gap = KEY_SIDE.value * 2, start = BOARD_SIDE.value, end = BOARD_SIDE.value)
+            Row(Modifier.fillMaxWidth().weight(heights[r].coerceAtLeast(0.01f))) {
+                row.forEachIndexed { c, key ->
+                    val face = PaddingValues(start = if (c == 0) BOARD_SIDE else KEY_SIDE, top = if (r == 0) rowGap else inset,
+                        end = if (c == row.lastIndex) BOARD_SIDE else KEY_SIDE, bottom = if (r == rows.lastIndex) BOARD_BOTTOM else inset)
+                    KeyCap(kb, key, r, c, focused = kb.focus == r to c, big = overlay, face = face,
+                        modifier = Modifier.weight(widths[c].coerceAtLeast(0.01f)).fillMaxHeight())
                 }
             }
         }
+    }
+}
+
+/** 1.5-beta2 (no dead space, review R3 / R4): the touch areas along one line of keys (a row across, or the rows down), in dp.
+ *  The faces share by [weights] what was theirs before: [length] less the [gap] between faces and the margins before the
+ *  first face ([start]) and after the last one ([end]). Each touch area = its face, half a gap on each inner side and the
+ *  whole margin on an edge side: they add up to [length], nothing on the board is outside a key. Pure (KeyboardTouchGapTest). */
+internal object KeyGeometry {
+    fun touch(weights: List<Float>, length: Float, gap: Float, start: Float, end: Float): List<Float> {
+        val n = weights.size
+        if (n == 0) return emptyList()
+        val sum = weights.sum()
+        if (sum <= 0f) return List(n) { length / n }
+        val faces = (length - start - end - gap * (n - 1)).coerceAtLeast(0f)
+        return weights.mapIndexed { i, w -> w / sum * faces + (if (i == 0) start else gap / 2) + (if (i == n - 1) end else gap / 2) }
     }
 }
 
@@ -257,7 +299,7 @@ private fun BarButton(icon: ImageVector?, label: String?, onClick: () -> Unit, b
 }
 
 @Composable
-private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, focused: Boolean, big: Boolean, modifier: Modifier) {
+private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, focused: Boolean, big: Boolean, face: PaddingValues, modifier: Modifier) {
     val g = LocalGlass.current
     val view = LocalView.current
     var pressed by remember { mutableStateOf(false) }
@@ -265,33 +307,26 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, foc
     val lift by animateFloatAsState(if (pressed) 1f else 0f, label = "press")
     val functional = key.kind != KeyKind.CHAR && key.kind != KeyKind.SPACE
     val accentKey = key.kind == KeyKind.ENTER ||
-        (key.kind == KeyKind.SHIFT && kb.shift != Shift.OFF)
+        (key.kind == KeyKind.SHIFT && kb.shiftOn())                       // 1.5-beta2 (Q2): L2 held too
+    val rtl = androidx.compose.ui.platform.LocalLayoutDirection.current == androidx.compose.ui.unit.LayoutDirection.Rtl
     val shape = RoundedCornerShape(if (big) Radii.Control else Radii.KeyCap)
     val fill = if (accentKey) Brush.verticalGradient(listOf(g.accent, g.accent2)) else g.keyFill(functional)
     val tap: () -> Unit = {
         view.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
         kb.press(key)
     }
+    // 1.5-beta2 (no dead space): the outer box is the touch area (the key's share of the gaps), the inner one the face
     Box(
         modifier
-            .graphicsLayer { val s = 1f + 0.06f * lift; scaleX = s; scaleY = s }
-            .clip(shape)
-            .background(fill, shape)
-            .then(if (pressed) Modifier.background(g.pressVeil, shape) else Modifier)
-            .glassLight(shape, g.dark)
-            .border(
-                if (focused) 2.5.dp else 1.dp,
-                if (focused) Brush.linearGradient(listOf(g.accent, g.accent2))
-                else Brush.linearGradient(0f to g.rimTop.copy(alpha = 0.7f), 0.5f to Color.Transparent, 1f to g.rimBottom),
-                shape,
-            )
-            .pointerInput(key, kb.page, kb.layoutIndex, row, col) {
+            .pointerInput(key, kb.page, kb.layoutIndex, row, col, rtl) {
                 if (key.kind == KeyKind.BACKSPACE) {
                     // Hold to repeat.
                     awaitEachGesture {
                         awaitFirstDown()
                         pressed = true; tap()
-                        val repeat = scope.launch { delay(420); while (true) { kb.press(key); delay(55) } }
+                        // 1.5-beta2 (GitHub #129, review): a repeat only once the field has had the last one (repeatReady),
+                        // at the field's speed: a slow field doesn't pile up deletes that go on after the key is let go
+                        val repeat = scope.launch { delay(420); while (true) { if (kb.repeatReady()) kb.press(key); delay(55) } }
                         // finally: a page / layout change mid-hold cancels this gesture — the repeat
                         // kept deleting every 55 ms (review 2026-09-25)
                         try { waitForUpOrCancellation() } finally { repeat.cancel(); pressed = false }
@@ -324,6 +359,35 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, foc
                         } finally { pressed = false }
                         if (!sliding && !longDone) tap()
                     }
+                } else if (key.kind == KeyKind.CHAR) {
+                    // 1.5-beta2 (Q6, GitHub D#127): hold a key and let go = its first option (the top row's digit, else the
+                    // hint drawn on it); slide sideways while holding to light another (the options run along the top bar).
+                    // A tap types the key as before; held, a key with no options types nothing, as before. The options were
+                    // picked by a second tap: a slide now (the bar's boxes still take a tap if the hold was cut short). The
+                    // controller's hold A, then A, is unchanged (KeyboardController.controllerLongPress).
+                    val step = 28.dp.toPx()
+                    awaitEachGesture {
+                        val down = awaitFirstDown()
+                        pressed = true
+                        try {
+                            var gone = false
+                            val up = withTimeoutOrNull(viewConfiguration.longPressTimeoutMillis) {
+                                waitForUpOrCancellation().also { if (it == null) gone = true }
+                            }
+                            if (up != null) { up.consume(); tap(); return@awaitEachGesture }
+                            if (gone || !kb.openPopup(key, row, col)) return@awaitEachGesture
+                            view.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            val count = kb.popup?.second?.size ?: 0
+                            while (true) {
+                                val ev = awaitPointerEvent()
+                                val c = ev.changes.firstOrNull { it.id == down.id } ?: break
+                                if (!c.pressed) { c.consume(); kb.chooseLit(); break }
+                                val want = KeyboardRules.slidePick(c.position.x - down.position.x, step, count, rtl)
+                                if (want != kb.popupIndex) kb.movePopup(want - kb.popupIndex)
+                                c.consume()
+                            }
+                        } finally { pressed = false }
+                    }
                 } else detectTapGestures(
                     onPress = { pressed = true; tryAwaitRelease(); pressed = false },
                     onLongPress = {
@@ -333,6 +397,21 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, foc
                     onTap = { tap() },
                 )
             },
+    ) { Box(
+        Modifier
+            .fillMaxSize()
+            .padding(face)                         // its share of the old gaps and margins ([KeyRows])
+            .graphicsLayer { val s = 1f + 0.06f * lift; scaleX = s; scaleY = s }
+            .clip(shape)
+            .background(fill, shape)
+            .then(if (pressed) Modifier.background(g.pressVeil, shape) else Modifier)
+            .glassLight(shape, g.dark)
+            .border(
+                if (focused) 2.5.dp else 1.dp,
+                if (focused) Brush.linearGradient(listOf(g.accent, g.accent2))
+                else Brush.linearGradient(0f to g.rimTop.copy(alpha = 0.7f), 0.5f to Color.Transparent, 1f to g.rimBottom),
+                shape,
+            ),
         contentAlignment = Alignment.Center,
     ) {
         val fg = if (accentKey) g.onAccent else g.textPrimary
@@ -382,8 +461,17 @@ private fun KeyCap(kb: KeyboardController, key: KeySpec, row: Int, col: Int, foc
                 ButtonGlyph(b, size = if (big) 22.dp else 16.dp)
             }
         }
-    }
+    } }
 }
+
+/** 1.5-beta2 (no dead space): half the old 6 dp gap between keys; the face is drawn this far inside the touch area. */
+private val KEY_SIDE = 3.dp
+/** Review R4: the board's old side margin, now the edge keys' (their faces this far from the edge, as before). */
+private val BOARD_SIDE = 8.dp
+/** Review R4: the board's old margin under the last row, now that row's. */
+private val BOARD_BOTTOM = 6.dp
+/** Half the old gap between rows: 8 dp on the overlay, 6 dp in the IME window. */
+private fun keyInset(big: Boolean) = if (big) 4.dp else 3.dp
 
 private fun padButtonFor(kind: KeyKind): ThorButton? = when (kind) {
     KeyKind.BACKSPACE -> ThorButton.X
@@ -407,7 +495,7 @@ private val LEGEND: List<LegendItem> get() = listOf(
     LegendItem(listOf(ThorButton.B), "Close the keyboard (Back too)"),
     LegendItem(listOf(ThorButton.X), "Delete"),
     LegendItem(listOf(ThorButton.Y), "Space"),
-    LegendItem(listOf(ThorButton.L2), "Shift (twice: caps lock)"),
+    LegendItem(listOf(ThorButton.L2), "Shift (hold for capitals, twice: caps lock)"),      // 1.5-beta2 (Q2)
     LegendItem(listOf(ThorButton.R2), "Symbols ↔ letters"),
     LegendItem(listOf(ThorButton.L1, ThorButton.R1), "Jump a word left / right"),
     LegendItem(listOf(ThorButton.START), "Enter"),

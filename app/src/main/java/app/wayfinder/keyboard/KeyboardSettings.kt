@@ -31,6 +31,10 @@ object KeyboardSettings {
      *  visible. Off = 1.3's: no window there, so no AYN black keyboard bar either, but those games submit at once. */
     var thinBar by mutableStateOf(true)
         private set
+    /** 1.5-beta2 (Q7, GitHub D#125 / #106): a row of numbers above the letters (off by default; the top row's digit hints
+     *  go while it shows). */
+    var numberRow by mutableStateOf(false)
+        private set
 
     fun init(ctx: Context) {
         if (::prefs.isInitialized) return
@@ -45,6 +49,13 @@ object KeyboardSettings {
             .getOrDefault(KeyboardPlacement.OTHER_SCREEN)
         dpadKeys = prefs.getBoolean("dpad_keys", false)
         thinBar = prefs.getBoolean("thin_bar", true)            // b18i (D3): a new key, absent = on (today's)
+        numberRow = prefs.getBoolean("number_row", false)       // 1.5-beta2 (Q7): a new key, absent = off
+    }
+
+    /** Q7: Keyboard's "Number row above the letters" switch — the keys redraw at once (Compose state). */
+    fun chooseNumberRow(on: Boolean) {
+        numberRow = on
+        prefs.edit().putBoolean("number_row", on).apply()
     }
 
     fun chooseDpadKeys(on: Boolean) {

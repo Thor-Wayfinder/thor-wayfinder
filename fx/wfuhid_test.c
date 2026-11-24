@@ -104,6 +104,72 @@ static int rgas(const unsigned char *r) {
     return -99999;
 }
 
+/* 1.5-beta2 (gv2 F3, h_diag B): a model of the copy's frames between wfpad and Android, from the kernel's and Android's
+ * source (their rules, not their timing): the input core hands a frame to the readers at its SYN_REPORT only with 2 values
+ * or more, the SYN_REPORT counted (input_handle_event); an unchanged key or axis value is no value, an EV_MSC always is. One
+ * reader's queue (evdev_client: EventHub's): a clock change with events queued empties it and puts a SYN_DROPPED in it
+ * without marking it ready (evdev_set_clk_type). EventHub reads only what is marked ready. InputReader, on a SYN_DROPPED,
+ * resets the device and drops everything up to the next SYN_REPORT (InputDevice::process). [got]: the D-pad values Android
+ * was handed. */
+typedef struct {
+    int hat, nv, val[8];                          // the copy's HAT0X now; the frame's values waiting for its SYN_REPORT
+    int q[64], tail, ready, head;                 // EventHub's queue: q[tail..ready) can be read, q[ready..head) not yet
+    int dropping, resets, got[16], ngot;          // InputReader
+} kmodel;
+#define KM_REST 1000                              // the copy's first report: its rest values (EV_REP, sticks)
+#define KM_MSC 2000
+#define KM_SYN 3000
+#define KM_DROP 4000
+static void km_event(kmodel *m, const struct input_event *e) {   // what wfpad writes, event by event
+    if (e->type == EV_ABS && e->code == ABS_HAT0X) { if (e->value != m->hat && m->nv < 8) { m->hat = e->value; m->val[m->nv++] = e->value; } }
+    else if (e->type == EV_MSC && e->code == MSC_SCAN) { if (m->nv < 8) m->val[m->nv++] = KM_MSC; }
+    else if (e->type == EV_SYN && e->code == SYN_REPORT) {
+        if (m->nv + 1 >= 2) {                     // handed to the readers: the values and the SYN_REPORT, marked ready
+            for (int i = 0; i < m->nv; i++) m->q[m->head++] = m->val[i];
+            m->q[m->head++] = KM_SYN; m->ready = m->head;
+        }
+        m->nv = 0;
+    }
+}
+static void km_frame(kmodel *m, int hat) {        // a frame of the copy: its D-pad value and its SYN_REPORT
+    struct input_event e[2]; memset(e, 0, sizeof e);
+    e[0].type = EV_ABS; e[0].code = ABS_HAT0X; e[0].value = hat; e[1].type = EV_SYN; e[1].code = SYN_REPORT;
+    km_event(m, &e[0]); km_event(m, &e[1]);
+}
+static void km_first(kmodel *m) { m->q[m->head++] = KM_REST; m->q[m->head++] = KM_SYN; m->ready = m->head; }
+static void km_settle(kmodel *m) { struct input_event e[2]; int n = wfu_settle(e); for (int i = 0; i < n; i++) km_event(m, &e[i]); }
+static void km_lone_syn(kmodel *m) { struct input_event e; memset(&e, 0, sizeof e); e.type = EV_SYN; e.code = SYN_REPORT; km_event(m, &e); }
+static void km_clock(kmodel *m) {                 // EventHub sets its clock (EVIOCSCLOCKID)
+    if (m->head != m->tail) { m->head = m->ready = m->tail; m->q[m->head++] = KM_DROP; }
+}
+static void km_read(kmodel *m) {                  // EventHub reads what is ready, InputReader handles it
+    for (; m->tail < m->ready; m->tail++) {
+        int v = m->q[m->tail];
+        if (v == KM_DROP) { m->dropping = 1; m->resets++; }
+        else if (m->dropping) { if (v == KM_SYN) m->dropping = 0; }
+        else if (v != KM_SYN && v != KM_MSC && v != KM_REST && m->ngot < 16) m->got[m->ngot++] = v;
+    }
+}
+/** A layer start as h_diag B saw it: the copy made at 0, EventHub opens it at 10 ms and sets its clock at 14 ms; wfpad's
+ *  first report at 12 ms when [race] (between the two), else at 20 ms. Then the hand's D-pad frames [hats] at [at] (us).
+ *  [rule] 0 = the t6 fix (a lone SYN_REPORT after a quiet spell), 1 = the settle frame ([wfu_settle_first], a copy made at
+ *  1 us), 2 = the settle frame after a quiet spell only (made unknown: no young copy). */
+static kmodel km_start(int race, const int *hats, const long *at, int n, int rule) {
+    kmodel m; memset(&m, 0, sizeof m);
+    long last;
+    if (race) { km_first(&m); km_clock(&m); last = 12000L; }
+    else { km_clock(&m); km_first(&m); last = 20000L; }
+    km_read(&m);
+    for (int i = 0; i < n; i++) {
+        if (rule == 0 && at[i] - last >= WFU_QUIET_US) km_lone_syn(&m);
+        if (rule == 1 && wfu_settle_first(1L, last, at[i])) km_settle(&m);
+        if (rule == 2 && wfu_settle_first(0L, last, at[i])) km_settle(&m);
+        km_frame(&m, hats[i]); last = at[i];
+        km_read(&m);
+    }
+    return m;
+}
+
 int main(void) {
     char why[64]; wfu_layout L;
 
@@ -248,6 +314,57 @@ int main(void) {
               "b18l Select let go + Back: report 1 = Select up; report 2 = Back down (%d)", NREP);
         uev(EV_KEY, WF_BACK, 0); uframe();
         CHECK(NREP == 1 && rbit(UREP[0], KEY_BACK) == 0, "b18l ...Back let go: one report (%d)", NREP);
+    }
+
+    // ── 1.5-beta2 (big test t6, F3; gv2 F3, h_diag B): a settle frame before the copy's frame after a quiet spell ──
+    CHECK(wfu_settle_first(1000L, 0, 123456789L), "F3: the copy's first write ever: a settle frame first");
+    CHECK(wfu_settle_first(1000L, 9000000L, 9000000L + WFU_QUIET_US), "F3: 50 ms quiet: a settle frame first");
+    CHECK(wfu_settle_first(0, 1000000L, 1000000L + 3300000L), "F3: t6's first press, 3.3 s after the copy was made: yes");
+    CHECK(!wfu_settle_first(1000L, 9000000L, 9000000L + 4000L), "F3: a stick moving (frames 4 ms apart), copy 9 s old: none");
+    CHECK(!wfu_settle_first(1000L, 9000000L, 9000000L + WFU_QUIET_US - 1), "F3: just under 50 ms, an old copy: none");
+    CHECK(wfu_settle_first(1000000L, 1300000L, 1304000L), "F3: frames 4 ms apart on a copy made 0.3 s ago: one each");
+    CHECK(wfu_settle_first(1000000L, 2996000L, 2999999L), "F3: ...up to 2 s after it was made");
+    CHECK(!wfu_settle_first(1000000L, 2996000L, 1000000L + WFU_YOUNG_US), "F3: ...not from 2 s on");
+    CHECK(!wfu_settle_first(0, 1300000L, 1304000L), "F3: the copy's age unknown: quiet spells only");
+    {   // the settle frame: MSC_SCAN 0 then SYN_REPORT, no time of its own; the room past it untouched
+        struct input_event e[3]; memset(e, 0x5a, sizeof e);
+        int n = wfu_settle(e);
+        CHECK(n == 2 && e[0].type == EV_MSC && e[0].code == MSC_SCAN && e[0].value == 0
+              && e[1].type == EV_SYN && e[1].code == SYN_REPORT && e[1].value == 0, "F3: settle = MSC_SCAN 0 + SYN_REPORT (%d)", n);
+        CHECK(e[0].input_event_sec == 0 && e[0].input_event_usec == 0 && e[1].input_event_sec == 0 && e[1].input_event_usec == 0,
+              "F3: settle: no time of its own (the kernel stamps it)");
+        CHECK(e[2].type == 0x5a5a, "F3: settle writes 2 events only");
+    }
+    {   // the fallback (the copy's node not open): the same report again, nothing changes for the readers
+        thor(); wfu_layout Q; CHECK(wfu_plan(&Q, evb, keyb, absb, info, why, sizeof why) == 0, "F3: planned (%s)", why);
+        static unsigned char kv[KEY_MAX + 1]; static int av[ABS_MAX + 1];
+        memset(kv, 0, sizeof kv); memset(av, 0, sizeof av);
+        kv[0x130] = 1; kv[KEY_HOME] = 1; av[ABS_X] = 1234; av[ABS_GAS] = 30000; av[ABS_HAT0X] = 1;
+        unsigned char a[WFU_MAXREP], b[WFU_MAXREP];
+        int la = wfu_report(&Q, kv, KEY_MAX + 1, av, ABS_MAX + 1, a), lb = wfu_report(&Q, kv, KEY_MAX + 1, av, ABS_MAX + 1, b);
+        CHECK(la == lb && la == Q.replen && !memcmp(a, b, (size_t)la), "F3: the same report again (%d bytes)", la);
+    }
+    {   // h_diag B replayed on the model (km_start): one D-pad right 3.18 s after the start (the median), let go 100 ms on
+        static const int H[] = { 1, 0 }; static const long T[] = { 3180000L, 3280000L };
+        kmodel a = km_start(1, H, T, 2, 0);
+        CHECK(a.resets == 1 && a.ngot == 1 && a.got[0] == 0,
+              "F3 model, the race, t6 fix: the press is dropped, its release comes alone (resets %d, got %d)", a.resets, a.ngot);
+        kmodel b = km_start(1, H, T, 2, 1);
+        CHECK(b.resets == 1 && b.ngot == 2 && b.got[0] == 1 && b.got[1] == 0,
+              "F3 model, the race, settle frame: the reset is spent on it, press and release come through (resets %d, got %d)", b.resets, b.ngot);
+        kmodel c = km_start(0, H, T, 2, 1);
+        CHECK(c.resets == 0 && c.ngot == 2 && c.got[0] == 1 && c.got[1] == 0,
+              "F3 model, no race, settle frame: nothing more for Android (resets %d, got %d)", c.resets, c.ngot);
+        kmodel d = km_start(0, H, T, 2, 0);
+        CHECK(d.resets == 0 && d.ngot == 2, "F3 model, no race, t6 fix: press and release (got %d)", d.ngot);
+    }
+    {   // a hand already on the D-pad as the layer starts: frames from 30 ms on, 4 ms apart
+        static const int H[] = { 1, 0, 1, 0 }; static const long T[] = { 30000L, 34000L, 38000L, 42000L };
+        kmodel q = km_start(1, H, T, 4, 2);
+        CHECK(q.resets == 1 && q.ngot == 3, "F3 model, the race, quiet spells only: the first frame is dropped (got %d)", q.ngot);
+        kmodel y = km_start(1, H, T, 4, 1);
+        CHECK(y.resets == 1 && y.ngot == 4 && y.got[0] == 1 && y.got[3] == 0,
+              "F3 model, the race, a young copy: every frame comes through (resets %d, got %d)", y.resets, y.ngot);
     }
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "OK", checks, fails);

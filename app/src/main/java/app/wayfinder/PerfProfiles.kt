@@ -93,11 +93,13 @@ object PerfProfiles {
                 }
             }
         }
+        // b19 (SECURITY.md): never a log as a lambda's RESULT. R8 drops a Log.v/d/i only when nothing uses what it
+        // returns, and runCatching keeps its block's last value (1.5-beta1 shipped this one); onSuccess's is discarded.
         runCatching {
             cr.registerContentObserver(Settings.System.getUriFor("fan_mode"), false, obs)
             cr.registerContentObserver(Settings.System.getUriFor("performance_mode"), false, obs)
-            Log.i(TAG, "keeping a Custom fan (fan=$lastFan perf=$lastPerf)")
-        }.onFailure { Log.w(TAG, "can't watch the fan: $it") }
+        }.onSuccess { Log.i(TAG, "keeping a Custom fan (fan=$lastFan perf=$lastPerf)") }
+            .onFailure { Log.w(TAG, "can't watch the fan: $it") }
     }
 
     /** Something else changed the mode behind our back (the lid heat guard): apply again next time. */

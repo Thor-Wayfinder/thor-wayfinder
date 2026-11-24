@@ -134,6 +134,21 @@ object AppSettings {
         if (::prefs.isInitialized) prefs.edit().putBoolean("focus_lock", enabled).putBoolean("focus_lock_top", top).apply()
     }
 
+    /** 1.5-beta2 (GitHub #145, the owner's pick): AYN's own top lock (screen_focus_lock 1) was armed by Wayfinder, so Wayfinder may
+     *  write it off ([AynLockRules]). Kept across restarts; the root helper reads it from this file at an uninstall. Set before
+     *  the arming write, cleared after the write off. */
+    @Volatile var aynLockByUs = false
+        private set
+
+    fun setAynLockByUs(v: Boolean) {
+        aynLockByUs = v
+        if (::prefs.isInitialized) prefs.edit().putBoolean(AynLockRules.OURS, v).apply()
+    }
+
+    /** AYN's lock is on and Wayfinder didn't arm it: the Thor's own setting holds the controller on the top screen (the
+     *  Controller page says so). Watched by the service, on the main thread. */
+    var thorTopLock by mutableStateOf(false)
+
     /**
      * Moving the controller with its combo (Home + right stick) makes it STAY there — a touch on
      * the other screen won't pull it back (it turns the lock on at that screen). Off =
@@ -215,6 +230,16 @@ object AppSettings {
     fun chooseAynHold(a: ThorAction?) {
         aynHold = a
         if (::prefs.isInitialized) prefs.edit().putString("ayn_hold", a?.name).apply()
+    }
+
+    /** 1.5-beta2 (Q8, GitHub #51): what a double tap on it does; null = none (the default, a tap acts at once). Set, a single
+     *  tap waits [AynTaps.DOUBLE_MS] for a second one. In thor_settings: backups carry it. */
+    var aynDouble by mutableStateOf<ThorAction?>(null)
+        private set
+
+    fun chooseAynDouble(a: ThorAction?) {
+        aynDouble = a
+        if (::prefs.isInitialized) prefs.edit().putString("ayn_double", a?.name).apply()
     }
 
     /** FPS counter on the top screen. */
@@ -319,6 +344,33 @@ object AppSettings {
     /** No glass: Black, or your own colours. */
     val flatLook: Boolean get() = themeMode == ThemeMode.BLACK || customColors
 
+    /** 1.5-beta2 (GitHub #134): Button colours — the face buttons' badges, 0 Coloured (as before) · 1 One colour · 2 Your own
+     *  ([app.wayfinder.ui.ButtonColours]); [buttonOwn] = Your own's picks for A B X Y (Xbox-way letters), null = as Coloured.
+     *  In thor_settings ("button_colours", "button_c0".."button_c3"; absent = as before): backups carry them. */
+    var buttonColourMode by mutableStateOf(app.wayfinder.ui.ButtonColours.COLOURED)
+        private set
+    var buttonOwn by mutableStateOf(listOf<Int?>(null, null, null, null))
+        private set
+    fun chooseButtonColours(mode: Int) {
+        buttonColourMode = mode.coerceIn(0, 2)
+        // Coloured = the key removed (absent = as before #134: no leftover "button_colours" 0 in the settings or backups)
+        if (::prefs.isInitialized) prefs.edit().also { e -> if (buttonColourMode == 0) e.remove("button_colours") else e.putInt("button_colours", buttonColourMode) }.apply()
+    }
+    fun setButtonColour(slot: Int, argb: Int) {
+        if (slot !in 0..3) return
+        val c = argb or 0xFF000000.toInt()
+        buttonOwn = buttonOwn.toMutableList().also { it[slot] = c }
+        if (::prefs.isInitialized) prefs.edit().putInt("button_c$slot", c).apply()
+    }
+    /** The four picks removed: Your own shows the built-in colours again. */
+    fun resetButtonColours() {
+        buttonOwn = listOf(null, null, null, null)
+        if (::prefs.isInitialized) prefs.edit().also { e -> for (i in 0..3) e.remove("button_c$i") }.apply()
+    }
+    /** Button colours for the theme builder (ui/GlassTheme.kt glassColorsFor): every window's badges read it. */
+    fun buttonColours(): app.wayfinder.ui.ButtonColours =
+        app.wayfinder.ui.ButtonColours(buttonColourMode, buttonOwn.map { it?.let { c -> app.wayfinder.ui.TokenArgb.of(c) } })
+
     /** 3-finger gesture on the bottom screen blanks/wakes it (on the fly). */
     var gestureBlankMode by mutableStateOf(BlankGesture.TAP)
         private set
@@ -344,6 +396,7 @@ object AppSettings {
         recordFolder = runCatching { RecordFolder.valueOf(prefs.getString("record_folder", null) ?: "MOVIES") }.getOrDefault(RecordFolder.MOVIES)
         focusLockEnabled = prefs.getBoolean("focus_lock", false)
         focusLockTop = prefs.getBoolean("focus_lock_top", true)
+        aynLockByUs = prefs.getBoolean(AynLockRules.OURS, false)
         focusSticky = prefs.getBoolean("focus_sticky", true)
         // decided once (kept: a later update must not flip it)
         if (!prefs.contains("focus_follows_move")) prefs.edit().putBoolean("focus_follows_move", !isUpdate(ctx)).apply()
@@ -359,6 +412,7 @@ object AppSettings {
         aynButtonOurs = prefs.getBoolean("ayn_button_ours", true)
         aynTap = runCatching { ThorAction.valueOf(prefs.getString("ayn_tap", null) ?: "QUICK_MENU") }.getOrDefault(ThorAction.QUICK_MENU)
         aynHold = runCatching { ThorAction.valueOf(prefs.getString("ayn_hold", null)!!) }.getOrNull()
+        aynDouble = runCatching { ThorAction.valueOf(prefs.getString("ayn_double", null)!!) }.getOrNull()   // 1.5-beta2 (Q8): absent = none
         panelTakesController = prefs.getBoolean("panel_takes_controller", true)
         controlsOtherScreen = prefs.getBoolean("controls_other_screen", false)   // b18i (D1): new key, absent = off
         idleBlankEnabled = prefs.getBoolean("idle_blank_enabled", false)
@@ -369,6 +423,10 @@ object AppSettings {
         customColors = prefs.getBoolean("custom_colors", false)
         customBg = prefs.getInt("custom_c0", customBg); customCard = prefs.getInt("custom_c1", customCard)
         customText = prefs.getInt("custom_c2", customText); customAccent = prefs.getInt("custom_c3", customAccent)
+        // 1.5-beta2 (GitHub #134): new keys, absent = Coloured and no picks (an update looks as before)
+        buttonColourMode = prefs.getInt("button_colours", 0).coerceIn(0, 2)
+        if (buttonColourMode == 0 && prefs.contains("button_colours")) prefs.edit().remove("button_colours").apply()   // an old 0 left by a test build
+        buttonOwn = (0..3).map { i -> if (prefs.contains("button_c$i")) prefs.getInt("button_c$i", 0) or 0xFF000000.toInt() else null }
         controlsSheet = prefs.getBoolean("controls_sheet", true)
         chordHint = prefs.getInt("chord_hint", 0).coerceIn(0, 2)
         wakeDoubleTap = prefs.getBoolean("wake_double_tap", false)
@@ -395,4 +453,23 @@ object AppSettings {
         gestureBlankMode = mode
         if (::prefs.isInitialized) prefs.edit().putString("gesture_blank_mode", mode.name).apply()
     }
+}
+
+/** 1.5-beta2 (GitHub #145, the owner's pick 2026-11-23): who may write AYN's own controller lock off (Settings.System
+ *  screen_focus_lock, 1 = the controller held on the top screen). Wayfinder wrote it off at every start and re-apply, so a
+ *  "Top" picked in the Thor's settings went back to Auto. Now only a lock Wayfinder armed itself, or the user's pick in
+ *  Wayfinder (Which screen, a send, the lock combo). Pure, no Android (the root helper uses it too). */
+internal object AynLockRules {
+    const val KEY = "screen_focus_lock"
+    /** The thor_settings key of [AppSettings.aynLockByUs]. */
+    const val OURS = "ayn_lock_by_us"
+
+    fun mayClear(armedByUs: Boolean, userChoice: Boolean): Boolean = armedByUs || userChoice
+
+    /** The Controller page's line: on, and not Wayfinder's. */
+    fun thorsOwn(on: Boolean, armedByUs: Boolean): Boolean = on && !armedByUs
+
+    /** At an uninstall, from Wayfinder's settings file as the helper read it: write it off when Wayfinder armed it, or when the
+     *  file couldn't be read (a lock of Wayfinder's left on would hold the controller on the top screen for good). */
+    fun clearAtUninstall(settingsXml: String?): Boolean = settingsXml == null || Regex("name=.$OURS.\\s+value=.true.").containsMatchIn(settingsXml)
 }

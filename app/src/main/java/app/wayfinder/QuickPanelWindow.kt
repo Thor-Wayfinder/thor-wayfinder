@@ -77,6 +77,9 @@ import androidx.compose.material.icons.rounded.*
  * The window takes the controller (focusable) unless "The panel takes the controller" is off (#31):
  * then it's touch-only and the game keeps the controller. B / Back or the AYN button closes it;
  * the service then puts the controller (and its lock) back.
+ *
+ * 1.5-beta2 (GitHub #139): docked on a TV or monitor, on the screen the TV shows (the top one, or the TV's own when the
+ * controller is there: PanelRules.place), and it always takes the controller there (PanelRules.takes).
  */
 object QuickPanelWindow {
     private const val TAG = "ThorPanel"
@@ -112,6 +115,7 @@ object QuickPanelWindow {
             // dev build 14 (critic 2): a connected controller's MODE (its Home is the game's) — unhandled, Android makes it Home
             if (event.keyCode == KeyEvent.KEYCODE_BUTTON_MODE) return true
             if (padFallback.shouldDrop(event)) return true   // R3/L3/Start must not "click"
+            nav.focusForKey(event)   // b19 fix: the panel's view has the focus before a key reaches it (ui.PadNav.focusForKey)
             return super.dispatchKeyEvent(event)
         }
         override fun dispatchGenericMotionEvent(ev: android.view.MotionEvent): Boolean = nav.onMotion(ev) || super.dispatchGenericMotionEvent(ev)
@@ -126,8 +130,9 @@ object QuickPanelWindow {
         }
     }
 
-    /** Open the panel on [display] (main thread). False if the window couldn't be added. */
-    fun show(service: android.accessibilityservice.AccessibilityService, display: Int): Boolean {
+    /** Open the panel on [display] (main thread). False if the window couldn't be added. [takes]: it takes the controller
+     *  (1.5-beta2, GitHub #139: the service decides, always on a TV or monitor). */
+    fun show(service: android.accessibilityservice.AccessibilityService, display: Int, takes: Boolean = AppSettings.panelTakesController): Boolean {
         if (view != null) return true
         val d = service.getSystemService(android.hardware.display.DisplayManager::class.java).getDisplay(display) ?: return false
         val ctx = android.view.ContextThemeWrapper(service.createDisplayContext(d), R.style.Theme_Wayfinder_Glass)
@@ -155,7 +160,6 @@ object QuickPanelWindow {
         // full-screen form on the top). The density stays d's own (the display's, either way).
         val m = android.util.DisplayMetrics().also { @Suppress("DEPRECATION") d.getRealMetrics(it) }
         val sheet = (ScreenSize.real(service, display)?.x ?: m.widthPixels) / m.density > 700
-        val takes = AppSettings.panelTakesController
         val blur = !sheet && android.os.Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
         val owner = PanelOwner()
         val root = Root(ctx, back = {
@@ -242,12 +246,15 @@ private enum class ScreenMode(val label: String) { BOTH("Both screens on"), TOP(
 @Composable
 private fun PanelContent(close: () -> Unit) {
     val first = remember { FocusRequester() }
-    LaunchedEffect(Unit) { first.requestAfterLayout() }       // dev build 16 (WP7): after the first layout, no 150 ms
-    PanelBody(first, close)
+    // 1.5-beta2 (GitHub #139, review R1): the Screens card holds [first]; docked (or hidden in Arrange) it is not drawn and
+    // the panel opened with nothing lit: Arrange (always in the header) takes the focus then
+    val header = remember { FocusRequester() }
+    LaunchedEffect(Unit) { if (!first.requestAfterLayout()) header.requestAfterLayout() }   // dev build 16 (WP7): after the first layout, no 150 ms
+    PanelBody(first, header, close)
 }
 
 @Composable
-private fun PanelBody(first: FocusRequester, close: () -> Unit) {
+private fun PanelBody(first: FocusRequester, header: FocusRequester, close: () -> Unit) {
     // build 18 (E2, pF12): where the header row ends (window px) — Arrange's floating description never covers it
     val headerBottom = remember { intArrayOf(-1) }
     val headerEnd = remember { { headerBottom[0].takeIf { it >= 0 } } }
@@ -259,7 +266,7 @@ private fun PanelBody(first: FocusRequester, close: () -> Unit) {
             // Edit mode arranges the shortcut tiles in place (like a home screen); B / Done leaves it.
             var editing by remember { mutableStateOf(false) }
             // build 18 (E2, pF09): leaving edit mode (B, Done) puts the focus back on Arrange — it was lost off screen
-            val arrangeFocus = remember { FocusRequester() }
+            val arrangeFocus = header
             val wasEditing = remember { booleanArrayOf(false) }
             LaunchedEffect(editing) {
                 if (!editing && wasEditing[0]) arrangeFocus.requestAfterLayout()
@@ -278,7 +285,8 @@ private fun PanelBody(first: FocusRequester, close: () -> Unit) {
                 // round 8: the cards the user picked, in their order (pencil → arrange)
                 for ((id, shown) in PanelCards.cards) if (shown) when (id) {
                     "now" -> NowPlaying()
-                    "screens" -> ScreenModeCard(first, close)
+                    // 1.5-beta2 (GitHub #139): on a TV or monitor the Thor's screens are Dock's, not this card's
+                    "screens" -> if (!Dock.docked) ScreenModeCard(first, close)
                     "levels" -> LevelsCard()
                     "details" -> DetailsCard()
                     "media" -> MediaCard()
@@ -668,8 +676,10 @@ private fun ScreenModeCard(first: FocusRequester, close: () -> Unit) {
         PanelShortcuts.touchBottom()   // 1.3 (GitHub #25): "Keep for <game>" can remember it
         // "Top only" blanks THIS screen: close first, or the panel would sit invisible
         // under the black cover still holding the controller.
-        if (i == 1) { close(); ForegroundAppService.later(300) { ForegroundAppService.setScreenMode(1) } }
-        else ForegroundAppService.setScreenMode(i)
+        // 1.5-beta2 (GitHub #139): "Bottom only" too when the panel is on the top screen (the side sheet)
+        if (PanelRules.closesFirst(i, QuickPanelWindow.displayId == android.view.Display.DEFAULT_DISPLAY)) {
+            close(); ForegroundAppService.later(300) { ForegroundAppService.setScreenMode(i) }
+        } else ForegroundAppService.setScreenMode(i)
     }
 }
 

@@ -189,6 +189,19 @@ data class StickJob(val use: StickUse = StickUse.STICK, val speed: Int = 5, val 
     }
 }
 
+/** b19 (GitHub #96): both sticks move one of the game's sticks (fx/wfmap.h `ms=1|2`): [LEFT] = the right stick also works as
+ *  the left one (both move the game's left stick, the one pushed further wins; the game's right stick rests), [RIGHT] the
+ *  mirror. [wire] = the engine's value. Opt-in per game, on the stick's page ("What the stick does"). */
+enum class StickMerge(val wire: Int) {
+    NONE(0), LEFT(1), RIGHT(2);
+    companion object {
+        /** The merge stick [side] (0 left, 1 right) makes when it works as the other one: the right one as the left ([LEFT]). */
+        fun from(side: Int) = if (side == 1) LEFT else RIGHT
+        /** The engine's value read back (files, backups): anything but 1 or 2 = [NONE]. */
+        fun ofWire(n: Int) = values().firstOrNull { it != NONE && it.wire == n } ?: NONE
+    }
+}
+
 /** Round 8: a stick's shape. [dead] % inner deadzone (0..30, hides drift), [full] % where full
  *  deflection is reached (70..100), [curve] 0 linear · 1 precise centre · 2 fast. Values clamped on
  *  read: they also come from shared files and backups. */
@@ -249,13 +262,16 @@ data class PadRemap(
     val pads: Map<Int, Int> = emptyMap(),
     /** How such a part — or a D-pad direction its reader fires (the older own controls) — fires: 1 turbo · 2 toggle. */
     val padFire: Map<Int, Int> = emptyMap(),
+    /** b19 (GitHub #96): both sticks move one of the game's sticks ([StickMerge]). Never with [swapSticks] (`sw` means nothing
+     *  then): [withAsOther], [withStickJob], [withSwap] and [fromJson] keep them apart. */
+    val bothSticks: StickMerge = StickMerge.NONE,
 ) {
     val isEmpty get() = this == PadRemap()
     val trigRanged get() = trigStart != 0 || trigFull != 100
     val changes: Int get() = (buttons.keys + fire.keys).size + chords.size +
         listOf(swapSticks, invertLeftY, invertRightY, dpadStick, digitalTriggers, gyro.isOn,
             !stickL.isDefault, !stickR.isDefault, trigRanged, shift != null, !jobL.isDefault, !jobR.isDefault,
-            invertLeftX, invertRightX).count { it } +
+            invertLeftX, invertRightX, bothSticks != StickMerge.NONE).count { it } +
             (if (shift != null) shifted.size else 0) +
             pads.size + padFire.keys.count { BY_CODE[it]?.let { b -> b in fire } != true }
 
@@ -301,12 +317,40 @@ data class PadRemap(
     /** A controller's own controls: no Thor gyro in them (its motion aim is its own, ExtPadsCtl.gyroFor). */
     fun forPad() = if (gyro == GyroSettings()) this else copy(gyro = GyroSettings())
 
+    // ── b19 (GitHub #96): a stick that also works as the other one. The page calls only these (one choice per stick) ──
+    /** Stick [side] (0 left, 1 right) also moves the other one's game stick ([bothSticks] comes from it). */
+    fun asOther(side: Int): Boolean = bothSticks != StickMerge.NONE && bothSticks == StickMerge.from(side)
+    /** Its page's choice "Left stick" (the right one's page; "Right stick" on the left one's). On: [bothSticks] from [side], that
+     *  stick's job back to Stick (it is the game's again), no swap; a merge from the other stick is replaced. Off: no merge
+     *  from it. */
+    fun withAsOther(side: Int, on: Boolean): PadRemap = when {
+        on -> (if (side == 0) copy(jobL = StickJob()) else copy(jobR = StickJob())).copy(bothSticks = StickMerge.from(side), swapSticks = false)
+        asOther(side) -> copy(bothSticks = StickMerge.NONE)
+        else -> this
+    }
+    /** Stick [side]'s job (Stick, Mouse, Scroll, 4 keys): any of them ends a merge that came from this stick; one from the
+     *  other stick stays (the left stick as the mouse while the right one walks). */
+    fun withStickJob(side: Int, job: StickJob): PadRemap {
+        val r = if (side == 0) copy(jobL = job) else copy(jobR = job)
+        return if (asOther(side)) r.copy(bothSticks = StickMerge.NONE) else r
+    }
+    /** "Swap with the … stick" and the Swap preset: on ends a merge. */
+    fun withSwap(on: Boolean): PadRemap = copy(swapSticks = on, bothSticks = if (on) StickMerge.NONE else bothSticks)
+    /** The game stick stick [side] moves as its page names it ("Left stick" for the right one), null = none. */
+    fun asOtherName(side: Int): String? = if (asOther(side)) STICK_NAMES[1 - side] else null
+
+    /** b19: the chords that can fire. Not one with the [shift] button: pressing it opens its gate (its partner under it is its
+     *  Shift layer's), and its partner first refuses its press. Kept in [chords] (the user's list; ExtEngine's chord ids stay
+     *  its indexes there), only not played: its buttons aren't the app's for it, so the shift's lone tap stays the copy's own
+     *  and its partner reaches the game at once. */
+    val liveChords: List<Chord> get() = shift?.let { sh -> chords.filterNot { it.has(sh) } } ?: chords
+
     /** This button is played by the app (ExtEngine): a target the engine can't do alone, a
-     *  long / double press, or a chord member. The engine sends its presses as "X" lines. */
+     *  long / double press, or a chord member ([liveChords]). The engine sends its presses as "X" lines. */
     fun byApp(src: ThorButton): Boolean {
         val t = buttons[src]
         return (t != null && t !is RemapTarget.Button && t != RemapTarget.None) ||
-            fire[src]?.hasAlt == true || chords.any { it.has(src) } ||
+            fire[src]?.hasAlt == true || liveChords.any { it.has(src) } ||
             (src.isDpad && fire[src] != null)          // 1.3: a D-pad direction's turbo / toggle: the app does it
     }
 
@@ -324,6 +368,7 @@ data class PadRemap(
         .apply { if (trigRanged) put("ts", trigStart).put("tf", trigFull) }
         .apply { shift?.let { put("sh", it.name) }; if (shifted.isNotEmpty()) put("shl", JSONObject().apply { shifted.forEach { (k, v) -> put(k.name, v.token()) } }) }
         .apply { if (!jobL.isDefault) put("jl", jobL.toJson()); if (!jobR.isDefault) put("jr", jobR.toJson()) }
+        .apply { if (bothSticks != StickMerge.NONE) put("ms", bothSticks.wire) }      // b19 (#96): an older app ignores it
         .apply { if (pads.isNotEmpty()) put("pk", JSONObject().apply { pads.forEach { (k, v) -> put("0x${k.toString(16)}", v) } }) }
         .apply { if (padFire.isNotEmpty()) put("pf", JSONObject().apply { padFire.forEach { (k, v) -> put("0x${k.toString(16)}", v) } }) }
 
@@ -349,7 +394,8 @@ data class PadRemap(
         }
         for ((s, f) in padFire.toSortedMap()) if (BY_CODE[s]?.let { fire.containsKey(it) } != true) add("f0x${s.toString(16)}=$f")
         if ((fire.isNotEmpty() || padFire.isNotEmpty()) && turboHz != 12) add("tr=${turboHz.coerceIn(2, 30)}")
-        if (swapSticks) add("sw=1")
+        // b19 (GitHub #96): both sticks on one, in the swap's place (never both: `sw` means nothing with `ms`)
+        if (bothSticks != StickMerge.NONE) add("ms=${bothSticks.wire}") else if (swapSticks) add("sw=1")
         if (dpadStick) add("dl=1")
         if (invertLeftY) add("il=1")
         if (invertRightY) add("ir=1")
@@ -385,6 +431,8 @@ data class PadRemap(
         const val MAX_CHORDS = 4
         /** The buttons that can be the shift button (ones games rarely need held). */
         val SHIFTS = listOf(ThorButton.SELECT, ThorButton.START, ThorButton.L3, ThorButton.R3)
+        /** The sticks' names on screen, [0] left, [1] right (b19, #96: the choice that makes one work as the other). */
+        val STICK_NAMES = listOf("Left stick", "Right stick")
         /** A button's or D-pad direction's (0x220..0x223) code in the engine: what wfpad's virtual presses
          *  take (`p <code> <0|1>`), and a source's id. */
         fun outCode(b: ThorButton): Int? = CODE[b] ?: DPAD[b]
@@ -428,7 +476,12 @@ data class PadRemap(
                 val t = RemapTarget.fromToken(j.optString("t"))
                 if (x == null || y == null || t == null || x == y || x !in BUTTONS || y !in BUTTONS) null else Chord(x, y, t)
             }.take(MAX_CHORDS)
-            return PadRemap(buttons, o.optBoolean("sw"), o.optBoolean("il"), o.optBoolean("ir"),
+            val jl = StickJob.fromJson(o.optJSONObject("jl")); val jr = StickJob.fromJson(o.optJSONObject("jr"))
+            // b19 (GitHub #96): a merge only from a stick that is the game's (a shared or hand-edited file can hold both), and
+            // never with the swap
+            val ms = StickMerge.ofWire(o.optInt("ms", 0))
+                .takeIf { it == StickMerge.NONE || (if (it == StickMerge.LEFT) jr else jl).isDefault } ?: StickMerge.NONE
+            return PadRemap(buttons, o.optBoolean("sw") && ms == StickMerge.NONE, o.optBoolean("il"), o.optBoolean("ir"),
                 o.optBoolean("dl"), o.optBoolean("td"), fire, o.optInt("tr", 12).coerceIn(2, 30),
                 GyroSettings.fromJson(o.optJSONObject("g")) ?: GyroSettings(), alt, chords,
                 StickShape.fromJson(o.optJSONObject("sl")), StickShape.fromJson(o.optJSONObject("sr")),
@@ -439,11 +492,12 @@ data class PadRemap(
                         val src = runCatching { ThorButton.valueOf(k) }.getOrNull() ?: return@forEach
                         if (src in BUTTONS) RemapTarget.fromToken(m.getString(k))?.let { put(src, it) }
                     } } } ?: emptyMap(),
-                jobL = StickJob.fromJson(o.optJSONObject("jl")), jobR = StickJob.fromJson(o.optJSONObject("jr")),
+                jobL = jl, jobR = jr,
                 invertLeftX = o.optBoolean("xl"), invertRightX = o.optBoolean("xr"),
                 // dev build 16 (WP4): a controller's parts — only valid ones (values also come from files)
                 pads = codes(o.optJSONObject("pk")) { s, d -> s in PAD_CODES && (d in PAD_CODES || d == 0xffff) && s != d },
-                padFire = codes(o.optJSONObject("pf")) { s, f -> s in PAD_CODES && f in 1..2 }).takeIf { !it.isEmpty }
+                padFire = codes(o.optJSONObject("pf")) { s, f -> s in PAD_CODES && f in 1..2 },
+                bothSticks = ms).takeIf { !it.isEmpty }
         }
         /** "0x…" keys → int values, kept where [ok]. */
         private fun codes(j: JSONObject?, ok: (Int, Int) -> Boolean): Map<Int, Int> = buildMap {

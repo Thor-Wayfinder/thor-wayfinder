@@ -30,6 +30,39 @@ $out = "dist\wayfinder-$version.apk"
 Copy-Item $apk $out -Force
 $certs = & "$bt\apksigner.bat" verify --verbose --print-certs $out
 if ($LASTEXITCODE -ne 0) { Write-Host "Signature check FAILED"; exit 1 }
+# No debug / info logging in a release (SECURITY.md). R8 removes a Log.v/d/i call only when nothing uses its result:
+# a block that ENDS with one keeps it (1.5-beta1: PerfProfiles). Checked in the built dex itself.
+$dexBin = Join-Path $bt "dexdump.exe"
+if (-not (Test-Path $dexBin)) { Write-Host "Log check: no dexdump in $bt"; exit 1 }
+$dexDir = Join-Path $env:TEMP "wayfinder-dexcheck"
+if (Test-Path $dexDir) { Remove-Item -Recurse -Force $dexDir }
+New-Item -ItemType Directory -Force $dexDir | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$zip = [System.IO.Compression.ZipFile]::OpenRead((Resolve-Path $out).Path)
+try {
+    foreach ($e in $zip.Entries) {
+        if ($e.FullName -match '^classes\d*\.dex$') {
+            [System.IO.Compression.ZipFileExtensions]::ExtractToFile($e, (Join-Path $dexDir $e.FullName), $true)
+        }
+    }
+} finally { $zip.Dispose() }
+$warn = 0; $left = @()
+foreach ($d in Get-ChildItem $dexDir -Filter "classes*.dex") {
+    # cmd + findstr keep the dump (millions of lines) native and fast; dexdump's stderr can't stop the script
+    $lines = cmd /c "`"$dexBin`" -d `"$($d.FullName)`" 2>nul | findstr /C:`"Landroid/util/Log;.`""
+    foreach ($l in $lines) {
+        if ($l -match 'Landroid/util/Log;\.w:') { $warn++ }
+        elseif ($l -match 'Landroid/util/Log;\.[vdi]:') { $left += $l.Trim() }
+    }
+}
+Remove-Item -Recurse -Force $dexDir
+if ($warn -eq 0) { Write-Host "Log check FAILED: dexdump read no code (no warning calls found)"; exit 1 }
+if ($left.Count -gt 0) {
+    Write-Host "Log check FAILED: the release build still has $($left.Count) debug/info log call(s) (R8 keeps one whose result is used):"
+    $left | Select-Object -First 5 | ForEach-Object { Write-Host "  $_" }
+    exit 1
+}
+Write-Host "Log check: no debug/info logging in the dex ($warn warning calls)"
 $sha = (Get-FileHash $out -Algorithm SHA256).Hash.ToLower()
 $cert = ($certs | Select-String "certificate SHA-256 digest: (.+)").Matches[0].Groups[1].Value
 $info = @"

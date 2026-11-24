@@ -36,11 +36,12 @@ data class CtlRowFacts(val ownEdit: Boolean = false, val removable: Boolean = fa
  *  ([gcOnThor]) when its own Home goes to the game; [docked] it plays as the Thor's controller ([dockedName]: which one, on
  *  the Thor's page). dev build 18f: [seated] it plays as the Thor's controller by its switch, undocked ([player]: the copy's
  *  number; the Thor's page: [dockedName] which one). dev build 18f2: [after] what its number becomes when the game a new
- *  player order waits for closes ([CtlWords.afterClose]; [ControllerRules.playerNo]). */
+ *  player order waits for closes ([CtlWords.afterClose]; [ControllerRules.playerNo]). b19 (H7): [homeTap] its Home is
+ *  "Game + combos" and it plays as itself — a tap goes to the game, a hold is still the combos. */
 data class CtlStatus(val state: CtlState, val player: Int = 0, val home: String? = null, val homeOurs: Boolean = true,
                      val back: String? = null, val gameControls: String? = null, val gcOnThor: Boolean = false,
                      val docked: Boolean = false, val dockedName: String? = null, val seated: Boolean = false,
-                     val after: String? = null)
+                     val after: String? = null, val homeTap: Boolean = false)
 
 object ControllerRules {
     fun caps(thor: Boolean, kind: ControllerKind, away: Boolean, touchpad: Boolean = false) =
@@ -58,6 +59,12 @@ object ControllerRules {
         if (c.readByWayfinder) add(CtlSection.SETUP)
         if (c.thor || c.readByWayfinder) add(CtlSection.ABOUT)
     }
+
+    /** 1.5-beta2 (Q5): the row Back focuses on a controller's page for the row [id] it asked for. Its Test it row while the
+     *  test is hidden (away): the row in its place, the next section's first ("Its buttons in games"), not the page's first
+     *  content ("Forget it"). Any other row: itself. */
+    fun landing(id: String, c: CtlCaps): String =
+        if (id == NavCards.TEST_IT.id && CtlSection.TEST !in sections(c)) NavCards.PAD_GAMES.id else id
 
     /** Build 18 (C7, VD-12): how many cards and rows section [s] shows now — a header over a single one only repeated its
      *  title ("MOTION" over "Aim with motion"). [f]: the rows that come and go. */

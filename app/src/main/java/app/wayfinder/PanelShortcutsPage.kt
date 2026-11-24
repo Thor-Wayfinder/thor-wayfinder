@@ -54,7 +54,7 @@ fun PanelShortcutsPage(myDisplayId: Int, onBack: () -> Unit, @Suppress("UNUSED_P
         SettingCard(
             NavCards.PANEL_TAKES,
             if (AppSettings.panelTakesController) "On — the D-pad and ${Say.menu(ThorButton.A)} move around the panel, ${Say.menu(ThorButton.B)} closes it. The game gets the controller back when it closes."
-            else "Off — the panel is touch-only and the game keeps the controller while it's open. The AYN button or its × closes it.",
+            else "Off — the panel is touch-only and the game keeps the controller while it's open. The AYN button or its × closes it. On a TV or monitor it takes the controller anyway.",
             checked = AppSettings.panelTakesController, onChecked = { AppSettings.setPanelTakesControllerOn(it) },
         )
         // dev build 17 (WP11): App pairs are on Screens (screen switching: there with the quick panel off too)
@@ -80,14 +80,24 @@ internal fun AynButtonChoices(canFocus: Boolean = true) {
         if (tap == ThorAction.AYN_DRAWER) "The same as turning off “${NavCards.PANEL_AYN.title}”" else tap.description,
         "ayn:tap", focus) { open = "tap" }
     AynSlotRow(true, hold?.title ?: SAME_AS_TAP.first, hold?.description ?: SAME_AS_TAP.second, "ayn:hold", focus) { open = "hold" }
+    // 1.5-beta2 (Q8, GitHub #51): a double tap, none by default; its line says what setting one costs the tap (set: only that,
+    // the title names the action; review: the action's line too went over 20 words). b2d pass (polish): its id is its card's,
+    // the row Search opens Combos on
+    val double = AppSettings.aynDouble
+    AynSlotRow(false, double?.title ?: NO_DOUBLE.first, if (double != null) DOUBLE_WAIT.replaceFirstChar { c -> c.uppercase() }
+        else "When this is set, $DOUBLE_WAIT", id = NavCards.AYN_DOUBLE.id, modifier = focus, double = true) { open = "double" }
     val which = open ?: return
     val first = remember(which) { FocusRequester() }
     GlassSheet(onDismiss = { open = null }, modifier = Modifier.fillMaxWidth(0.7f).fillMaxHeight(0.86f), first = first, contentPadding = 0.dp) {
         val isHold = which == "hold"
-        ActionPicker(if (isHold) "Pick what a hold does" else "Pick what a tap does",
-            if (isHold) all else all - ThorAction.AYN_DRAWER, current = if (isHold) hold else tap, onCancel = { open = null },
-            extraFirst = SAME_AS_TAP.takeIf { isHold }, leading = { AynGlyph(isHold, 26.dp) }, focus = first) { a ->
-            if (isHold) AppSettings.chooseAynHold(a) else a?.let { AppSettings.chooseAynTap(it) }
+        val isDouble = which == "double"
+        // 1.5-beta2 (Q8): the double tap never offers "Nothing" (no double tap is its own first choice)
+        ActionPicker(if (isHold) "Pick what a hold does" else if (isDouble) "Pick what a double tap does" else "Pick what a tap does",
+            if (isHold) all else if (isDouble) all - ThorAction.NOTHING else all - ThorAction.AYN_DRAWER,
+            current = if (isHold) hold else if (isDouble) double else tap, onCancel = { open = null },
+            extraFirst = if (isHold) SAME_AS_TAP else if (isDouble) NO_DOUBLE else null,
+            leading = { AynGlyph(isHold, 26.dp, double = isDouble) }, focus = first) { a ->
+            if (isHold) AppSettings.chooseAynHold(a) else if (isDouble) AppSettings.chooseAynDouble(a) else a?.let { AppSettings.chooseAynTap(it) }
             open = null
         }
     }
@@ -96,9 +106,15 @@ internal fun AynButtonChoices(canFocus: Boolean = true) {
 /** The AYN hold's first choice: no action of its own. */
 private val SAME_AS_TAP = "Same as a tap" to "Holding it does what a tap does, when you let go"
 
-/** Build 18 (C4): one AYN slot, drawn like a combo row — the action and its line, the AYN chip ([hold]: its hold's). */
+/** 1.5-beta2 (Q8, GitHub #51): the AYN double tap's first choice (the default): none, a tap stays instant. */
+private val NO_DOUBLE = "No double tap" to "A single tap acts at once"
+/** 1.5-beta2 (Q8): what a set double tap costs a single tap, from the engine's own window ([AynTaps.DOUBLE_MS]: "0.3 s"). */
+private val DOUBLE_WAIT = "a single tap waits ${AynTaps.DOUBLE_MS / 1000.0} s to see if a second one comes"
+
+/** Build 18 (C4): one AYN slot, drawn like a combo row — the action and its line, the AYN chip ([hold]: its hold's;
+ *  1.5-beta2, Q8: [double], its double tap's). */
 @Composable
-private fun AynSlotRow(hold: Boolean, title: String, line: String, id: String, modifier: Modifier, onClick: () -> Unit) {
+private fun AynSlotRow(hold: Boolean, title: String, line: String, id: String, modifier: Modifier, double: Boolean = false, onClick: () -> Unit) {
     val g = LocalGlass.current
     FocusableGlass(onClick = onClick, modifier = Modifier.fillMaxWidth().then(modifier), radius = Radii.Card, focusId = id) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically,
@@ -108,7 +124,7 @@ private fun AynSlotRow(hold: Boolean, title: String, line: String, id: String, m
                 Text(line, color = g.textTertiary, style = MaterialTheme.typography.bodySmall)
             }
             GlassPanel(radius = Radii.Control, strong = true) {
-                Box(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { AynGlyph(hold, 26.dp) }
+                Box(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) { AynGlyph(hold, 26.dp, double = double) }
             }
         }
     }

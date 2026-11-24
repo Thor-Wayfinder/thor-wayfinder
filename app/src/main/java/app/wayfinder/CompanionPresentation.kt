@@ -93,6 +93,7 @@ class CompanionPresentation(
         // dev build 14 (critic 2): a connected controller's MODE (its Home is the game's) — unhandled, Android makes it Home
         if (event.keyCode == android.view.KeyEvent.KEYCODE_BUTTON_MODE) return true
         if (padFallback.shouldDrop(event)) return true   // R3/L3/Start must not "click" a tile
+        nav.focusForKey(event)   // b19 fix: the sheet's view has the focus before a key reaches it (ui.PadNav.focusForKey)
         return super.dispatchKeyEvent(event)
     }
 
@@ -212,6 +213,8 @@ private fun CompanionScreen(hubDisplay: Int) {
             if (AppSettings.aynTap != ThorAction.QUICK_MENU)
                 add(Card({ app.wayfinder.ui.AynGlyph(false, 28.dp) }, app.wayfinder.ui.actionIcon(AppSettings.aynTap), AppSettings.aynTap.shortTitle))
             AppSettings.aynHold?.let { a -> add(Card({ app.wayfinder.ui.AynGlyph(true, 28.dp) }, app.wayfinder.ui.actionIcon(a), a.shortTitle)) }
+            // 1.5-beta2 (Q8, GitHub #51): and its double tap, when one is set
+            AppSettings.aynDouble?.let { a -> add(Card({ app.wayfinder.ui.AynGlyph(false, 28.dp, double = true) }, app.wayfinder.ui.actionIcon(a), a.shortTitle)) }
         }
     }
     GlassScreen(span = app.wayfinder.ui.AuroraSpan.BOTTOM) {

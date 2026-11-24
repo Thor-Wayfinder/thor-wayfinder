@@ -49,12 +49,12 @@ object OtherApps {
                 "off, or move Wayfinder's Home combos to another button (${Nav.place(HubPage.CONTROLS)}).", HubPage.CONTROLS))
         val bf = "com.moonbench.bifrost"
         if (installed(ctx, bf) && a11yOn(ctx, bf) && LightSettings.global.mode != LightMode.AYN) add(App(bf, "BiFrost", false,
-            "Both drive the stick lights, so they flicker between the two. Use one: \"${LightMode.AYN.label}\" in Wayfinder's " +
+            "Both drive the stick lights, so they flicker between the two. Use one: “${LightMode.AYN.label}” in Wayfinder's " +
                 "${Nav.place(HubPage.LIGHTS)}, or turn BiFrost off.", HubPage.LIGHTS))
         val ot = "de.langerhans.odintools"
         if (installed(ctx, ot) && a11yOn(ctx, ot)) add(App(ot, "OdinTools", false,
             "Both set performance and the fan for each app, so they undo each other. Use one: leave Wayfinder's games on " +
-                "\"Usual\" performance and fan, or turn OdinTools' app overrides off.", HubPage.APPS))
+                "“Usual” performance and fan, or turn OdinTools' app overrides off.", HubPage.APPS))
     }
 
     private fun prefs(ctx: Context) = ctx.getSharedPreferences("thor_settings", Context.MODE_PRIVATE)

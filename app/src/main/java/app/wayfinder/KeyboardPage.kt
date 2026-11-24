@@ -120,6 +120,12 @@ fun KeyboardPage(myDisplayId: Int, onBack: () -> Unit) {
             else "Off: the left stick picks keys, the D-pad moves the text cursor",
             checked = KeyboardSettings.dpadKeys, onChecked = { KeyboardSettings.chooseDpadKeys(it) })
 
+        // 1.5-beta2 (Q7, GitHub D#125 / #106): off by default
+        SettingCard(NavCards.KB_NUMBERS,
+            if (KeyboardSettings.numberRow) "On: a row of numbers from 1 to 0 above the letters"
+            else "Off: the numbers are on ?123, or hold a key of the top row",
+            checked = KeyboardSettings.numberRow, onChecked = { KeyboardSettings.chooseNumberRow(it) })
+
         SectionHeader("Languages · ${KeyboardSettings.layoutIds.size} on")
         app.wayfinder.ui.Caption("The globe key switches between them.")
         // On first, in their switching order; then the rest.

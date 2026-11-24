@@ -88,10 +88,14 @@ object InputMonitorTool {
             runCatching { PadLayer.stopForExit() }
             // Wayfinder UNINSTALLED (not just restarting): its data folder disappears a moment after
             // its process is killed. Nothing of it may stay behind: the copy of the controller goes,
-            // AYN's pad gets controller #1 back, AYN's top-screen lock (Wayfinder's lock) is released.
+            // AYN's pad gets controller #1 back, AYN's top-screen lock (Wayfinder's lock) is released. b19 (SECURITY.md):
+            // and the buttons layouts written for controllers go (ExtPads.removeLayouts). b19 fix: whatever handling says (its
+            // own gate is `wanted`, which only stopForExit above sets false: the layouts stayed if that ever failed)
             val data = java.io.File("/data/data/${BuildConfig.APPLICATION_ID}")
+            // 1.5-beta2 (GitHub #145): read now, while its files are still there: AYN's lock goes off only if Wayfinder armed it
+            val lockOurs = AynLockRules.clearAtUninstall(runCatching { java.io.File(data, "shared_prefs/thor_settings.xml").readText() }.getOrNull())
             for (i in 0 until 12) {
-                if (!data.exists()) { runCatching { PadLayer.onAppUninstalled() }; break }
+                if (!data.exists()) { runCatching { PadLayer.onAppUninstalled(clearAynLock = lockOurs) }; runCatching { ExtPads.removeLayouts(on = { false }) }; break }
                 Thread.sleep(500)
             }
             Runtime.getRuntime().halt(0)
@@ -185,7 +189,9 @@ object InputMonitorTool {
             if (matcher != "@controller") return "/dev/input/${n.name}"
             val phys = runCatching { java.io.File(n, "device/phys").readText().trim() }.getOrDefault("")
             if (phys == PadLayer.CLONE_PHYS) return "/dev/input/${n.name}"
-            if (first == null) first = "/dev/input/${n.name}"
+            // 1.5-beta2 (GitHub #102): AYN's pad set aside by the input layer has no node (a planned restart, the copy away for
+            // the player order): not that one — the reader would fail on it every 300 ms
+            if (first == null && java.io.File("/dev/input/${n.name}").exists()) first = "/dev/input/${n.name}"
         }
         return first
     }

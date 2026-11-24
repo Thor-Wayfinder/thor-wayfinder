@@ -20,6 +20,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Paint
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.compositeOver
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -42,6 +43,7 @@ import app.wayfinder.ui.currentLook
 import app.wayfinder.ui.drawFaceMark
 import app.wayfinder.ui.drawMarked
 import app.wayfinder.ui.faceLetterColor
+import app.wayfinder.ui.glyphUnder
 import app.wayfinder.ui.measureMarked
 import kotlin.math.hypot
 
@@ -138,6 +140,10 @@ internal fun PadArtCanvas(
 ) {
     val co = padArtColors()
     val dark = LocalGlass.current.dark
+    val faces = LocalGlass.current.faces       // 1.5-beta2 (GitHub #134): Button colours (an Xbox pad's letters)
+    // review F1: a face button's disc on the card (as the badges see the card: glyphUnder), what a picked letter must read on
+    val glass = LocalGlass.current
+    val faceDisc = remember(co, glass) { co.face.compositeOver(glass.glyphUnder) }
     val tm = rememberTextMeasurer(cacheSize = 48)    // b18 round 2: a drawing lays out ~20-40 labels/tags per draw; 8 (default) never hit
     Canvas(modifier) {
         val picture = remap == null
@@ -213,8 +219,9 @@ internal fun PadArtCanvas(
                 ArtSrc.PadGyro -> gyro?.on == true
                 is ArtSrc.Part -> r.pads.containsKey(src.code) || r.padFire.containsKey(src.code)
                 is ArtSrc.Btn -> when (src.b) {
-                    ThorButton.L3 -> r.jobAt(ThorButton.L3) || r.invertLeftY || r.invertLeftX || r.swapSticks || !r.jobL.isDefault
-                    ThorButton.R3 -> r.jobAt(ThorButton.R3) || r.invertRightY || r.invertRightX || r.swapSticks || !r.jobR.isDefault
+                    // b19 (GitHub #96): also the stick that works as the other one (it changes job; the other does as before)
+                    ThorButton.L3 -> r.jobAt(ThorButton.L3) || r.invertLeftY || r.invertLeftX || r.swapSticks || !r.jobL.isDefault || r.asOther(0)
+                    ThorButton.R3 -> r.jobAt(ThorButton.R3) || r.invertRightY || r.invertRightX || r.swapSticks || !r.jobR.isDefault || r.asOther(1)
                     ThorButton.L2, ThorButton.R2 -> r.changedAt(src.b) || r.digitalTriggers
                     else -> r.changedAt(src.b)
                 }
@@ -327,7 +334,7 @@ internal fun PadArtCanvas(
             circle(c.x, c.y, sh.rd, 6f, .9f, fillOf(c), edgeOf(c))
             val b = c.btn ?: return@part
             // critique G2: an Xbox pad's letters in its colours (a changed one stays the accent)
-            val col = if (look.kind == ControllerKind.XBOX && !hi(c) && !changed(c)) faceLetterColor(Vocab.shown(b, look), dark) ?: co.ink else labelColor(c)
+            val col = if (look.kind == ControllerKind.XBOX && !hi(c) && !changed(c)) faceLetterColor(Vocab.shown(b, look), dark, faces, faceDisc) ?: co.ink else labelColor(c)
             when {
                 look.sideways -> {}
                 look.names == FaceStyle.PLAYSTATION -> FaceMark.of(Vocab.shown(b, look))?.let { drawFaceMark(it, Offset(X(c.x), Y(c.y)), 1.45f * sh.rd * k, col) }
@@ -492,8 +499,11 @@ internal fun tagText(c: ArtCtl, r: PadRemap, look: PadLook): Pair<String, Boolea
             val becomes = r.jobOf(s, look)
             // 1.3: a stick with a job (mouse / scroll / keys) says so first
             val job = when (s) { ThorButton.L3 -> r.jobL; ThorButton.R3 -> r.jobR; else -> null }?.takeIf { !it.isDefault }
+            // b19 (GitHub #96): a stick that also works as the other one: "→ Left stick", filled (it becomes something else)
+            val other = when (s) { ThorButton.L3 -> r.asOtherName(0); ThorButton.R3 -> r.asOtherName(1); else -> null }
             val text = when {
                 job != null -> "→ " + job.summary
+                other != null -> "→ $other"
                 becomes != null -> "→ $becomes$fire"
                 fire.isNotEmpty() -> fire.removePrefix(" · ").replaceFirstChar { it.uppercase() }
                 s == ThorButton.L3 && (r.invertLeftY || r.invertLeftX || r.swapSticks) -> if (r.swapSticks) "↔ Right stick"
@@ -503,7 +513,7 @@ internal fun tagText(c: ArtCtl, r: PadRemap, look: PadLook): Pair<String, Boolea
                 (s == ThorButton.L2 || s == ThorButton.R2) && r.digitalTriggers -> "All-or-nothing"
                 else -> null
             } ?: return null
-            text to (becomes != null || job != null)
+            text to (becomes != null || job != null || other != null)
         }
         is ArtSrc.Part -> {
             val to = r.part(src.code)?.let { d -> r.partTarget(src.code)?.short(look) ?: PadRemap.PAD_PARTS[d] ?: "?" }
@@ -525,7 +535,7 @@ internal fun ArtCtl.title(look: PadLook): String = when (val s = src) {
     ArtSrc.Dpad -> "D-pad"
     ArtSrc.Gyro -> "Gyro"
     ArtSrc.PadGyro -> "Motion"
-    is ArtSrc.Part -> when (id) { ArtId.HOME -> Vocab.name(ThorButton.HOME, look); ArtId.SL -> "SL"; else -> "SR" }
+    is ArtSrc.Part -> when (id) { ArtId.HOME -> Vocab.name(ThorButton.HOME, look.copy(home = null)); ArtId.SL -> "SL"; else -> "SR" }
 }
 
 /** What the drawing's empty middle says about part [c]: line 1 what it does, line 2 how it fires — plus, on a controller's
@@ -541,7 +551,9 @@ internal fun inspectorText(c: ArtCtl, r: PadRemap, look: PadLook, gyro: GyroPill
             val s = src.b
             val t = r.jobOf(s, look)
             val job = when (s) { ThorButton.L3 -> r.jobL; ThorButton.R3 -> r.jobR; else -> null }?.takeIf { !it.isDefault }
+            val other = when (s) { ThorButton.L3 -> r.asOtherName(0); ThorButton.R3 -> r.asOtherName(1); else -> null }   // b19 (#96)
             (if (job != null) "${if (s == ThorButton.L3) "Left" else "Right"} stick  →  ${job.summary}"
+                else if (other != null) "${if (s == ThorButton.L3) "Left" else "Right"} stick  →  $other"
                 else if (t == null) "${Vocab.name(s, look)} — as usual" else "${Vocab.name(s, look)}  →  $t") to
                 (r.fireOf(s)?.let { if (it.hasAlt) "${it.label} → ${r.alt[s]?.short(look) ?: "nothing yet"}" else it.label } ?: "")
         }

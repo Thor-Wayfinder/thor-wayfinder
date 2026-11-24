@@ -225,30 +225,78 @@ object InputMonitor {
     @Volatile private var appCtx: Context? = null
     private val relaunches = ArrayDeque<Long>()
 
+    /** 1.5-beta2 (GitHub #145): when the root helper is tried again. It used to give up for good after 5 relaunches in a
+     *  minute ("helper keeps dying"), and a launch that never connected was never tried again: no Home combos, no cursor, no
+     *  Game controls (AYN's pad left set aside) until Wayfinder was opened or turned off and on. Now: soon while it went fewer
+     *  than [QUICK_TRIES] times in the last [WINDOW_MS], then once every [LATER_MS] while it keeps failing. Pure (HelperRetryTest). */
+    internal object HelperRetry {
+        const val SOON_MS = 3_200L          // past the launch debounce; a helper that reconnected meanwhile wins
+        const val LATER_MS = 60_000L
+        const val WINDOW_MS = 600_000L
+        const val QUICK_TRIES = 5
+        /** No helper connected this long after a launch: that launch failed (pservice dropped it, app_process never came up). */
+        const val CONNECT_WAIT_MS = 20_000L
+        /** The tries of [recent] (uptime ms, oldest first) still inside the window at [now]. */
+        fun keep(recent: List<Long>, now: Long): List<Long> = recent.filter { now - it <= WINDOW_MS }
+        /** The wait before the next try, given the [recent] tries and [now]. Never "no more tries". */
+        fun wait(recent: List<Long>, now: Long): Long = if (keep(recent, now).size < QUICK_TRIES) SOON_MS else LATER_MS
+        /** 1.5-beta2 (GitHub #145, review R6): the once-a-minute tries go on only while Wayfinder's service runs ([serviceUp]);
+         *  with it turned off, a cached Wayfinder kept starting a root helper nobody listened to, once a minute for good. The
+         *  quick tries always go (the Hub open with the service off still gets its helper back). */
+        fun goOn(wait: Long, serviceUp: Boolean): Boolean = wait <= SOON_MS || serviceUp
+        /** 1.5-beta2 (GitHub #145, review R1): no pservice at the launch. Just after a boot it may not be up yet ("not up yet"
+         *  in PServiceBridge): tried again every [NO_ROOT_WAIT_MS], [NO_ROOT_TRIES] times in a row (about 3 minutes), then left
+         *  to the next start (a ROM without AYN's root, LineageOS, never gets one). */
+        const val NO_ROOT_TRIES = 12
+        const val NO_ROOT_WAIT_MS = 15_000L     // past PServiceBridge's 10 s between failed probes
+        /** [tries]: the launches in a row that found no pservice, this one counted. True = try again later. */
+        fun noRootAgain(tries: Int): Boolean = tries in 1 until NO_ROOT_TRIES
+    }
+
     /** The helper went away (killed, crashed) while we still want it: bring it back without
      *  waiting for the app to be reopened — combos, gestures and the keyboard depend on it.
-     *  At most 5 times a minute, so a helper that can't start doesn't loop forever. */
+     *  1.5-beta2 (GitHub #145): soon at first, then once a minute ([HelperRetry]), never given up. */
     private fun relaunchSoon() {
         val ctx = appCtx ?: return
         if (!running) return
         val now = SystemClock.uptimeMillis()
-        synchronized(relaunches) {
-            while (relaunches.isNotEmpty() && now - relaunches.first() > 60_000) relaunches.removeFirst()
-            if (relaunches.size >= 5) { Log.w(TAG, "helper keeps dying — not relaunching for now"); return }
-            relaunches.addLast(now)
+        val wait = synchronized(relaunches) {
+            val kept = HelperRetry.keep(relaunches, now)
+            relaunches.clear(); relaunches.addAll(kept)
+            HelperRetry.wait(relaunches, now).also { relaunches.addLast(now) }
         }
+        if (wait > HelperRetry.SOON_MS) Log.w(TAG, "helper keeps dying: trying again in ${wait / 1000} s")
         Thread {
-            Thread.sleep(3200)   // past the launch debounce; a helper that reconnected meanwhile wins
-            if (running && !clientConnected) maybeLaunchHelper(ctx)
+            Thread.sleep(wait)
+            if (running && !clientConnected && !HelperRetry.goOn(wait, ForegroundAppService.isRunning))
+                Log.w(TAG, "helper: Wayfinder's service is off, no more tries until it starts")
+            else if (running && !clientConnected) maybeLaunchHelper(ctx)
         }.apply { isDaemon = true }.start()
     }
+
+    /** 1.5-beta2 (GitHub #145): the launches asked for; a connect check only counts for the last one. Review R2: counted
+     *  when the launch starts (before pservice's call, which can take seconds), atomically (two launch threads at once). */
+    private val launchGen = java.util.concurrent.atomic.AtomicInteger()
+    /** 1.5-beta2 (GitHub #145, review R1): launches in a row that found no pservice ([HelperRetry.noRootAgain]). */
+    private val noRootTries = java.util.concurrent.atomic.AtomicInteger()
 
     private fun launchHelper(context: Context) {
         val apk = context.applicationInfo.sourceDir
         // Runs off the main thread: pservice transacts + the launch keeper below
         // (`sleep 1`) block for ~1s, and start() is called from onResume/onServiceConnected.
         Thread {
-            if (!PServiceBridge.isAvailable()) { Log.w(TAG, "no pservice → no input monitor"); return@Thread }
+            val gen = launchGen.incrementAndGet()
+            if (!PServiceBridge.isAvailable()) {
+                // 1.5-beta2 (GitHub #145, review R1): right after a boot pservice may not be up yet: tried again a few times
+                val tries = noRootTries.incrementAndGet()
+                Log.w(TAG, "no pservice → no input monitor (try $tries)")
+                if (HelperRetry.noRootAgain(tries)) Thread {
+                    Thread.sleep(HelperRetry.NO_ROOT_WAIT_MS)
+                    if (running && !clientConnected) maybeLaunchHelper(context)
+                }.apply { isDaemon = true }.start()
+                return@Thread
+            }
+            noRootTries.set(0)
             // NOTE: we deliberately do NOT pkill old helpers. `pkill -f
             // ...InputMonitorTool` self-matches: the pservice shell running it has the
             // class name in its OWN cmdline, so it kills its own shell mid-run and
@@ -287,6 +335,13 @@ object InputMonitor {
                 Log.w(TAG, "helper launch failed: ${e.message}"); false
             }
             Log.d(TAG, "helper launch requested (ok=$ok)")
+            // 1.5-beta2 (GitHub #145): a launch that never connects is a death too (pservice can drop a call silently, see
+            // above): tried again as one ([relaunchSoon]). Only the last launch's check counts (gen: taken at the start)
+            Thread.sleep(HelperRetry.CONNECT_WAIT_MS)
+            if (gen == launchGen.get() && running && !clientConnected) {
+                Log.w(TAG, "helper launch: no helper connected after ${HelperRetry.CONNECT_WAIT_MS / 1000} s")
+                relaunchSoon()
+            }
         }.apply { isDaemon = true }.start()
     }
 }

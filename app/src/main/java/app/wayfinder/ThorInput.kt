@@ -37,6 +37,9 @@ object ThorInput {
     const val BTN_R2 = 313           // digital click; analog on ABS_GAS
     const val BTN_SELECT = 314
     const val BTN_START = 315
+    /** b19 (H7): a pad's PS / Guide / Xbox button (KEYCODE_BUTTON_MODE): a connected controller's pad has it in every Home
+     *  role (fx/wfhid_core.h HX_PRINTED); "Game + combos" taps it there ([ButtonEngine.Host.gameHomeTap]). */
+    const val BTN_MODE = 316
     const val BTN_L3 = 317
     const val BTN_R3 = 318
     const val KEY_HOME = 102         // controller device

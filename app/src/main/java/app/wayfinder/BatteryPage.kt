@@ -83,7 +83,7 @@ private fun NowCard() {
                 Text(watts?.let { "%.1f W".format(it) } ?: "—", color = g.textPrimary, style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.SemiBold)
                 Text(when {
-                    n.plugged -> "the Thor draws now, on the charger" + (n.phrase?.let { " · $it" } ?: "")
+                    n.plugged -> Charging.pluggedLine(n)     // 1.5-beta2 (big test t1): "on the charger" once
                     hours != null -> "now · about ${hours!!.toInt()} h ${((hours!! % 1) * 60).toInt()} min left at this rate"
                     else -> "the Thor draws now"
                 }, color = g.textSecondary, style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(bottom = 4.dp))

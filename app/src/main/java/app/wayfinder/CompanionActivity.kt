@@ -45,7 +45,7 @@ import kotlinx.coroutines.delay
 
 /**
  * Game companion: a page for the bottom screen while a game runs on top.
- *  - Guide: a browser that starts on a search for "<game> map guide"; 📌 keeps the page
+ *  - Guide: a browser that starts on a search for "<game> guide"; 📌 keeps the page
  *    you land on for that game (it opens there next time).
  *  - Notes: a notepad per game, saved as you type.
  * Opened automatically by the service when the game opens on top (Games →
@@ -56,8 +56,12 @@ class CompanionActivity : ComponentActivity() {
     private val pkg = mutableStateOf("")
 
     // dev build 14 (critic 2): a controller whose Home is the game's sends MODE — unhandled, Android made it Home
-    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean =
-        event.keyCode == android.view.KeyEvent.KEYCODE_BUTTON_MODE || super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: android.view.KeyEvent): Boolean {
+        if (event.keyCode == android.view.KeyEvent.KEYCODE_BUTTON_MODE) return true
+        // b19 fix: the window's view has the focus before a key reaches it (ui.PadNav.focusForKey)
+        app.wayfinder.ui.PadNav.focusForKey(findViewById<android.view.ViewGroup>(android.R.id.content)?.getChildAt(0), event)
+        return super.dispatchKeyEvent(event)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -117,7 +121,10 @@ object CompanionStore {
         ctx.packageManager.getApplicationLabel(ctx.packageManager.getApplicationInfo(pkg, 0)).toString()
     }.getOrDefault(pkg)
 
-    fun searchUrl(game: String): String = "https://duckduckgo.com/?q=" + Uri.encode("$game map guide")
+    /** What the Guide searches for when nothing is pinned: the game's name and "guide" (b19, GitHub #108: it added "map",
+     *  and many games have none; the search box on the page takes any other word). */
+    internal fun searchQuery(game: String): String = "$game guide"
+    fun searchUrl(game: String): String = "https://duckduckgo.com/?q=" + Uri.encode(searchQuery(game))
 }
 
 @Composable
@@ -226,7 +233,11 @@ private fun NotesPage(pkg: String) {
             // the D-pad passes over it; A (or a tap) starts typing (QA2) — dev build 16 (theme F): named as the hand's confirm
             app.wayfinder.ui.ControllerTextField(text, { text = it; CompanionStore.saveNotes(ctx, pkg, it) }, Modifier.fillMaxSize(),
                 textStyle = TextStyle(color = g.textPrimary, fontSize = 17.sp), singleLine = false,
-                placeholder = "Notes for this game — quests, codes, where you left off… (${Say.menu(ThorButton.A)} to write)")
+                placeholder = "Notes for this game — quests, codes, where you left off… (${Say.menu(ThorButton.A)} to write)",
+                // b19 (device pass d3): notes are sentences, so the keyboard starts each one with a capital (the search boxes
+                // stay as they are)
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    capitalization = androidx.compose.ui.text.input.KeyboardCapitalization.Sentences))
         }
     }
 }

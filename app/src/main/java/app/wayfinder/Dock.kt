@@ -21,6 +21,10 @@ object Dock {
     private const val TAG = "ThorDock"
     @Volatile var docked = false
         private set
+    /** 1.5-beta2 (GitHub #144, review R2): [docked] as Compose state (set with it, on the main thread: [update]). A screen that
+     *  reads it is drawn again when a TV comes or goes: the keyboard's "Move" button stayed up, dead, after one was plugged. */
+    private val dockedState = androidx.compose.runtime.mutableStateOf(false)
+    val dockedForUi: Boolean get() = dockedState.value
     private var app: Context? = null
     private val main = Handler(Looper.getMainLooper())
     /** Built-in screens whose panel Wayfinder powered off because docking left them lit: display id → physical id. */
@@ -72,6 +76,7 @@ object Dock {
         val now = a.getSystemService(DisplayManager::class.java).displays.any { isExternal(it) }
         if (now == docked) return
         docked = now
+        dockedState.value = now
         Log.w(TAG, if (now) "docked" else "undocked")
         ExtPadsCtl.setDocked(a, now)
         // one check loop at a time: every check is posted with the RECHECK token, so a dock flap cancels the earlier one

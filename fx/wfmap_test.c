@@ -729,6 +729,91 @@ int main(int argc, char **argv) {
     pad(0); key(WF_HOME, 1); wf_vpress(&S, WF_A, 1); frame();
     CHECK(!O.key[WF_A], "virtual presses stay silent while Home is held");
 
+    // ── b19 (b18p side finding): a shift button whose own job is Wayfinder's (keymap WF_EXT): its lone tap is Wayfinder's,
+    //    "X <shift> 1" at its lone release, "X <shift> 0" 60 ms on (wf_shift_ext, as wfpad's emit / wfhid's flush say it);
+    //    its own press / release never go out as X (wf_ext_event) ──────────────────────────────────────────────────────────
+    {
+        wf_tap_said ts; int c[2], v[2];
+#define SX() wf_shift_ext(&S, &M, &ts, c, v)   /* (no n: a variable only set warns under -Wall) */
+        pad(0); memset(&ts, 0, sizeof ts);
+        CHECK(wf_parse(&M, &S, "k0x13a=0xfffe sh=0x13a") == 0, "b19 profile: Select the shift, its own job Wayfinder's");
+        wf_state_map(&S, &M);
+        S.now_ms = 1000;
+        CHECK(key(0x13a, 1) == 1 && !wf_ext_event(&S, &M, 0x13a, 1), "b19 the shift pressed: J, no X press");
+        frame(); CHECK(!O.key[0x13a] && SX() == 0, "b19 ...held: nothing for the copy, nothing said");
+        S.now_ms = 1150;
+        CHECK(key(0x13a, 0) == 1 && !wf_ext_event(&S, &M, 0x13a, 0), "b19 its lone release: J, no stray X release");
+        frame(); CHECK(!O.key[0x13a] && S.shift_tap_until == 1210, "b19 ...the tap: nothing for the copy (Wayfinder plays it)");
+        CHECK(SX() == 1 && c[0] == 0x13a && v[0] == 1, "b19 ...X 314 1 at the release (1.5-beta1: nothing at all)");
+        S.now_ms = 1209; CHECK(SX() == 0, "b19 ...during the tap: nothing more");
+        S.now_ms = 1210; CHECK(SX() == 1 && c[0] == 0x13a && v[0] == 0, "b19 ...60 ms on: X 314 0");
+        CHECK(SX() == 0, "b19 ...said once");
+        // used under it (A: its Shift layer), or Home held at its release: no tap, nothing said
+        S.now_ms = 2000; key(0x13a, 1); key(WF_A, 1); key(WF_A, 0); S.now_ms = 2100; key(0x13a, 0);
+        CHECK(SX() == 0, "b19 the shift used (A under it): nothing said");
+        S.now_ms = 3000; key(0x13a, 1); key(WF_HOME, 1); key(0x13a, 0); key(WF_HOME, 0);
+        CHECK(SX() == 0, "b19 Home held at its release: nothing said");
+        // a second lone tap inside the first: let go first, then pressed again (two taps, not one long press)
+        S.now_ms = 4000; key(0x13a, 1); key(0x13a, 0); CHECK(SX() == 1 && v[0] == 1, "b19 a tap (until 4060)");
+        S.now_ms = 4020; key(0x13a, 1); CHECK(SX() == 0, "b19 ...pressed again inside it: the tap runs on");
+        S.now_ms = 4040; key(0x13a, 0);
+        CHECK(SX() == 2 && c[0] == 0x13a && v[0] == 0 && c[1] == 0x13a && v[1] == 1, "b19 ...a lone release inside it: X 0, then X 1");
+        S.now_ms = 4100; CHECK(SX() == 1 && v[0] == 0, "b19 ...its end: X 0");
+        // a new profile mid-tap (wfpad's "m", wfhid's swap, wfpad's state made again: shift_tap_until 0): said let go
+        S.now_ms = 5000; key(0x13a, 1); key(0x13a, 0); SX();
+        S.shift_tap_until = 0; CHECK(SX() == 1 && c[0] == 0x13a && v[0] == 0, "b19 a new profile mid-tap: X 0");
+        S.now_ms = 6000; key(0x13a, 1); key(0x13a, 0); SX();
+        CHECK(wf_parse(&M, &S, "k0x13b=0xfffe sh=0x13b") == 0, "b19 profile: Start the shift"); wf_state_map(&S, &M);
+        S.shift_tap_until = 0;
+        CHECK(SX() == 1 && c[0] == 0x13a && v[0] == 0, "b19 ...another shift button mid-tap: Select's X 0, nothing for Start");
+        // the state at rest mid-tap (wfhid's release-all keeps shift_tap_until): the tap runs out, then its release
+        pad(0); memset(&ts, 0, sizeof ts); wf_parse(&M, &S, "k0x13a=0xfffe sh=0x13a"); wf_state_map(&S, &M);
+        S.now_ms = 7000; key(0x13a, 1); key(0x13a, 0); SX();
+        wf_state_rest(&S); CHECK(SX() == 0, "b19 the state at rest mid-tap: the tap runs on");
+        S.now_ms = 7060; CHECK(SX() == 1 && c[0] == 0x13a && v[0] == 0, "b19 ...its end: X 0");
+        // defensive: the shift button changed with its tap's time kept (the callers zero it): the old code is let go first
+        pad(0); memset(&ts, 0, sizeof ts); wf_parse(&M, &S, "k0x13a=0xfffe k0x13b=0xfffe sh=0x13a"); wf_state_map(&S, &M);
+        S.now_ms = 8000; key(0x13a, 1); key(0x13a, 0); SX();
+        M.shift = 0x13b; wf_state_map(&S, &M);
+        CHECK(SX() >= 1 && c[0] == 0x13a && v[0] == 0, "b19 the shift changed, its tap's time kept: Select's X 0 first");
+        // a game job: the copy's own tap (b18p), nothing said; Nothing: no tap at all (the user's choice)
+        pad(0); memset(&ts, 0, sizeof ts); wf_parse(&M, &S, "sh=0x13a"); wf_state_map(&S, &M);
+        S.now_ms = 100; key(0x13a, 1); key(0x13a, 0); frame();
+        CHECK(O.key[0x13a] && SX() == 0 && !wf_ext_event(&S, &M, 0x13a, 0), "b19 a game job (itself): the copy's tap, nothing said");
+        pad(0); memset(&ts, 0, sizeof ts); wf_parse(&M, &S, "k0x13a=0xffff sh=0x13a"); wf_state_map(&S, &M);
+        S.now_ms = 100; key(0x13a, 1); key(0x13a, 0); frame();
+        CHECK(!O.key[0x13a] && SX() == 0, "b19 Nothing: no tap, nothing said");
+        // every other shift button the app offers (Start, L3, R3), AYN's Xbox mode alike
+        static const int SHB[] = { 0x13b, 0x13d, 0x13e };
+        for (unsigned i = 0; i < 3; i++) {
+            char spec[48]; snprintf(spec, sizeof spec, "k0x%x=0xfffe sh=0x%x", SHB[i], SHB[i]);
+            pad(i & 1); memset(&ts, 0, sizeof ts); CHECK(wf_parse(&M, &S, spec) == 0, "b19 %s", spec); wf_state_map(&S, &M);
+            S.now_ms = 500; key(SHB[i], 1); key(SHB[i], 0); frame();
+            CHECK(!O.key[SHB[i]] && SX() == 1 && c[0] == SHB[i] && v[0] == 1, "b19 shift 0x%x (Xbox mode %u): X press at its lone release", SHB[i], i & 1);
+        }
+        // another button that is Wayfinder's: as before (its press said alone, refused under the shift, its release always said)
+        pad(0); wf_parse(&M, &S, "k0x133=0xfffe k0x13a=0xfffe sh=0x13a"); wf_state_map(&S, &M);
+        key(WF_X, 1); CHECK(wf_ext_event(&S, &M, WF_X, 1), "b19 X (Wayfinder's) alone: its press said");
+        key(WF_X, 0); CHECK(wf_ext_event(&S, &M, WF_X, 0), "b19 ...its release said");
+        key(0x13a, 1); key(WF_X, 1); CHECK(!wf_ext_event(&S, &M, WF_X, 1), "b19 X under the shift: no X press (its Shift layer)");
+        key(WF_X, 0); CHECK(wf_ext_event(&S, &M, WF_X, 0), "b19 ...its release still said (releases always)");
+        key(0x13a, 0);
+        // a held button the next profile makes the shift, its job Wayfinder's: let go at the swap (wf_shift_takes)
+        {   wf_map a, b, g; pad(0); wf_map_reset(&a); wf_map_reset(&b); wf_map_reset(&g);
+            CHECK(wf_parse(&a, &S, "k0x13a=0xfffe") == 0 && wf_parse(&b, &S, "k0x13a=0xfffe sh=0x13a") == 0 &&
+                  wf_parse(&g, &S, "sh=0x13b") == 0, "b19 three profiles");
+            M = a; wf_state_map(&S, &M); key(0x13a, 1);
+            CHECK(wf_ext_event(&S, &M, 0x13a, 1), "b19 Select (Wayfinder's, no shift) held: its press said");
+            CHECK(wf_shift_takes(&S, &a, &b) == 0x13a, "b19 ...the next profile makes it the shift: let go now");
+            CHECK(wf_shift_takes(&S, &b, &b) == 0, "b19 ...already the shift: nothing (its press was never said)");
+            CHECK(wf_shift_takes(&S, &g, &b) == 0, "b19 ...a game job before: nothing to let go");
+            M = b; wf_state_map(&S, &M);
+            CHECK(!wf_ext_event(&S, &M, 0x13a, 0), "b19 ...its release, the shift's now: never an X line");
+            key(0x13a, 0); CHECK(wf_shift_takes(&S, &a, &b) == 0, "b19 ...not held: nothing");
+        }
+#undef SX
+    }
+
     // dev build 15: a "… (Wayfinder)" name is never AYN's pad (wfpad ayn_like: AYN's copy of a pad of ours)
     CHECK(wf_wayfinder_name("Xbox Wireless Controller (Wayfinder)") && wf_wayfinder_name("Joy-Con pair (Wayfinder)"),
           "names ending \" (Wayfinder)\" are Wayfinder's");
@@ -829,6 +914,197 @@ int main(int argc, char **argv) {
         n = wf_turbo_held(&S, &M, said, c, v, 2);
         CHECK(n == 2 && wf_turbo_held(&S, &M, said, c, v, 16) == 1 && c[0] == WF_X, "b18o the cap: 2, then the third");
 #undef TU
+    }
+
+    // ── b19 (GitHub #96, `ms=1|2`): both PHYSICAL sticks on one of the game's sticks. The one pushed further wins, as a whole
+    //    stick, after each one's own shape; the game's other stick rests (wf_compute, wf_reach) ───────────────────────────────
+    pad(0); M.merge_sticks = 1; ab(WF_RX, 20000); ab(WF_RY, -10000); frame();
+    CHECK(O.abs[WF_LX] == 20000 && O.abs[WF_LY] == -10000 && O.abs[WF_RX] == 0 && O.abs[WF_RY] == 0,
+          "#96 ms=1: the right stick alone moves the game's left stick, its right one rests (%d %d %d %d)",
+          O.abs[WF_LX], O.abs[WF_LY], O.abs[WF_RX], O.abs[WF_RY]);
+    pad(0); M.merge_sticks = 1; ab(WF_LX, -15000); ab(WF_LY, 7000); frame();
+    CHECK(O.abs[WF_LX] == -15000 && O.abs[WF_LY] == 7000 && O.abs[WF_RX] == 0 && O.abs[WF_RY] == 0, "#96 ms=1: the left stick alone as ever");
+    pad(0); M.merge_sticks = 1; ab(WF_LX, 10000); ab(WF_RY, 20000); frame();
+    CHECK(O.abs[WF_LX] == 0 && O.abs[WF_LY] == 20000, "#96 both held: the further one, whole, never one's x with the other's y (%d %d)",
+          O.abs[WF_LX], O.abs[WF_LY]);
+    pad(0); M.merge_sticks = 1; ab(WF_LX, 10000); ab(WF_RY, 10000); frame();
+    CHECK(O.abs[WF_LX] == 10000 && O.abs[WF_LY] == 0, "#96 a tie: the game's own left stick (%d %d)", O.abs[WF_LX], O.abs[WF_LY]);
+    // each stick's shape first: the right one's drift inside its deadzone is its centre, so it can't win (raw, it is further)
+    pad(0); M.merge_sticks = 1; M.dz[1] = 10; ab(WF_RX, 2000); ab(WF_RY, -1500); ab(WF_LX, 1000); frame();
+    CHECK(O.abs[WF_LX] == 1000 && O.abs[WF_LY] == 0, "#96 shape first: the right stick's drift loses to a small push (%d %d)",
+          O.abs[WF_LX], O.abs[WF_LY]);
+    pad(0); M.merge_sticks = 1; M.oz[1] = 80; ab(WF_RX, 26214); frame();
+    CHECK(O.abs[WF_LX] == 32767 && O.abs[WF_RX] == 0, "#96 the right stick's full at 80 %%: the game's left stick full (%d)", O.abs[WF_LX]);
+    // the gate: under Home both rest; the right stick moved under it stays withheld after it (Home's combo) until it rests
+    pad(0); M.merge_sticks = 1; key(WF_HOME, 1); ab(WF_RX, 20000); frame();
+    CHECK(O.abs[WF_LX] == 0 && O.abs[WF_RX] == 0, "#96 Home held + the right stick: nothing for the game");
+    key(WF_HOME, 0); ab(WF_LX, 5000); frame();
+    CHECK(O.abs[WF_LX] == 5000 && O.abs[WF_RX] == 0, "#96 ...Home let go, the right stick still held: the left stick only (%d)", O.abs[WF_LX]);
+    ab(WF_RX, 0); ab(WF_RX, 20000); frame();
+    CHECK(O.abs[WF_LX] == 20000 && O.abs[WF_RX] == 0, "#96 ...back at rest, then pushed: it moves the game's left stick (%d)", O.abs[WF_LX]);
+    pad(0); M.merge_sticks = 1; M.shift = 0x13a; S.shift = 0x13a; key(0x13a, 1); ab(WF_RX, 20000); ab(WF_LX, 9000); frame();
+    CHECK(O.abs[WF_LX] == 0 && O.abs[WF_LY] == 0 && O.abs[WF_RX] == 0, "#96 the shift button held: both sticks centred for the game");
+    // the inversions act on the game's sticks: the merged left one, the resting right one (nothing)
+    pad(0); M.merge_sticks = 1; M.inv_ly = 1; ab(WF_RY, 10000); frame();
+    CHECK(O.abs[WF_LY] == -10000 && O.abs[WF_RY] == 0, "#96 il=1 inverts the merged left stick, the right stick's push too (%d)", O.abs[WF_LY]);
+    pad(0); M.merge_sticks = 1; M.inv_ry = 1; M.inv_rx = 1; ab(WF_RX, 7000); ab(WF_RY, 10000); frame();
+    CHECK(O.abs[WF_LX] == 7000 && O.abs[WF_LY] == 10000 && O.abs[WF_RX] == 0 && O.abs[WF_RY] == 0, "#96 ir / xr while merged: nothing");
+    // `sw` means nothing with `ms` (neither after the merge nor before it: a tie stays the physical left stick's)
+    pad(0); M.merge_sticks = 1; M.swap_sticks = 1; ab(WF_RX, 20000); ab(WF_LX, 3000); frame();
+    CHECK(O.abs[WF_LX] == 20000 && O.abs[WF_RX] == 0, "#96 ms=1 sw=1: as ms=1 (%d %d)", O.abs[WF_LX], O.abs[WF_RX]);
+    pad(0); M.merge_sticks = 1; M.swap_sticks = 1; ab(WF_LX, 10000); ab(WF_RY, 10000); frame();
+    CHECK(O.abs[WF_LX] == 10000 && O.abs[WF_LY] == 0, "#96 ms=1 sw=1, a tie: the physical left stick's (%d %d)", O.abs[WF_LX], O.abs[WF_LY]);
+    // a stick that is Wayfinder's (apl / apr) is never in the merge
+    {   int x, y;
+        pad(0); M.merge_sticks = 1; M.app_stick[1] = 1; ab(WF_RX, 32767); ab(WF_LX, 4000); frame();
+        CHECK(O.abs[WF_LX] == 4000 && O.abs[WF_RX] == 0, "#96 apr=1 ms=1: the right stick is Wayfinder's, never the game's (%d)", O.abs[WF_LX]);
+        wf_app_stick(&S, &M, 1, &x, &y);
+        CHECK(x == 1000 && y == 0, "#96 ...its position still told to Wayfinder (%d %d)", x, y);
+        pad(0); M.merge_sticks = 1; M.app_stick[0] = 1; ab(WF_LX, 32767); ab(WF_RX, 12000); frame();
+        CHECK(O.abs[WF_LX] == 12000 && O.abs[WF_RX] == 0, "#96 apl=1 ms=1: the left stick is Wayfinder's, the right one walks (%d)", O.abs[WF_LX]);
+        wf_app_stick(&S, &M, 0, &x, &y);
+        CHECK(x == 1000 && y == 0, "#96 ...the left one's position told to Wayfinder (%d %d)", x, y);
+    }
+    // ms=2, the mirror
+    pad(0); M.merge_sticks = 2; ab(WF_LX, -20000); ab(WF_LY, 5000); frame();
+    CHECK(O.abs[WF_RX] == -20000 && O.abs[WF_RY] == 5000 && O.abs[WF_LX] == 0 && O.abs[WF_LY] == 0,
+          "#96 ms=2: the left stick moves the game's right stick, its left one rests");
+    ab(WF_LX, 10000); ab(WF_LY, 0); ab(WF_RY, 10000); frame();
+    CHECK(O.abs[WF_RX] == 0 && O.abs[WF_RY] == 10000 && O.abs[WF_LX] == 0, "#96 ms=2, a tie: the game's own right stick (%d %d)", O.abs[WF_RX], O.abs[WF_RY]);
+    // D-pad and left stick (dl=1): the merged stick drives the D-pad, the D-pad the game's left stick
+    pad(0); M.merge_sticks = 1; M.dpad_ls = 1; ab(WF_RX, 32767); frame();
+    CHECK(O.abs[WF_HX] == 1 && O.abs[WF_LX] == 0 && O.abs[WF_RX] == 0, "#96 dl=1 ms=1: the right stick drives the D-pad (%d %d)", O.abs[WF_HX], O.abs[WF_LX]);
+    // the gyro is added after: on the right stick it is the game's right stick alone; on the left, added to the merged one
+    pad(0); M.merge_sticks = 1; S.gyro_stick = 2; S.gyro_x = 12000; S.gyro_y = 0; ab(WF_RX, 5000); frame();
+    CHECK(O.abs[WF_LX] == 5000 && O.abs[WF_RX] == 12000, "#96 gyro on the right stick: the game's right stick is the gyro (%d %d)", O.abs[WF_LX], O.abs[WF_RX]);
+    S.gyro_stick = 1; S.gyro_x = -3000; frame();
+    CHECK(O.abs[WF_LX] == 2000 && O.abs[WF_RX] == 0, "#96 gyro on the left stick: added to the merged one (%d)", O.abs[WF_LX]);
+    // a pad without one of the sticks: nothing changes (no division, the other stick still itself)
+    pad(0); S.info[WF_RX].minimum = S.info[WF_RX].maximum = 0; S.info[WF_RY].minimum = S.info[WF_RY].maximum = 0;
+    M.merge_sticks = 1; ab(WF_LX, 20000); frame();
+    CHECK(O.abs[WF_LX] == 20000, "#96 no right stick: ms=1 changes nothing (%d)", O.abs[WF_LX]);
+    pad(0); S.info[WF_LX].minimum = S.info[WF_LX].maximum = 0; S.info[WF_LY].minimum = S.info[WF_LY].maximum = 0;
+    M.merge_sticks = 1; ab(WF_RX, 20000); frame();
+    CHECK(O.abs[WF_RX] == 20000, "#96 no left stick: ms=1 changes nothing, the right stick is still itself (%d)", O.abs[WF_RX]);
+    // parse
+    {   wf_map mp; pad(0);
+        CHECK(wf_parse(&mp, &S, "ms=1") == 0 && mp.merge_sticks == 1 && wf_parse(&mp, &S, "ms=2") == 0 && mp.merge_sticks == 2,
+              "#96 ms=1 / ms=2 parse");
+        CHECK(wf_parse(&mp, &S, "ms=0") == 0 && mp.merge_sticks == 0, "#96 ms=0 = none");
+        CHECK(wf_parse(&mp, &S, "ms=2 sw=1") == 0 && mp.merge_sticks == 2, "#96 ms=2 sw=1 parses (sw is ignored, not refused)");
+        wf_map keep = mp;
+        CHECK(wf_parse(&mp, &S, "ms=3") != 0 && wf_parse(&mp, &S, "ms=-1") != 0 && wf_parse(&mp, &S, "ms=x") != 0 &&
+              wf_parse(&mp, &S, "ms=") != 0, "#96 ms=3 / -1 / x / nothing refused");
+        CHECK(!memcmp(&mp, &keep, sizeof mp), "#96 ...a refused line leaves the map untouched");
+    }
+    // state-based: a profile without it while the right stick is held: on the game's right stick at once, the left its own
+    pad(0); M.merge_sticks = 1; ab(WF_LX, 6000); ab(WF_RX, 20000); frame();
+    CHECK(O.abs[WF_LX] == 20000 && O.abs[WF_RX] == 0, "#96 the right stick held, merged");
+    wf_map_reset(&M); frame();
+    CHECK(O.abs[WF_LX] == 6000 && O.abs[WF_RX] == 20000, "#96 ...a profile without it: both back at once (%d %d)", O.abs[WF_LX], O.abs[WF_RX]);
+    // property (fixed seed): the game's stick is exactly one stick shaped alone (never a mix), the one pushed further (a
+    // near-tie either way); the other game stick rests. Random shapes per stick, both ways
+    {   unsigned seed = 9601u; int bad = 0, won[2] = {0, 0};
+        for (int i = 0; i < 2000; i++) {
+            int v[4];
+            for (int a = 0; a < 4; a++) { seed = seed * 1103515245u + 12345u; v[a] = (int)((seed >> 8) % 65535u) - 32767; }
+            seed = seed * 1103515245u + 12345u;
+            int ms = 1 + (i & 1);
+            pad(0); M.dz[0] = (int)((seed >> 8) % 31u); M.dz[1] = (int)((seed >> 13) % 31u);
+            M.cv[0] = (int)((seed >> 18) % 3u); M.cv[1] = (int)((seed >> 21) % 3u);
+            ab(WF_LX, v[0]); ab(WF_LY, v[1]); ab(WF_RX, v[2]); ab(WF_RY, v[3]); frame();
+            int sl[2] = { O.abs[WF_LX], O.abs[WF_LY] }, sr[2] = { O.abs[WF_RX], O.abs[WF_RY] };   // each one shaped, alone
+            M.merge_sticks = ms; frame();
+            int tx = O.abs[ms == 1 ? WF_LX : WF_RX], ty = O.abs[ms == 1 ? WF_LY : WF_RY];
+            int ox = O.abs[ms == 1 ? WF_RX : WF_LX], oy = O.abs[ms == 1 ? WF_RY : WF_LY];
+            double dl = (double)sl[0] * sl[0] + (double)sl[1] * sl[1], dr = (double)sr[0] * sr[0] + (double)sr[1] * sr[1];
+            int isl = tx == sl[0] && ty == sl[1], isr = tx == sr[0] && ty == sr[1];
+            int ok = ox == 0 && oy == 0 && ((isl && dl * 1.0001 >= dr) || (isr && dr * 1.0001 >= dl));
+            if (!ok && bad++ < 3) printf("#96 draw %d ms=%d: L (%d %d) R (%d %d) -> (%d %d) other (%d %d)\n", i, ms, sl[0], sl[1], sr[0], sr[1], tx, ty, ox, oy);
+            if (isl != isr) won[isr]++;
+        }
+        CHECK(bad == 0 && won[0] > 200 && won[1] > 200, "#96 2000 draws: one whole stick, the further, the other at rest (%d bad; L %d, R %d)",
+              bad, won[0], won[1]);
+    }
+
+    // ── b19 (H1a): Keyboard & mouse holds the controller ("h 1", wf_hold): the gate as under Home, Home / Back's own changes
+    //    echoed in the order of the presses, a lapse with no renewal for 6 s ────────────────────────────────────────────────
+    {   int c[2], v[2], n;
+        // what the hand holds as the hold starts is let go for the game, and comes back at the give-back
+        pad(0); key(WF_A, 1); ab(WF_LX, 20000); frame();
+        n = wf_hold(&S, 1, 1000, c, v); frame();
+        CHECK(S.app_hold && S.gated && !O.key[WF_A] && O.abs[WF_LX] == 0, "H1a the hold: the gate opens, A and the stick let go for the game");
+        CHECK(n == 2 && c[0] == WF_HOME && v[0] == 0 && c[1] == WF_BACK && v[1] == 0, "H1a ...its start says Home 0, Back 0 (%d)", n);
+        CHECK(S.hold_until == 1000 + WF_HOLD_MS && WF_HOLD_MS == 6000, "H1a ...it lasts 6 s unless renewed");
+        CHECK(wf_hold(&S, 0, 2000, c, v) == 0, "H1a the give-back says nothing");
+        frame();
+        CHECK(!S.app_hold && !S.gated && O.key[WF_A] && O.abs[WF_LX] == 20000, "H1a ...A and the stick, still held, come back");
+        // a button held before the hold, let go under it: not echoed (the copy let it go at the start, b18l)
+        pad(0); key(WF_A, 1); wf_hold(&S, 1, 0, c, v);
+        CHECK(!key(WF_A, 0), "H1a a button held before the hold, let go under it: no echo");
+        // a press under the hold: echoed, silent for the game, still withheld after the give-back until let go
+        pad(0); wf_hold(&S, 1, 0, c, v);
+        CHECK(key(WF_B, 1), "H1a a press under the hold is echoed");
+        frame(); CHECK(!O.key[WF_B], "H1a ...and the game doesn't get it");
+        wf_hold(&S, 0, 100, c, v); frame();
+        CHECK(!O.key[WF_B], "H1a ...given back while it is held: still withheld (the B that gives it back never reaches the game)");
+        CHECK(key(WF_B, 0), "H1a ...its release is echoed (the app's ledger takes it)");
+        key(WF_B, 1); frame(); CHECK(O.key[WF_B], "H1a ...pressed again: the game's");
+        // Home / Back's own changes: never echoed without a hold (as before), echoed under it (not a repeat); the copy keeps them
+        pad(0);
+        CHECK(!key(WF_HOME, 1) && !key(WF_HOME, 0) && !key(WF_BACK, 1) && !key(WF_BACK, 0), "H1a no hold: Home / Back never echoed");
+        pad(0); wf_hold(&S, 1, 0, c, v);
+        CHECK(key(WF_HOME, 1) && !key(WF_HOME, 2), "H1a under the hold: Home's press echoed, a repeat not");
+        frame(); CHECK(O.key[WF_HOME] && S.gated, "H1a ...Home still reaches Android (the copy shows it)");
+        CHECK(key(WF_HOME, 0) && S.gated, "H1a ...its release echoed, the gate stays (the hold)");
+        CHECK(key(WF_BACK, 1) && key(WF_BACK, 0), "H1a ...Back's press and release echoed");
+        // the send combo: Home held as the hold starts (said held), let go under it; the hold ends with Home held: Home's gate
+        pad(0); key(WF_HOME, 1); n = wf_hold(&S, 1, 0, c, v);
+        CHECK(n == 2 && v[0] == 1 && v[1] == 0, "H1a a start with Home held says Home 1");
+        CHECK(key(WF_HOME, 0) && S.gated, "H1a ...Home let go under the hold: echoed, the gate stays");
+        pad(0); wf_hold(&S, 1, 0, c, v); key(WF_HOME, 1); wf_hold(&S, 0, 0, c, v);
+        CHECK(S.gated, "H1a given back with Home held: Home's gate stays");
+        key(WF_HOME, 0); CHECK(!S.gated, "H1a ...Home let go: closed");
+        // a renewal: nothing said, the lapse moves; the lapse itself
+        pad(0); wf_hold(&S, 1, 1000, c, v);
+        CHECK(wf_hold(&S, 1, 3000, c, v) == 0 && S.hold_until == 9000, "H1a a renewal says nothing and lasts 6 s from it");
+        CHECK(!wf_hold_lapsed(&S, 8999) && wf_hold_lapsed(&S, 9000), "H1a ...it lapses at 6 s without one, not before");
+        wf_hold(&S, 0, 9000, c, v); CHECK(!wf_hold_lapsed(&S, 99999), "H1a no hold: nothing lapses");
+        pad(0); CHECK(wf_hold(&S, 0, 0, c, v) == 0 && !S.gated && !S.app_hold, "H1a a give-back with no hold changes nothing");
+        // the gyro, Wayfinder's virtual presses and the shift button's lone tap: silent under the hold
+        pad(0); S.gyro_stick = 2; S.gyro_x = 12000; wf_hold(&S, 1, 0, c, v); frame();
+        CHECK(O.abs[WF_RX] == 0, "H1a the gyro is off under the hold (%d)", O.abs[WF_RX]);
+        wf_hold(&S, 0, 0, c, v); frame(); CHECK(O.abs[WF_RX] == 12000, "H1a ...back at the give-back");
+        pad(0); wf_vpress(&S, WF_X, 1); wf_hold(&S, 1, 0, c, v); frame();
+        CHECK(!O.key[WF_X], "H1a a virtual press is silent under the hold");
+        wf_hold(&S, 0, 0, c, v); frame(); CHECK(O.key[WF_X], "H1a ...and back at the give-back");
+        pad(0); M.shift = 0x13a; wf_state_map(&S, &M); wf_hold(&S, 1, 0, c, v); S.now_ms = 500; key(0x13a, 1); key(0x13a, 0);
+        CHECK(S.shift_tap_until == 0, "H1a the shift button's lone tap under the hold: no tap for the game");
+        // a Back pressed under the hold never goes with the game (its press is the give-back)
+        pad(0); key(WF_A, 1); wf_hold(&S, 1, 0, c, v); key(WF_BACK, 1);
+        CHECK(!S.back_hot, "H1a Back under the hold, a game button held: it doesn't go with the game");
+        // a button Wayfinder plays (X lines): its press isn't said under the hold, its release always is
+        pad(0); M.keymap[WF_Y] = WF_EXT; wf_hold(&S, 1, 0, c, v); key(WF_Y, 1);
+        CHECK(!wf_ext_event(&S, &M, WF_Y, 1), "H1a a button Wayfinder plays: no X press under the hold");
+        key(WF_Y, 0); CHECK(wf_ext_event(&S, &M, WF_Y, 0), "H1a ...its release is said");
+        // a stick moved under the hold stays withheld after it, until it rests
+        pad(0); wf_hold(&S, 1, 0, c, v);
+        CHECK(ab(WF_RX, 20000), "H1a a stick moved under the hold is echoed");
+        wf_hold(&S, 0, 0, c, v); frame(); CHECK(O.abs[WF_RX] == 0, "H1a ...still withheld at the give-back");
+        ab(WF_RX, 0); ab(WF_RX, 20000); frame(); CHECK(O.abs[WF_RX] == 20000, "H1a ...back at rest, then pushed: the game's");
+        // a state made again under the hold (a resync, AYN's pad re-made): the hold stays, its gate open; what was held before
+        // it still comes back at the give-back, a press made under it stays withheld
+        pad(0); key(WF_A, 1); wf_hold(&S, 1, 0, c, v); key(WF_B, 1);
+        resync(1, 0, 0); frame();
+        CHECK(S.app_hold && S.gated && !O.key[WF_A] && !O.key[WF_B], "H1a a resync under the hold: still held, nothing for the game");
+        wf_hold(&S, 0, 0, c, v); frame();
+        CHECK(O.key[WF_A] && !O.key[WF_B], "H1a ...given back: A (held before it) comes back, B (pressed under it) stays withheld");
+        pad(0); wf_hold(&S, 1, 0, c, v); wf_state_rest(&S);
+        CHECK(S.app_hold, "H1a the state at rest keeps the hold (Wayfinder's, not the pad's)");
+        // "h"'s argument
+        CHECK(wf_hold_arg("1") == 1 && wf_hold_arg("0") == 0, "H1a h 1 / h 0");
+        CHECK(wf_hold_arg("2") < 0 && wf_hold_arg("x") < 0 && wf_hold_arg("") < 0 && wf_hold_arg("10") < 0 &&
+              wf_hold_arg("1 ") < 0 && wf_hold_arg(NULL) < 0, "H1a anything else is refused (2, x, nothing, 10, a trailing space)");
     }
 
     printf("%s: %d checks, %d failed\n", fails ? "FAILED" : "OK", checks, fails);

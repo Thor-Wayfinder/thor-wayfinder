@@ -259,8 +259,10 @@ internal object AynHold {
     }.getOrDefault("")
 
     /** Debug builds' adb test hook (the C0a device test): [op] add | remove | list | held | selftest,
-     *  straight to AYN's service (no state gate, nothing recorded: test names stay out of the app's set). */
+     *  straight to AYN's service (no state gate, nothing recorded: test names stay out of the app's set).
+     *  b19 (SECURITY.md): nothing in a release build (keep-all keeps the method in its dex; no release code calls it). */
     fun test(ctx: Context, op: String, name: String, done: (String) -> Unit) {
+        if (!BuildConfig.DEBUG) { done("debug builds only"); return }
         appCtx = appCtx ?: ctx.applicationContext
         exec.execute {
             val r = runCatching {

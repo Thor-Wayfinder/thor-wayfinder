@@ -22,10 +22,11 @@ object Charging {
     private const val USB_NODE = "/sys/class/qcom-battery/usb_charge_now"
 
     data class Now(val plugged: Boolean, val level: Int?, val limit: Boolean, val direct: Boolean) {
-        /** A few words for "100 % · …" (null when unplugged). */
+        /** A few words for "100 % · …" (null when unplugged). 1.5-beta2 (big test t1): Direct power reads "resting" (the
+         *  battery rests: the card's word); "on the charger" cut the Hub strip's temperature and repeated the Battery page's. */
         val phrase: String? get() = when {
             !plugged -> null
-            direct -> "on the charger"
+            direct -> "resting"
             limit && (level ?: 0) >= 80 -> "80 % limit"     // = not charging (short: the Hub's strip cut it)
             (level ?: 0) >= 100 -> "full"
             else -> "charging"
@@ -54,6 +55,11 @@ object Charging {
         else -> "On — charging, it stops at 80 % (${n.level ?: "—"} % now)"
     }
 
+    /** 1.5-beta2 (big test t1): the Battery page's line beside the watts while plugged in. It says "on the charger" once:
+     *  Direct power adds what the battery does ("the battery rests"), anything else its short phrase. */
+    fun pluggedLine(n: Now): String =
+        "the Thor draws now, on the charger" + (if (n.direct) " · the battery rests" else n.phrase?.let { " · $it" } ?: "")
+
     fun directLine(n: Now): String = when {
         !n.direct -> "Off — plugged in, the battery charges"
         n.plugged -> "On — the charger runs the Thor now; the battery rests at ${n.level ?: "—"} %"
@@ -68,6 +74,10 @@ object Charging {
         done()
     }.apply { isDaemon = true }.start()
 
+    /** 1.5-beta2 (Q3 review; kept when the lid card went, big test t2): one at a time. Two quick hand toggles (the Battery
+     *  card, the quick panel's tile: each [set] has its own thread) within the 2 s check would each wait for its own value:
+     *  the later one now writes after the first is done, so AYN's setting and its node end on the same (the last) choice. */
+    @Synchronized
     private fun apply(key: String, on: Boolean, node: String, want: String) {
         PServiceBridge.exec("settings put system $key ${if (on) 1 else 0}")
         for (i in 0 until 8) {

@@ -30,9 +30,15 @@ object PanelShortcuts {
 
     /** Wayfinder on [page] — the "Wayfinder" tile and the panel's compass (the Hub's main screen), "Stick lights". Device pass
      *  (d3 N2): always with a page — with none, the running Wayfinder came forward as it was: Game controls open over a game, a
-     *  page deep in More — not "Wayfinder's main screen" (MainActivity.onNewIntent turns Game controls into the Hub). */
+     *  page deep in More — not "Wayfinder's main screen" (MainActivity.onNewIntent turns Game controls into the Hub).
+     *  b19 (V02): opened from the panel over an app, the page is marked (before the panel's close clears what it was opened
+     *  over): one B on it goes back to that app ([BackToApp]). NO_USER_ACTION as for every activity Wayfinder opens over an
+     *  app (ISSUES_PLAN A2: else a video app goes into picture-in-picture). */
     fun openWayfinder(ctx: Context, page: String = HubPage.HOME) {
-        ctx.startActivity(Intent(ctx, MainActivity::class.java).putExtra("page", page).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        val n = if (!QuickPanelWindow.isOpen) null else BackToApp.ask(page, ForegroundAppService.panelBack(),
+            ForegroundAppService.panelApp(), MainActivity.inFront(), android.os.SystemClock.uptimeMillis())
+        ctx.startActivity(Intent(ctx, MainActivity::class.java).putExtra("page", page).apply { if (n != null) putExtra(BackToApp.EXTRA, n) }
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION))
     }
 
     /** 1.4 (Reddit): a tile that opens an app, an app pair or a Wayfinder page — its id is the "Open…" target. */
@@ -173,6 +179,8 @@ object PanelShortcuts {
     fun allowed(id: String): Boolean = when (id) {
         "deck" -> Features.deck
         "controls", "gyro" -> Features.gameControls
+        // 1.5-beta2 (GitHub #139): on a TV or monitor the bottom screen stays dark (Dock), so its tile isn't shown
+        "bottomoff" -> !Dock.docked
         else -> true
     }
 
@@ -340,8 +348,10 @@ object PanelShortcuts {
                 Charging.set(ctx, limit = v != 1); refresh(500); refresh(2500) } },
         ) + chosen(ctx).filter { it !in CATALOG }.mapNotNull { id ->
             // 1.4 (Reddit): the "Open…" tiles — the panel closes first so the app lands on the game's screen (b18p, #107: or on
-            // its own, its "Opens on" — ForegroundAppService.open decides)
-            info(ctx, id)?.let { i -> id to PanelTile(i.icon, i.name, null, false, i.pkg) { after(250) { ForegroundAppService.open(id) } } }
+            // its own, its "Opens on" — ForegroundAppService.open decides). b19 (V02): a page tile opens as Stick lights does,
+            // while the panel still knows what it was opened over (the page is marked: one B goes back to the app)
+            info(ctx, id)?.let { i -> id to PanelTile(i.icon, i.name, null, false, i.pkg) {
+                if (id.startsWith("page:")) open(id.removePrefix("page:")) else after(250) { ForegroundAppService.open(id) } } }
         }
     }
 }
@@ -364,6 +374,28 @@ internal object PanelRules {
         !lock -> if (sticky) "Unlocked" else "Off"
         else -> (if (top) "Top screen" else "Bottom screen") + if (sticky) " · stays" else ""
     }
+
+    /** 1.5-beta2 (GitHub #139): where the quick panel opens. [asked] wins. Docked on a TV or monitor: the TV's own screen
+     *  [ctl] when there is one ([ctlExternal]: an app runs there, [tv]), else the top screen [primary], the one a TV mirrors
+     *  (the Thor's bottom screen is dark then, never woken for it). Undocked: the bottom screen [second], as before; none: the top. */
+    fun place(asked: Int?, docked: Boolean, second: Int?, ctl: Int, ctlExternal: Boolean, primary: Int): Int = when {
+        asked != null -> asked
+        docked -> if (ctlExternal) ctl else primary
+        else -> second ?: primary
+    }
+
+    /** 1.5-beta2 (GitHub #139, review R2): docked, the TV screen the panel opens on — of the TVs that show an app of their own
+     *  ([own]: extended, not mirroring the top screen), the controller's [ctl] first, else the first one; none: null (the top
+     *  screen, which a mirroring TV shows). A TV's own screen counts by what runs there, not by where the focus last was: a
+     *  game started on the TV from its own launcher counts, a mirroring TV never gets a window (it would stop mirroring). */
+    fun tv(ctl: Int, own: List<Int>): Int? = own.firstOrNull { it == ctl } ?: own.firstOrNull()
+
+    /** 1.5-beta2 (GitHub #139): docked, the panel always takes the controller (nobody touches a TV). */
+    fun takes(setting: Boolean, docked: Boolean): Boolean = setting || docked
+
+    /** 1.5-beta2 (GitHub #139): screen mode [mode] blanks the panel's own screen, so the panel closes first: 1 (top only) as
+     *  before; 2 (bottom only) when the panel is on the top screen. */
+    fun closesFirst(mode: Int, panelOnTop: Boolean): Boolean = mode == 1 || (mode == 2 && panelOnTop)
 
     /** pF07: what "Keep for <game>" may keep — the changes made in this panel ([touched]: "perf", "fan", "hz", "bottomoff")
      *  whose value now differs from the one the app had when the panel opened ([start]); 60 → 120 → 60 Hz keeps nothing. The

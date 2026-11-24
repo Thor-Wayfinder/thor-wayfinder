@@ -54,14 +54,16 @@ object Overlays {
     }
 
     /** A list kept up while something is held ([token]: [release] takes it down; [Held.maxMs] at most). Its controller
-     *  ([CueOrigin.Press]; else 0) keys it (critique K12). [at] / [compact] / [footer] as [CueContent.Table]. False: no service. */
+     *  ([CueOrigin.Press]; else 0) keys it (critique K12). [at] / [compact] / [footer] as [CueContent.Table]. b19 (MORE-D21):
+     *  [limitMs], a shorter time of its own (Show it's preview: the hint's own time); never over [Held.maxMs]. False: no
+     *  service. */
     fun held(token: Held, origin: CueOrigin, title: List<String>, cells: List<Pair<String, String>>, at: Int = 0,
-             compact: Boolean = false, footer: List<Pair<String, String>> = emptyList()): Boolean {
+             compact: Boolean = false, footer: List<Pair<String, String>> = emptyList(), limitMs: Long = token.maxMs): Boolean {
         val h = host ?: return false
         val src = (origin as? CueOrigin.Press)?.src ?: 0
         h.post(Cue(CueKind.HELD, where(origin), CueContent.Table(title.map { plain(it, origin) },
             cells.map { (b, w) -> plain(b, origin) to plain(w, origin) }, at, compact,
-            footer.map { (b, w) -> plain(b, origin) to plain(w, origin) }), token.key(src), token.maxMs))
+            footer.map { (b, w) -> plain(b, origin) to plain(w, origin) }), token.key(src), minOf(limitMs, token.maxMs)))
         return true
     }
 

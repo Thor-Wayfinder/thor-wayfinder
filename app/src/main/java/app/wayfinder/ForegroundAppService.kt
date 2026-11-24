@@ -102,8 +102,12 @@ class ForegroundAppService : AccessibilityService() {
         }
         fun stopCapture() { instance?.let { s -> s.buttonEngine?.capture = null; s.updatePadWatch() } }
 
-        /** Apply the controller-lock settings now (with the on-screen cue). */
-        fun reapplyFocusLock() { instance?.let { s -> s.handler.post { s.applyFocusLock(announce = true) } } }
+        /** Apply the controller-lock settings now (with the on-screen cue). b19: the user's choice (Hub › Which screen), so the
+         *  Hub's lend ends ([lockChosen]). */
+        fun reapplyFocusLock() { instance?.let { s -> s.handler.post { s.lockChosen(); s.applyFocusLock(announce = true) } } }
+        /** b19 (R5): the see-through task that closed Recents ([TrampolineActivity]) is gone; a moment later (its screen's focus
+         *  settling on the app under it) the controller goes with B's app ([afterRecentsCloser]). */
+        fun recentsCloserDone() { instance?.let { s -> s.handler.postDelayed({ s.afterRecentsCloser() }, 300) } }
 
         /** Re-apply the top app's 2nd-screen policy (after the user edits it). */
         fun quickPanelClosed() { instance?.let { it.handler.post { it.onQuickPanelClosed() } } }
@@ -165,6 +169,16 @@ class ForegroundAppService : AccessibilityService() {
             s.openCompanion(pkg, if (s.coveredByPresentation(d)) PRIMARY_DISPLAY else d); return true
         }
 
+        /** b19 (MORE-D21): Hints & pop-ups' Show it: [which] hint as it will appear, on screen [display] (the Hub's), for its own
+         *  few seconds ([postPreview]). False: the service isn't running (nothing can show). */
+        fun showPreview(which: HintPreview, display: Int): Boolean {
+            val s = instance ?: return false
+            s.handler.post { s.postPreview(which, display) }; return true
+        }
+        /** …and down at once (the page left, Wayfinder stopped): only the preview, never a real list. Through the same queue as
+         *  [showPreview], so a preview asked just before can't come up after it. */
+        fun hidePreview() { instance?.let { s -> s.handler.post { Overlays.release(Held.PREVIEW) } } }
+
         /** Open a saved pair. */
         fun openPair(p: AppPair): Boolean = instance?.openLayout(p.top, p.bottom, "pair") ?: false
 
@@ -189,6 +203,9 @@ class ForegroundAppService : AccessibilityService() {
 
         /** The Hub is on screen [displayId] / left: it takes the controller, then gives it back. */
         fun hubShown(displayId: Int, token: Int) { instance?.let { s -> s.handler.post { s.onHubShown(displayId, token) } } }
+        /** b19 fix (H1a, review): a page was asked of a Wayfinder window in front on [displayId] (no new onResume, no
+         *  [hubShown]): Keyboard & mouse covering it closes ([deckOffWindow]), as for a window that comes up. */
+        fun windowAsked(displayId: Int) { instance?.let { s -> s.handler.post { s.deckOffWindow(displayId) } } }
         /** Only the Hub that took it gives it back ([token]): a relocating Hub's old copy stops AFTER the new one took it. */
         fun hubHidden(token: Int) { instance?.let { s -> s.handler.post { s.onHubHidden(token) } } }
         /** Device pass (d3 N2): the window [token] on [displayId] that showed Game controls is the Hub now (a Hub page was asked
@@ -210,18 +227,14 @@ class ForegroundAppService : AccessibilityService() {
         /** The running game changed: its own performance / fan / Hz / lights (or back to the app's). b18g (WI-6, g1 gn16): and
          *  Game controls opened before its game was known switches to it ([controlsGameFound]). */
         fun gameChanged() { instance?.let { s -> s.handler.post { s.applyPerf(); s.applyLights(force = true); s.controlsGameFound() } } }
-        /** The app the quick panel was opened over (for "Now playing" and "Keep for this game"). */
-        fun panelApp(): String? = instance?.let { s ->
-            fun ok(p: String?) = p?.takeIf { it !in s.launcherPackages && it != s.packageName }
-            val d = s.panelReturnTo ?: PRIMARY_DISPLAY
-            // build 18 (E3, pF07): over Wayfinder's Hub there's no app to play or keep for — the tracked app is the one behind
-            // the Hub (Wayfinder is never tracked): "Now playing" and "Keep" named a game that wasn't in front
-            if (MainActivity.hubOn(d)) return@let null
-            // 1.3: that screen is covered by another app's second screen (a dual-screen game): the game,
-            // not the frontend underneath ("Now playing: iiSU" over WatermelonDS)
-            val covered = d != PRIMARY_DISPLAY && runCatching { s.coveredByPresentation(d) }.getOrDefault(false)
-            (if (covered) null else ok(displayApps[d])) ?: ok(displayApps[PRIMARY_DISPLAY]).takeIf { covered }
-        }
+        /** The app the quick panel was opened over (for "Now playing" and "Keep for this game"). b19 (V02): its rule is
+         *  [appOn]'s, which an "Open Wayfinder" combo reads too. */
+        fun panelApp(): String? = instance?.let { s -> s.appOn(s.panelReturnTo ?: PRIMARY_DISPLAY) }
+        /** b19 (V02): the screen that had the controller as the quick panel opened (null: no panel). Main thread. */
+        fun panelBack(): Int? = instance?.panelReturnTo
+        /** b19 (V02): a page the quick panel or an "Open Wayfinder" combo opened over an app was left by B ([BackToApp]): the
+         *  controller goes back to that app's screen [screen]. */
+        fun backToApp(screen: Int) { instance?.let { s -> s.handler.post { s.onBackToApp(screen) } } }
 
         /** The bottom-screen keyboard host (needs this service's overlay rights). */
         fun keyboardOverlay(): app.wayfinder.keyboard.KeyboardOverlay? = instance?.keyboardOverlay
@@ -247,7 +260,8 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.SWAP_OR_SEND -> svc.startSwapInBackground()
                 ThorAction.CLEAR_BACKGROUND -> svc.startClearInBackground()
                 ThorAction.CLOSE_APP -> { svc.handler.post { svc.closeCurrentApp() }; true }
-                ThorAction.RECENTS -> { svc.handler.post { svc.openRecents() }; true }
+                // b19: asked while a move runs, it waits for the move ([askRecents])
+                ThorAction.RECENTS -> { svc.handler.post { svc.askRecents() }; true }
                 // 1.4 (GitHub #43): on the controller copy when the input layer runs — the game's own Back. dev build 17 (theme
                 // G): a connected controller's on its own pad
                 ThorAction.BACK -> { svc.handler.post { if (svc.buttonEngine?.pressBackOnPad(src) != true) svc.performGlobalAction(GLOBAL_ACTION_BACK) }; true }
@@ -259,6 +273,8 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.TOGGLE_KEEP_AWAKE -> svc.toggleKeepAwakeSecond()
                 ThorAction.SLEEP -> { svc.sleepNow(); true }
                 ThorAction.AYN_MOUSE -> { svc.toggleAynMouse(); true }
+                // 1.5-beta2 (Q1, GitHub D#127): a short Mode for the game on [src]'s own pad (the Thor's copy, a controller's)
+                ThorAction.GUIDE_BUTTON -> { svc.handler.post { svc.guideButton(src) }; true }
                 ThorAction.GYRO_TOGGLE -> { svc.handler.post { svc.toggleGyro() }; true }
                 ThorAction.GUIDE -> { svc.handler.post { svc.openGuide() }; true }
                 ThorAction.FOCUS_LOCK_TOGGLE -> { svc.handler.post { svc.toggleFocusLock() }; true }
@@ -291,10 +307,11 @@ class ForegroundAppService : AccessibilityService() {
                 ThorAction.QUICK_MENU -> { svc.handler.post { svc.toggleQuickPanel() }; true }
                 ThorAction.FPS_COUNTER -> { svc.handler.post { AppSettings.setFpsCounterOn(!AppSettings.fpsCounter); svc.applyFps() }; true }
                 ThorAction.GAME_CONTROLS -> { svc.handler.post { svc.openGameControls() }; true }
-                ThorAction.FOCUS_SWITCH_UP -> { svc.handler.post { svc.focusAction(top = true) }; true }
+                // b19 (H1a): [src] — the controller that sends (one that is its own player keeps the game: Keyboard & mouse says so)
+                ThorAction.FOCUS_SWITCH_UP -> { svc.handler.post { svc.focusAction(top = true, src = src) }; true }
                 ThorAction.FOCUS_SWITCH_DOWN -> {
                     if (svc.secondDisplayId() == null) return false
-                    svc.handler.post { svc.focusAction(top = false) }; true
+                    svc.handler.post { svc.focusAction(top = false, src = src) }; true
                 }
                 else -> { Log.d(TAG, "perform($action): not yet implemented"); false }
             }
@@ -427,11 +444,12 @@ class ForegroundAppService : AccessibilityService() {
         if (deck.isShowing) { deck.hide(); return }
         // The game is where the CONTROLLER is: the lock target when locked (a touch on the
         // other screen doesn't move a locked controller, so it mustn't move the deck either).
-        val game = controllerDisplay()
+        // 1.5-beta2 (GitHub #142): unless a launcher is there and an app on the other screen ([deckGameDisplay])
+        val game = deckGameDisplay()
         val deckDisplay = (if (game == PRIMARY_DISPLAY) secondDisplayId() else PRIMARY_DISPLAY) ?: run {
             Overlays.pill("Keyboard & mouse needs the second screen", CueOrigin.Screen(game)); return
         }
-        val (pkg, label, dark) = deckContext(game)
+        val (pkg, label, dark, padKey, ownFront) = deckContext(game)
         InputMonitor.start(this)   // the root helper carries the keys; make sure it's up
         deck.show(deckDisplay, game, pkg, label, dark,
             onOpenHub = {
@@ -439,7 +457,7 @@ class ForegroundAppService : AccessibilityService() {
                 startActivity(Intent(this, MainActivity::class.java).putExtra("page", HubPage.KEYBOARD)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION))
             },
-            onFocusGame = { focusAction(top = game == PRIMARY_DISPLAY) },
+            padKey = padKey, ownFront = ownFront,   // b2 (review F3, F1)
         )
     }
 
@@ -449,15 +467,32 @@ class ForegroundAppService : AccessibilityService() {
     fun openGuide() {
         val deck = inputDeck ?: return
         if (deck.isShowing) { deck.hide(); return }
-        val game = controllerDisplay()
+        val game = deckGameDisplay()   // 1.5-beta2 (GitHub #142)
         val other = if (game == PRIMARY_DISPLAY) secondDisplayId() else PRIMARY_DISPLAY
-        val (pkg, label, dark) = deckContext(game)
-        deck.show(other ?: game, game, pkg, label, dark, onOpenHub = { deck.hide() },
-            onFocusGame = { focusAction(top = game == PRIMARY_DISPLAY) }, guideOnly = true, beside = other == null)
+        val (pkg, label, dark, padKey, ownFront) = deckContext(game)
+        deck.show(other ?: game, game, pkg, label, dark, onOpenHub = { deck.hide() }, guideOnly = true, beside = other == null,
+            padKey = padKey, ownFront = ownFront)
+    }
+
+    /** 1.5-beta2 (GitHub #142): the deck's game screen, for its open and the guide's ([DeckHoldRules.gameScreen]): the
+     *  controller's screen, or the other one when the controller's shows a launcher and the other an app. A game opened on the
+     *  top from the bottom launcher, with the controller locked to the bottom: the deck opened over the game and its keys went
+     *  to the launcher. Read here as the deck's "Sending to" reads it ([deckContext]). */
+    private fun deckGameDisplay(): Int {
+        val ctl = controllerDisplay()
+        val other = if (ctl == PRIMARY_DISPLAY) secondDisplayId() else PRIMARY_DISPLAY
+        fun frontOn(d: Int) = app.wayfinder.deck.DeckHoldRules.front(MainActivity.hubOn(d), appOnDisplay(d), displayApps[d], packageName)
+        val ctlFront = frontOn(ctl)
+        // review R5: the other screen is read (an accessibility call to its app, on the main thread) only when the rule needs
+        // it: a launcher in front on the controller's screen. Else the answer is the controller's screen, as the rule gives
+        val otherFront = if (ctlFront != null && ctlFront in launcherPackages) other?.let { frontOn(it) } else null
+        return app.wayfinder.deck.DeckHoldRules.gameScreen(ctl, other, ctlFront, otherFront, packageName, launcherPackages)
     }
 
     /** Build 18 (E5, pF04): a window changed on [d] (null: somewhere): once it has settled, the deck's "Sending to" names the
-     *  app now on its game's screen. Only while the deck is up and serves another screen than its own. */
+     *  app now on its game's screen. Only while the deck is up and serves another screen than its own. b2 (O2): also when a
+     *  Wayfinder window comes up or goes ([onHubShown], [onHubHidden]): the app knows its own windows then, the window
+     *  event can come before ([DeckHoldRules.target]). */
     private fun deckFollow(d: Int?) {
         val deck = inputDeck?.takeIf { it.isShowing } ?: return
         val game = deck.gameDisplay ?: return
@@ -467,23 +502,39 @@ class ForegroundAppService : AccessibilityService() {
     private val deckFollowRun = Runnable {
         val deck = inputDeck?.takeIf { it.isShowing } ?: return@Runnable
         val game = deck.gameDisplay ?: return@Runnable
-        val top = appOnDisplay(game) ?: displayApps[game]
+        val hub = MainActivity.hubOn(game)
+        val top = appOnDisplay(game)
+        // b2 (review F1): a Wayfinder window in front there (Game controls, the Guide page) works with the controller: the
+        // deck's switch is greyed, whichever app it names
+        deck.ownInFront(app.wayfinder.deck.DeckHoldRules.ownInFront(MainActivity.frontOn(game), top, packageName))
         // build 18 review (E5): a Wayfinder window that isn't the Hub — Game controls opened over the game (Home + X), the
         // combos sheet — belongs to the app under it (as MainActivity.hubOn says): the deck keeps serving that app. Retargeted,
         // it read "Sending to: Wayfinder", its pad pick went to Wayfinder, and B in Game controls closed the deck, not the page
-        if (top == packageName && !MainActivity.hubOn(game)) return@Runnable
-        val pkg = top?.takeIf { it !in launcherPackages }
+        if (app.wayfinder.deck.DeckHoldRules.keepsTarget(hub, top, packageName, deck.servesWayfinder, deck.guideOnly)) return@Runnable
+        // b2 (O2): the deck's open reads the same rule (deckContext)
+        val pkg = app.wayfinder.deck.DeckHoldRules.target(hub, top, displayApps[game], packageName, launcherPackages)
         val label = pkg?.let { p -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString() }.getOrNull() }
-        deck.retarget(pkg, label)
+        deck.retarget(pkg, label, app.wayfinder.deck.DeckHoldRules.front(hub, top, displayApps[game], packageName))
     }
 
-    /** For the deck: the app on [display], its name, and whether the deck is dark (the Hub's theme). */
-    private fun deckContext(display: Int): Triple<String?, String?, Boolean> {
+    /** b2 (review): what the deck reads on its game's screen ([deckContext]): the app its keys go to and its name, whether the
+     *  deck is dark, the app its pad is remembered for ([DeckHoldRules.front]: a launcher's own) and whether a Wayfinder
+     *  window is in front there ([DeckHoldRules.ownInFront]: it can't take the controller). */
+    private data class DeckContext(val pkg: String?, val label: String?, val dark: Boolean, val padKey: String?, val ownFront: Boolean)
+
+    /** For the deck: the app on [display], its name, and whether the deck is dark (the Hub's theme). b2 (O2): the follow's rule
+     *  ([DeckHoldRules.target]): a launcher there is "the other screen" from the open on (it read "Sending to: Cocoon" until
+     *  the first window change), the Hub there is Wayfinder. */
+    private fun deckContext(display: Int): DeckContext {
         // Read the screen's real top app now: the event-tracked map can lag (e.g. an app
         // opened from a launcher alias arrives with no display id).
-        val pkg = appOnDisplay(display) ?: displayApps[display]
+        val hub = MainActivity.hubOn(display)
+        val top = appOnDisplay(display)
+        val pkg = app.wayfinder.deck.DeckHoldRules.target(hub, top, displayApps[display], packageName, launcherPackages)
         val label = pkg?.let { p -> runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(p, 0)).toString() }.getOrNull() }
-        return Triple(pkg, label, app.wayfinder.ui.GlassTokens.isDark(this))   // dev build 17 (WP10): the one dark rule
+        return DeckContext(pkg, label, app.wayfinder.ui.GlassTokens.isDark(this),   // dev build 17 (WP10): the one dark rule
+            app.wayfinder.deck.DeckHoldRules.front(hub, top, displayApps[display], packageName),
+            app.wayfinder.deck.DeckHoldRules.ownInFront(MainActivity.frontOn(display), top, packageName))
     }
 
     private fun screenName(displayId: Int) = if (displayId == PRIMARY_DISPLAY) "top screen" else "bottom screen"
@@ -499,7 +550,19 @@ class ForegroundAppService : AccessibilityService() {
         // 1.4 (review): "Always bottom" while the bottom screen is dark → the top one, until it wakes
         if (AppSettings.focusLockTop || darkLockedBottom) PRIMARY_DISPLAY else (secondDisplayId() ?: PRIMARY_DISPLAY)
 
-    fun applyFocusLock(announce: Boolean = false) {
+    /** 1.5-beta2 (GitHub #145): AYN's lock now, and whether it is the Thor's own ([AppSettings.thorTopLock]). Main thread. */
+    private val aynLockWatch = object : android.database.ContentObserver(handler) {
+        override fun onChange(selfChange: Boolean) { readAynLock() }
+    }
+
+    private fun aynLockOn(): Boolean =
+        runCatching { android.provider.Settings.System.getInt(contentResolver, AynLockRules.KEY, 0) == 1 }.getOrDefault(false)
+
+    private fun readAynLock() { AppSettings.thorTopLock = AynLockRules.thorsOwn(aynLockOn(), AppSettings.aynLockByUs) }
+
+    /** [fromUser]: the user's pick in Wayfinder (Which screen, a send, the lock combo: the announced ones), which may also write
+     *  off a top lock set in the Thor's own settings ([AynLockRules]). */
+    fun applyFocusLock(announce: Boolean = false, fromUser: Boolean = announce) {
         val on = AppSettings.focusLockEnabled
         val top = AppSettings.focusLockTop
         val target = lockTarget()
@@ -511,6 +574,11 @@ class ForegroundAppService : AccessibilityService() {
             }
             Log.d(TAG, "focus lock ${if (on) "ON → ${screenName(target)}" else "OFF"}")
         }
+        // 1.5-beta2 (GitHub #142, review R1): Keyboard & mouse covers the lock's screen (the game on the other one): no focus
+        // move onto it (the app under it got the controller unseen), said as for a send ([deckInTheWay]); the setting is kept
+        val covered = on && inputDeck?.covers(target) == true
+        if (covered) Log.v(TAG, "focus lock: Keyboard & mouse covers the ${screenName(target)}, no focus move")
+        if (on && top && covered) { if (announce) deckInTheWay(target); return }
         if (on && top) {
             // AYN's native lock misbehaves if armed while input focus is on the BOTTOM
             // screen (verified: the top screen then stops taking controller AND touch
@@ -543,6 +611,7 @@ class ForegroundAppService : AccessibilityService() {
                             QuickPanelWindow.isOpen || MainActivity.gameControls != null) {
                             Log.v(TAG, "top lock: no longer wanted — not arming"); handler.post { if (!announced) { announced = true; done() } }; return@Thread
                         }
+                        AppSettings.setAynLockByUs(true)   // 1.5-beta2 (GitHub #145): Wayfinder's own, so it may write it off
                         PServiceBridge.exec("settings put system screen_focus_lock 1")
                         Log.v(TAG, "top lock armed (input focus was $real, attempt $attempt)")
                         handler.post { focusModel = PRIMARY_DISPLAY; if (!announced) { announced = true; done() } }
@@ -551,17 +620,21 @@ class ForegroundAppService : AccessibilityService() {
             }
             armWhenOnTop(1)
         } else {
+            lockHops++   // b19 (R4): a parked Recents waits for this hop too ([openParkedRecents])
             Thread {
-                PServiceBridge.exec("settings put system screen_focus_lock 0")
+                if (AynLockRules.mayClear(AppSettings.aynLockByUs, fromUser)) { PServiceBridge.exec("settings put system screen_focus_lock 0"); AppSettings.setAynLockByUs(false) }   // 1.5-beta2 (GitHub #145): a top lock set in the Thor's own settings stays
+                else Log.v(TAG, "focus lock: AYN's top lock isn't Wayfinder's, kept")
                 handler.post {
-                    if (on) focusDisplay(target) { syncFocusModel() }
-                    done()
+                    lockHops--
+                    if (on && !covered) focusDisplay(target) { syncFocusModel() }
+                    if (covered && announce) deckInTheWay(target) else done()
                 }
             }.apply { isDaemon = true }.start()
         }
     }
 
     fun toggleFocusLock() {
+        lockChosen()   // b19: the user's choice, the Hub's lend ends
         if (AppSettings.focusLockEnabled) AppSettings.setFocusLock(false)
         else AppSettings.setFocusLock(true, top = focusedDisplayId() == PRIMARY_DISPLAY)  // lock where it is now
         applyFocusLock(announce = true)
@@ -576,6 +649,12 @@ class ForegroundAppService : AccessibilityService() {
             return@Runnable
         }
         if (imeVisibleOn(PRIMARY_DISPLAY)) { Log.v(TAG, "lock re-assert skipped: keyboard up on top"); return@Runnable }
+        // b19 (H1a): a touch on Keyboard & mouse (never focusable) while it holds the controller moved nothing: no move, which
+        // would give its hold back ([focusDisplay])
+        if (app.wayfinder.deck.DeckHold.held) { Log.v(TAG, "lock re-assert skipped: Keyboard & mouse holds the controller"); return@Runnable }
+        // 1.5-beta2 (GitHub #142, review R1): the deck can now cover the lock's screen (the game on the other one): the move
+        // would give the controller to the app under it, unseen (the launcher), as [deckInTheWay] refuses for a send
+        if (inputDeck?.covers(lockTarget()) == true) { Log.v(TAG, "lock re-assert skipped: Keyboard & mouse covers the lock's screen"); return@Runnable }
         reassertLock(attempt = 1)
     }
 
@@ -587,6 +666,12 @@ class ForegroundAppService : AccessibilityService() {
      */
     private fun reassertLock(attempt: Int) {
         val target = lockTarget()
+        // 1.5-beta2 (GitHub #147): a finger on the bottom screen: no probe tap under it, the hand-back starts over after its lift
+        if (FocusProbe.waitForBottomLift(target, PRIMARY_DISPLAY, mtActive.size, android.os.SystemClock.uptimeMillis() - mtLastEvent)) {
+            Log.v(TAG, "lock re-assert: a finger on the bottom screen, waiting for its lift")
+            handler.removeCallbacks(reassertBottomLock); handler.postDelayed(reassertBottomLock, 300)
+            return
+        }
         focusDisplay(target) { _ ->
             Thread {
                 val real = rootFocusedDisplay()
@@ -672,6 +757,12 @@ class ForegroundAppService : AccessibilityService() {
 
     /** Input layer: a pad event the game did NOT get because Home/Back was held (printed keys). */
     private fun onGatedEvent(type: Int, code: Int, value: Int, src: Int = 0) {
+        // b19 (H1a): Keyboard & mouse holding the controller takes the Thor's copy's presses (and Home / Back's own echo: where
+        // they are, in the order of the presses); a press under Home / Back stays a combo's, as below ([DeckHoldRules.Router])
+        if (src == 0 && app.wayfinder.deck.DeckHold.takes(type, code, value, GATED_KEYS[code])) {
+            if (type == ThorInput.EV_KEY && value == 1 && code != ThorInput.KEY_HOME && code != ThorInput.KEY_BACK) Overlays.anyButton()
+            return
+        }
         // Wayfinder's combos: this controller as its keys count it (dev build 14, combos 5: per controller)
         when (type) {
             ThorInput.EV_KEY -> if (value != 2) {
@@ -729,6 +820,12 @@ class ForegroundAppService : AccessibilityService() {
         /** Device pass (final): a page holds the controller against the lock — the Hub that took it ([hubTook]), or Game controls
          *  open ([controlsOpen]) on another screen than the game's ([controlsAside]). On the lock's own screen nothing is held. */
         fun suspended(hubTook: Boolean, controlsOpen: Boolean, controlsAside: Boolean): Boolean = hubTook || (controlsOpen && controlsAside)
+        /** b19 (1.5-beta1 device pass, d2): the Hub's lend ([lent]) holds the controller against the lock only while the Hub is on
+         *  another screen than the lock's. That is how the lend is taken (onHubShown and giveHubTheController take none on the
+         *  lock's screen) and how Game controls sets the lock aside (controlsAside). The lock moved onto the Hub's screen: the lend
+         *  holds nothing, and AYN's lock stayed off after the quick panel until the Hub was left. No lock: nothing held. */
+        fun hubHolds(lent: Boolean, hubOn: Int?, lockOn: Boolean, lockTarget: Int): Boolean =
+            lent && hubOn != null && lockOn && hubOn != lockTarget
     }
     /** Keeps the layer on the current app's profile. A cheap check twice a second is simpler and
      *  sturdier than hooking every way the controller's app can change (focus, swaps, locks). */
@@ -760,7 +857,12 @@ class ForegroundAppService : AccessibilityService() {
             else if (++waitTicks >= 4) { waitTicks = 0; GameProfiles.ask(waiting.pkg) }
             val key = app?.let { GameProfiles.activeKey(it) }
             PadLayerCtl.follow(this@ForegroundAppService, app,   // 1.4: where the layer runs
-                neutral = app == null || app in launcherPackages || app in ignoredPackages, overlay = app == null || app in ignoredPackages)
+                neutral = app == null || app in launcherPackages || app in ignoredPackages, overlay = app == null || app in ignoredPackages,
+                // 1.5-beta2 (big test t3, F8): the controller left its app (a launcher, or the Hub without Game controls open).
+                // Review: not while a move or Recents is on the way (Recents is the launcher's, a move shows our helper window)
+                // b2l crashed at start: the sets are ConcurrentHashMap keys, which throw on a null [app] (Wayfinder on top, screen off)
+                left = LayerRules.leftNow(swapInProgress || recentsDisplay != null || recentsPending,
+                    app != null && app in launcherPackages, app == null && wayfinderOnTop, MainActivity.gameControls != null))
             // the app's own buttons (keys, macros, long press…): nothing held survives a switch — of
             // the profile itself, not only of the engine's tokens (two profiles can share tokens)
             // 1.3: the Wayfinder keyboard open = the controller is the keyboard's (A types, the D-pad moves
@@ -830,7 +932,8 @@ class ForegroundAppService : AccessibilityService() {
         val freshX = code == ThorInput.ABS_HAT_X && value != 0 && last == 0
         if (code == ThorInput.ABS_HAT_X) setLast(value)
         if (recentsDisplay != null && freshX) recentsClearAt = 0L           // build 18 (E8): browsing starts "close all" over
-        if (recentsDisplay != null && freshX) handler.post {
+        if ((recentsDisplay != null || recentsPending) && freshX) handler.post {
+            enterPendingRecents()   // b19: an entry still waiting comes on at the first press that finds the overview
             val d = recentsDisplay
             if (d != null && recentsStillOpen(d)) recentsBrowse(value) else exitRecents()
         }
@@ -856,15 +959,36 @@ class ForegroundAppService : AccessibilityService() {
     // all, B leaves. A pill shows the controls.
     @Volatile private var recentsDisplay: Int? = null
     @Volatile private var recentsEnteredAt = 0L
+    /** b19 (Recents' B after a swap): Recents' event came but its controller mode is not on yet (the overview was not the top
+     *  app window of the screen read, or no screen was read). It comes on at the next window change, or the first press, that
+     *  finds the overview on a screen ([overviewDisplay]): B did nothing for a whole visit, and Back went to the home. b19 (R4):
+     *  set too when our RECENTS asks ([openRecents]), as Recents' event itself can be lost. Set only
+     *  while the mode is off ([recentsWait]); cleared on entry, once no screen shows the overview after an app's or a home's
+     *  event, and at a press or window change that finds none long enough after it was set ([recentsNotFound]). */
+    @Volatile private var recentsPending = false
+    /** b19 review: when [recentsPending] was last set (uptime ms). */
+    @Volatile private var recentsPendingAt = 0L
+    /** b19: an entry waits for the overview ([recentsPending]), from now. */
+    private fun recentsWait() { recentsPendingAt = android.os.SystemClock.uptimeMillis(); recentsPending = true }
+    /** b19 review: a read found the overview on no screen. An entry waiting since [RecentsRules.PENDING_MS] ends: a visit left
+     *  before its mode came on, with no app or home event after it (an app Quickstep kept live under Recents comes back with a
+     *  focus change only), kept it set, and every press then read every screen's windows inside the key filter. Main thread. */
+    private fun recentsNotFound() {
+        if (recentsDisplay != null || !recentsPending) return
+        if (!RecentsRules.pendingOver(recentsPendingAt, android.os.SystemClock.uptimeMillis())) return
+        recentsPending = false; Log.d(TAG, "recents: no overview since its event: no longer waiting")
+    }
 
     private fun enterRecents(displayId: Int, retry: Boolean = false) {
         // The window list can lag the event a little: check now, and once more shortly after.
         if (!recentsStillOpen(displayId)) {
+            if (recentsDisplay == null) recentsWait()   // b19: and at the next window change or press
             if (!retry) handler.postDelayed({ enterRecents(displayId, retry = true) }, 350)
-            else Log.d(TAG, "recents: event on $displayId but not on top — ignored")
+            else Log.d(TAG, "recents: event on $displayId but not on top: waiting for the window list")
             return
         }
         Log.d(TAG, "recents: enter on $displayId")
+        recentsPending = false
         // Recents sends its event twice — a duplicate comes within moments; later = a new visit (a missed exit)
         val now = android.os.SystemClock.uptimeMillis()
         if (recentsDisplay == displayId && now - recentsEnteredAt < 1500) return
@@ -895,26 +1019,10 @@ class ForegroundAppService : AccessibilityService() {
         recentsClearAt = 0L                                     // build 18 (E8): a new visit asks again
         recentsDisplay = displayId
         updatePadWatch()                                        // dev build 17 (theme G): connected controllers' D-pads too
-        // A few seconds is enough (it covers the card's app icon).
-        fun m(b: ThorButton) = Say.menu(b)   // the button for that meaning, in the hand's names (dev build 15, WP2; 17: Say)
-        // build 18 (E4, pF19 / MORE-11): Select and Start named on the controller in hand ("Create" / "Options" on a DualSense) —
-        // plain names, a cue is View text
-        val select = Say.btn(ThorButton.SELECT); val start = Say.btn(ThorButton.START)
-        // build 18 (E8, ps-F3): X closes a card too (a Thor habit) — the hint names both; close all takes two presses
-        val close = "${m(ThorButton.Y)} / ${m(ThorButton.X)}"
-        // 1.3 (GitHub #13): full, compact (one slim line of symbols, no title) or off; top centre or a corner
-        when (AppSettings.recentsHint) {
-            2 -> {}
-            // build 18 (E4 addendum, MORE-D19): the symbols are drawn icons (FocusCue: CueIcons), never a typed ↗ × ⌂ ↩
-            1 -> Overlays.held(Held.RECENTS, CueOrigin.Screen(displayId), emptyList(), listOf(
-                "◀ ▶" to "", m(ThorButton.A) to CueIcons.OPEN.toString(), close to CueIcons.CLOSE.toString(),
-                "$select ×2" to CueIcons.CLOSE_ALL.toString(), start to CueIcons.HOME.toString(), m(ThorButton.B) to CueIcons.BACK.toString()),
-                at = AppSettings.recentsHintAt, compact = true)
-            // 1.3.2: one line with words, at the very top (a titled two-row card covered the middle card)
-            else -> Overlays.held(Held.RECENTS, CueOrigin.Screen(displayId), emptyList(), listOf(
-                "Recent apps" to "", "◀ ▶" to "browse", m(ThorButton.A) to "open", close to "close",
-                select to "twice: close all", start to "home", m(ThorButton.B) to "back"), at = AppSettings.recentsHintAt, compact = true)
-        }
+        // A few seconds is enough (it covers the card's app icon). b19 (MORE-D21): its cells from the one builder
+        // ([HeldWords.recents]) Hints & pop-ups' Show it uses too; Off (2) shows nothing
+        HeldWords.recents(AppSettings.recentsHint, ButtonNames.handLook)?.let {
+            Overlays.held(Held.RECENTS, CueOrigin.Screen(displayId), emptyList(), it, at = AppSettings.recentsHintAt, compact = true) }
     }
 
     private fun exitRecents() {
@@ -1014,6 +1122,73 @@ class ForegroundAppService : AccessibilityService() {
         /** b18j (review): the task list's answer for an app on a screen ([taskOnDisplay]'s one line). ON: it has an activity there;
          *  NONE: the list was read (a display seen) and it has none; anything else (UNREAD, no answer, an error): unknown. */
         fun onDisplay(out: String?): Boolean? = when (out?.trim()) { "ON" -> true; "NONE" -> false; else -> null }
+
+        /** b19: the screen with an overview panel in its top app window ([panels]: per screen read, how many); none: null. Recents
+         *  is one activity, so two never both show it; if they did, the lower id (the top screen). */
+        fun overviewDisplay(panels: Map<Int, Int>): Int? = panels.filterValues { it > 0 }.keys.minOrNull()
+
+        /** b19 (R5): where B goes back to when that app is on ANOTHER screen than Recents ([recents]). [from]: B's app, by its
+         *  label (as B finds its card); [apps]: each screen's tracked app's label. That screen: B closes Recents and leaves the
+         *  app where it is (its card launched it onto Recents' screen: on the Thor that only brought this screen's home forward
+         *  and left Recents up, stuck until Home). Null: as before (its card on Recents' own screen, the Hub, the home, none). */
+        fun backElsewhere(recents: Int, from: String?, apps: Map<Int, String?>): Int? {
+            if (from == null || apps[recents] == from) return null
+            return apps.filter { (d, label) -> d != recents && label == from }.keys.minOrNull()
+        }
+
+        /** b19 (R1; recheck: 3 / 3 after a swap to the top, during the ask or 5 s before it): B's app is the one tracked on
+         *  Recents' own screen, and a Wayfinder move put it there. Quickstep (Android's Recents) still takes the task it last saw
+         *  come forward as its running one (the home, each time: a move reparents the task, and Android does not announce that
+         *  as a task coming forward), so the app's card is a plain card for it: the tap brought the app forward but never ended
+         *  Recents, which stayed up with no mode until Home. [from]: B's app by its label; [moved]: the package a move left on
+         *  that screen (null: none, or the screen's home came since); [tracked]: the package tracked there now; [label]: a
+         *  package's label (read only after a move). True: B closes Recents from that screen ([closeRecentsFrom]); Quickstep then
+         *  puts it back as it was, with the app. */
+        fun movedHere(from: String?, moved: String?, tracked: String?, label: (String) -> String?): Boolean =
+            from != null && moved != null && moved == tracked && label(moved) == from
+
+        /** b19 (the home with the controller on the bottom): Recents' own Back (GLOBAL_ACTION_BACK) goes to the screen with the
+         *  input focus, the controller's ([ctl]). Not Recents' ([recents]): it reached the bottom home, Recents stayed up with no
+         *  mode, and Home there changed nothing (that screen already showed its home). That screen: B closes Recents from it
+         *  instead, and Recents' screen shows again what it showed. Null: Recents' own Back, as before (its screen's home). */
+        fun backFrom(recents: Int, ctl: Int): Int? = if (ctl != recents) ctl else null
+
+        /** b19 review: an entry still waiting for the overview ends at a read (a press, a window change) that finds it on no
+         *  screen this long after the wait was last set (Recents' event, a failed check). Sooner, the window list may still be
+         *  catching up with Recents (the wait's own reason); later, Recents was most likely left before its mode came on. */
+        const val PENDING_MS = 2000L
+        /** The wait set at [at] ends at [now] if a read finds no overview. */
+        fun pendingOver(at: Long, now: Long): Boolean = now - at >= PENDING_MS
+
+        /** b19 (Recents' B after a swap): our RECENTS asked during a move waits for it, then opens; older than this, it is dropped
+         *  (asked, then put down: it must not pop up much later). */
+        const val PARK_MS = 5000L
+        /** While the controller's follow (its focus read or probe) still runs after the move, the parked one looks again this soon. */
+        const val PARK_RETRY_MS = 100L
+
+        /** A RECENTS parked at [parkedAt] (0: none) still waits at [now]. */
+        fun parked(parkedAt: Long, now: Long): Boolean = parkedAt > 0L && now - parkedAt in 0..PARK_MS
+
+        enum class Ask { RUN, PARK, UNPARK }
+        /** Our RECENTS asked: [busy] a move runs (the [MoveGate]), [parked] one asked during it still waits. RUN: open it now;
+         *  PARK: once the move is done (one buzz: taken); UNPARK: asked again while waiting, the toggle Android does (no Recents). */
+        fun ask(busy: Boolean, parked: Boolean): Ask = when {
+            parked -> Ask.UNPARK
+            busy -> Ask.PARK
+            else -> Ask.RUN
+        }
+
+        enum class AfterMove { NONE, OPEN, WAIT, DROP }
+        /** A move ended, or the parked RECENTS looks again: [parkedAt] as in [parked], [busy] a move runs again (a queued swap took
+         *  over, a route), [focusing] the controller's follow still reads or probes the focus (its probe taps the screen's left
+         *  edge, over Recents' left card). NONE: nothing parked (opened, asked again, or the user's Home); DROP: too old; WAIT:
+         *  look again; OPEN: now. */
+        fun afterMove(parkedAt: Long, now: Long, busy: Boolean, focusing: Boolean): AfterMove = when {
+            parkedAt <= 0L -> AfterMove.NONE
+            !parked(parkedAt, now) -> AfterMove.DROP
+            busy || focusing -> AfterMove.WAIT
+            else -> AfterMove.OPEN
+        }
     }
 
     /** b18g (GitHub #49): the whole screen from [ScreenSize], never this service's configuration (it follows the focus). */
@@ -1065,6 +1240,30 @@ class ForegroundAppService : AccessibilityService() {
         return top.root?.findAccessibilityNodeInfosByViewId("com.android.launcher3:id/overview_panel")?.isNotEmpty() == true
     }
 
+    /** b19: the screen whose top app window shows the overview, read on every screen with [recentsStillOpen]'s test; null:
+     *  none (or the window list unread). Recents' screen from the window list, never from the focus model (frozen during a
+     *  swap, it names the screen being left). */
+    private fun overviewDisplay(): Int? {
+        val all = runCatching { windowsOnAllDisplays }.getOrNull() ?: return null
+        val panels = HashMap<Int, Int>()
+        for (i in 0 until all.size()) {
+            val top = all.valueAt(i).filter { it.type == android.view.accessibility.AccessibilityWindowInfo.TYPE_APPLICATION }
+                .maxByOrNull { it.layer } ?: continue
+            panels[all.keyAt(i)] = top.root?.findAccessibilityNodeInfosByViewId("com.android.launcher3:id/overview_panel")?.size ?: 0
+        }
+        return RecentsRules.overviewDisplay(panels)
+    }
+
+    /** b19: an entry still waiting ([recentsPending]), at a press: on the screen showing the overview. Recents has been up a
+     *  while by then, so B's card (the one it centres on, when our RECENTS did not ask) is read at once: an entry at Recents'
+     *  event waits 300 ms for it to settle, and this press may be that B. Main thread. */
+    private fun enterPendingRecents() {
+        if (recentsDisplay != null || !recentsPending) return
+        val d = overviewDisplay() ?: return recentsNotFound()
+        enterRecents(d)
+        if (recentsDisplay == d && recentsFrom == null) recentsFrom = centredCard(d)?.contentDescription?.toString()
+    }
+
     /** b18j: Recents is provably gone from display [d] — its top app window is read and shows no overview. An unreadable window
      *  proves nothing ([recentsStillOpen] says "not open" for it): the window list changes often while Recents is up. */
     private fun recentsGone(d: Int): Boolean {
@@ -1102,6 +1301,44 @@ class ForegroundAppService : AccessibilityService() {
      *  covers the Hub, whatever [lockTarget] says (it named the bottom app with the Hub on top and the controller sent down). */
     @Volatile private var recentsHub: Int? = null
 
+    /** b19 (Recents' B after a swap; the #99 rule, one move at a time): when our RECENTS asked during a move (0: none waiting).
+     *  Opened inside a swap, Recents came up while the focus model and the tracked apps were still changing, the swap's tail
+     *  (its focus probe, its watch) ran inside it, and its controller mode never came on: B did nothing, Back went home.
+     *  Written on the main thread; [endMove] reads it on the move's thread. */
+    @Volatile private var recentsParkedAt = 0L
+
+    /** Our RECENTS, asked ([RecentsRules.ask]). Main thread. */
+    private fun askRecents() {
+        val now = android.os.SystemClock.uptimeMillis()
+        when (RecentsRules.ask(swapInProgress, RecentsRules.parked(recentsParkedAt, now))) {
+            RecentsRules.Ask.RUN -> { recentsParkedAt = 0L; openRecents() }
+            RecentsRules.Ask.PARK -> {
+                recentsParkedAt = now
+                Log.w(TAG, "Recents asked during a move: it opens once the move is done")
+                vibrateShort()
+                if (!swapInProgress) handler.post(parkedRecents)   // the move ended meanwhile, before it could see this one
+            }
+            RecentsRules.Ask.UNPARK -> { recentsParkedAt = 0L; Log.w(TAG, "Recents asked again during the move: not opened") }
+        }
+    }
+
+    /** b19: a move ended ([endMove], on its thread): a RECENTS parked during it opens now (on the main thread). */
+    private fun afterMoveRecents() { if (recentsParkedAt > 0L) handler.post(parkedRecents) }
+
+    /** b19: the parked RECENTS ([RecentsRules.afterMove]), once the move is done and the controller's follow too: its focus read
+     *  or probe is posted before the move's end, and runs on the main thread, so it is counted by now. One at a time. */
+    private val parkedRecents = Runnable { openParkedRecents() }
+    private fun openParkedRecents() {
+        handler.removeCallbacks(parkedRecents)
+        val focusing = focusReadsPending > 0 || probesRunning > 0 || lockHops > 0
+        when (RecentsRules.afterMove(recentsParkedAt, android.os.SystemClock.uptimeMillis(), swapInProgress, focusing)) {
+            RecentsRules.AfterMove.NONE -> {}
+            RecentsRules.AfterMove.WAIT -> handler.postDelayed(parkedRecents, RecentsRules.PARK_RETRY_MS)
+            RecentsRules.AfterMove.DROP -> { recentsParkedAt = 0L; Log.w(TAG, "Recents asked during a move: waited too long, not opened") }
+            RecentsRules.AfterMove.OPEN -> { recentsParkedAt = 0L; Log.w(TAG, "Recents asked during the move: opening it now"); openRecents() }
+        }
+    }
+
     /** Our RECENTS action: note what's on the screen being left. */
     private fun openRecents() {
         // device pass (P2-2): where the controller is ([controllerDisplay]) — "stays where you send it" before its first move
@@ -1110,7 +1347,10 @@ class ForegroundAppService : AccessibilityService() {
         recentsOrigin = if (MainActivity.hubOn(d)) WAYFINDER_ORIGIN else displayApps[d] ?: HOME_ORIGIN
         recentsHub = listOfNotNull(PRIMARY_DISPLAY, secondDisplayId()).firstOrNull { MainActivity.hubOn(it) }
         recentsOriginAt = android.os.SystemClock.uptimeMillis()
-        performGlobalAction(GLOBAL_ACTION_RECENTS)
+        // b19 (R4): asked by us, the mode waits for the overview from now: Recents' own window event can be lost on its way
+        // here (the service's 100 ms throttle keeps one event per type, and a Wayfinder window shown with Recents took its
+        // place). It comes on at the next window change or press that finds the overview, whatever path Android took
+        if (performGlobalAction(GLOBAL_ACTION_RECENTS) && recentsDisplay == null) recentsWait()
     }
     @Volatile private var lastHatX = 0
 
@@ -1129,10 +1369,71 @@ class ForegroundAppService : AccessibilityService() {
             if (!opened) performGlobalAction(GLOBAL_ACTION_BACK)
             return
         }
+        // b19 (R5): B's app is on the other screen. Its card launched it onto Recents' screen: on the Thor that only brought this
+        // screen's home forward and left Recents up, its animation running, until Home. Recents closes from the app's own screen
+        // instead ([closeRecentsFrom]): the app stays where it is, the controller with it. The screens' labels are read only for an
+        // app (b19 review: this runs in the key filter; no origin and the home never match one)
+        val other = if (d != null && from != null && from != HOME_ORIGIN) RecentsRules.backElsewhere(d, from, trackedLabels()) else null
+        if (other != null && closeRecentsFrom(other, "B's app is on display $other")) { exitRecents(); return }
+        // b19 (R1): B's app is on Recents' own screen, but a move put it there: Quickstep never saw it come forward, its card is a
+        // plain one, and the tap left Recents up until Home. Recents closes from its own screen instead: Quickstep puts that
+        // screen back as it was, the app on it (Quickstep ends Recents the same way for a task that appears on either screen)
+        if (d != null && RecentsRules.movedHere(from, movedOnto[d], displayApps[d], ::appLabel) &&
+            closeRecentsFrom(d, "B's app was moved onto display $d")) { exitRecents(); return }
         val card = if (d != null && from != null) recentsCards(d).firstOrNull { it.contentDescription?.toString() == from } else null
         if (d != null && card != null && tapRecentsCard(d, card)) { exitRecents(); return }
+        // b19 (the home, the controller on the other screen): Recents' own Back goes to the controller's screen, not Recents'.
+        // Recents closes from the controller's screen instead: Recents' screen shows again what it showed, the controller stays
+        val back = if (d != null) RecentsRules.backFrom(d, controllerDisplay()) else null
+        if (back != null && closeRecentsFrom(back, "B's Back would go to display $back")) { exitRecents(); return }
         exitRecents()
         performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    /** b19 (R5): each screen's tracked app, by its label (B's card is found by its label too). */
+    private fun trackedLabels(): Map<Int, String?> = displayApps.mapValues { (_, p) -> appLabel(p) }
+    /** b19: an app's label, as Recents names its card; null: unknown. */
+    private fun appLabel(pkg: String): String? =
+        runCatching { packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString() }.getOrNull()
+
+    /** b19 (R1): the app a Wayfinder move left on each screen ([performSwapOrSend]; b19 review: any move, a route, a pair, Open
+     *  or the restore too, [launchOnDisplay]), until that screen's home comes forward (onAccessibilityEvent's launcher branch):
+     *  Quickstep did not see it come forward ([RecentsRules.movedHere]). Another app there meanwhile: kept, the check also asks
+     *  that the app tracked there is the moved one. The move's thread and the main thread write it. */
+    private val movedOnto = ConcurrentHashMap<Int, String>()
+
+    /** b19 (R5): the screen Recents closes from ([closeRecentsFrom]); the controller is put there once that is over
+     *  ([afterRecentsCloser]). Null: none. */
+    @Volatile private var recentsBackOn: Int? = null
+
+    /** b19: Recents closes from screen [d], and what that screen shows stays as it is. Quickstep (Android's Recents) ends its
+     *  animation when a task appears while it is up, and puts its own screen back as it was (b19 probe: a home started on the
+     *  bottom screen, or an app started, ended a stuck visit: onTasksAppeared, then its finish; recheck: 8 / 8 from the bottom).
+     *  The task that appears is an empty, see-through one of Wayfinder's ([TrampolineActivity.EXTRA_CLOSE_RECENTS]), gone once
+     *  its entry is over: the app under it keeps its place and gets the screen's focus back. The task takes neither touches nor
+     *  the focus (b19 review: the bars stay as the app set them, the window list never shows it). [d]: B's app's screen when it
+     *  is not Recents' (R5), Recents' own when a move put B's app there (R1), the controller's when Recents' Back would go
+     *  there (the home); [why] says which in the W line (no app name). True: asked. Main thread. */
+    private fun closeRecentsFrom(d: Int, why: String): Boolean {
+        val asked = runCatching {
+            startActivity(Intent(this, TrampolineActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION)
+                .putExtra(TrampolineActivity.EXTRA_CLOSE_RECENTS, true),
+                ActivityOptions.makeBasic().setLaunchDisplayId(d).toBundle())
+        }.onFailure { Log.w(TAG, "recents: no close from display $d: ${it.message}") }.isSuccess
+        if (asked) { recentsBackOn = d; Log.w(TAG, "recents: $why: Recents closes from there") }
+        return asked
+    }
+
+    /** b19: the see-through task that closed Recents is gone ([TrampolineActivity]): the controller on its screen (B's app's,
+     *  or the controller's own), or where the lock holds it. The focus should be there already (the task's start made its screen
+     *  the focused one, and the app under it has the window focus again): read first, the probe only if not ([focusDisplay]).
+     *  Main thread. */
+    private fun afterRecentsCloser() {
+        val d = recentsBackOn ?: return
+        recentsBackOn = null
+        if (swapInProgress) return
+        if (lockHolds()) applyFocusLock(announce = false) else focusDisplay(d) { syncFocusModel() }
     }
 
     /** 1.4 (GitHub #68): open a card with a real tap at its centre. The accessibility click on the live tile (the app
@@ -1207,6 +1508,8 @@ class ForegroundAppService : AccessibilityService() {
     private fun recentsKey(event: KeyEvent): Boolean {
         val b0 = ButtonEngine.menuButton(event)   // Xbox style: the bottom button opens (GitHub #8)
         if (event.action == KeyEvent.ACTION_UP && b0 != null && recentsDowns.remove(b0)) return true
+        // b19: an entry still waiting comes on at the first press that finds the overview, even with every window event missed
+        if (event.action == KeyEvent.ACTION_DOWN && b0 != null && b0 != ThorButton.HOME) enterPendingRecents()
         val d = recentsDisplay ?: return false
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 && !recentsStillOpen(d)) { exitRecents(); return false }
         val b = b0 ?: return false
@@ -1262,21 +1565,48 @@ class ForegroundAppService : AccessibilityService() {
         fun second(firstAt: Long, now: Long): Boolean = firstAt > 0L && now - firstAt in 0..MS
     }
 
-    /** Focus actions: move the controller — or, while locked, move the lock. */
-    private fun focusAction(top: Boolean) {
+    /** Focus actions: move the controller — or, while locked, move the lock. b19 (H1a): [src] = the controller that sent it. */
+    private fun focusAction(top: Boolean, src: Int = 0) {
         val target = if (top) PRIMARY_DISPLAY else secondDisplayId()
+        if (deckTakes(target, src)) return
         if (deckInTheWay(target)) return
+        lockChosen()   // b19: the user's send, the Hub's lend ends
         // Locked — or "stays where you send it": the move sets (or moves) the lock, so a
         // touch on the other screen can't pull the controller back.
         if (AppSettings.focusLockEnabled || AppSettings.focusSticky) { AppSettings.setFocusLock(true, top = top); applyFocusLock(announce = true) }
+        // 1.5-beta2 (GitHub #145): a send to the bottom takes over a top lock set in the Thor's own settings (it held the buttons)
+        else if (!top && aynLockOn()) {
+            val to = secondDisplayId() ?: return
+            Thread { PServiceBridge.exec("settings put system screen_focus_lock 0"); AppSettings.setAynLockByUs(false); handler.post { switchControllerFocus(to) } }
+                .apply { isDaemon = true }.start()
+        }
         else switchControllerFocus(if (top) PRIMARY_DISPLAY else (secondDisplayId() ?: return))
     }
+
+    /** b19 (H1a): a send toward the screen Keyboard & mouse covers (not beside a game, not the guide alone) lends it the
+     *  controller: the deck holds it ([app.wayfinder.deck.DeckHold]) and the game keeps its screen and its focus. Said either
+     *  way (it holds it now, or why it can't: true, the controller stays). A send toward any other screen while it holds gives
+     *  the controller back first (false: the send goes on as before). Only here, before [deckInTheWay]: the combos sheet's B
+     *  ([giveHubTheController]) keeps the touch-only refusal (the Hub was wanted there, not the keys). */
+    private fun deckTakes(target: Int?, src: Int): Boolean {
+        val d = inputDeck?.takeIf { it.isShowing && !it.beside && !it.guideOnly && target != null && it.displayId == target }
+        if (d == null) { app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.SENT); return false }
+        val name = if (src > 0) ExtPadsCtl.pads["hidraw${src - 1}"]?.let { ExtPadsCtl.shownName(it) } else null
+        app.wayfinder.deck.DeckHold.start(d, src, name)
+        return true
+    }
+
+    /** b19 fix (H1a, review): a Wayfinder window is up on screen [d] (it came up: [onHubShown]; or a page was asked of it while
+     *  in front: [windowAsked]). Keyboard & mouse covering that screen closes, as for the quick panel, "Make them in" and the
+     *  Guide's "Full page": the Hub on the bottom, the game on top and the deck open on the bottom, Home + X or an "Open
+     *  Wayfinder" combo opened the window under the deck, unseen, and [focusDisplay] gave it the controller. */
+    private fun deckOffWindow(d: Int) { inputDeck?.takeIf { it.covers(d) }?.hide() }
 
     /** Build 18 (E5, pF18): never onto the screen Keyboard & mouse covers — it's touch-only, and the app under it got the
      *  controller unseen (the D-pad moved that app). The deck beside a game on its own screen (the guide) isn't in the way.
      *  True = [target] is covered: said, and the controller stays (review E1: the combos sheet's B asks too). */
     private fun deckInTheWay(target: Int?): Boolean {
-        val d = inputDeck?.takeIf { it.isShowing && !it.beside && target != null && it.displayId == target } ?: return false
+        val d = inputDeck?.takeIf { it.covers(target) } ?: return false
         vibrateShort()
         Overlays.pill("${if (d.guideOnly) ThorAction.GUIDE.title else ThorAction.KEYBOARD.title} is touch-only — the controller stays here",
             CueOrigin.Screen(controllerDisplay()), group = "focus")
@@ -1344,6 +1674,13 @@ class ForegroundAppService : AccessibilityService() {
     internal object FocusProbe {
         /** The probe is needed unless the real focused display [real] (null: unknown, pservice down) is already [want]. */
         fun needed(real: Int?, want: Int): Boolean = real != want
+        /** 1.5-beta2 (GitHub #147): the bottom lock's hand-back ([reassertLock]) waits while a finger is on the bottom screen.
+         *  Android cancels a real touch on a screen when an accessibility service starts a touch there (one injector per
+         *  screen), so the probe's tap could cut that finger's touch short; the finger also takes the focus there by itself.
+         *  [fingers]: down on the bottom panel now, [quietMs]: since its last event (3 s: a lost lift, the bottom reader's own
+         *  rule). Only for a hand-back to the bottom ([target] is not [top]: "Always bottom" with the bottom screen dark goes top). */
+        fun waitForBottomLift(target: Int, top: Int, fingers: Int, quietMs: Long): Boolean =
+            target != top && fingers > 0 && quietMs <= 3000
     }
 
     // b18g (#102 d), main thread only: the reads run one at a time, in order, so a later request is never overtaken by an
@@ -1353,11 +1690,19 @@ class ForegroundAppService : AccessibilityService() {
         java.util.concurrent.LinkedBlockingQueue()) { r -> Thread(r, "wf-focus-read").apply { isDaemon = true } }
     private var focusReadsPending = 0
     private var probesRunning = 0
+    /** b19 (R4, device b19 n_fixes2 + probe): [applyFocusLock]'s bottom lock lifts AYN's top lock off the main thread before its
+     *  focus read, and neither count above saw that hop. A Recents parked during a swap that sent the game (and the controller)
+     *  to the bottom then opened 1 ms after "swap done", before the follow's pill and probe: their window events, within 100 ms
+     *  of Recents' own, took its place in the service's throttle, and the controller mode never came on. The parked look
+     *  ([openParkedRecents]) counts it, as a move to the top was already counted. Main thread. */
+    private var lockHops = 0
 
     /** Raise [displayId] to input focus without touching its app (see block comment). [ifNeeded] (b18g, #102 d): first the
      *  real focused display, read off the main thread — already [displayId]: no probe, and [onDone] (true) as after one. False:
      *  the probe at once (a move the user asked for, whose "already there" case was read just before). */
     fun focusDisplay(displayId: Int, ifNeeded: Boolean = true, onDone: (Boolean) -> Unit = {}) {
+        // b19 (H1a): every focus move (the Hub, Game controls, the panel, Recents, the wake) gives Keyboard & mouse's hold back first
+        app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.FOCUS)
         val read = ifNeeded && PServiceBridge.cachedAvailable()   // no root, nothing to read: the probe, as before
         if (!read && focusReadsPending == 0) return runProbe(displayId, onDone)
         focusReadsPending++
@@ -1554,6 +1899,7 @@ class ForegroundAppService : AccessibilityService() {
             when (i.action) {
                 Intent.ACTION_SCREEN_OFF -> {
                     screenOn = false
+                    app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.SCREEN_OFF)   // b19 (H1a): the controller back to the game
                     if (QuickPanelWindow.isOpen && panelTook && AppSettings.focusLockEnabled) lockOnWake = true
                     InputMonitor.send("S 0")   // the root helper rests too (GitHub #40)
                     QuickPanelWindow.close()
@@ -1739,6 +2085,15 @@ class ForegroundAppService : AccessibilityService() {
                 CueOrigin.Press(ButtonNames.handSrc), group = "mouse")
         }
     }.apply { isDaemon = true }.start()
+
+    /** 1.5-beta2 (Q1, GitHub D#127, #3): the Guide button's tap for the game on controller [src]'s own pad
+     *  ([ButtonEngine.pressGuideOnPad]). No pad to press on (Game controls off here, no controller of its own): a pill says
+     *  where to turn them on; never Android's Home in its place. Main thread. */
+    private fun guideButton(src: Int) {
+        if (buttonEngine?.pressGuideOnPad(src) == true) return
+        Overlays.pill("No Guide button here: Game controls are off for this app (${Say.path(NavCards.LAYER)})",
+            CueOrigin.Press(src), group = "guide")
+    }
 
     /** 1.3: sleep like the power button — through the root bridge, else Android's lock action
      *  (which also turns the screens off; for devices without AYN's bridge). */
@@ -1929,7 +2284,7 @@ class ForegroundAppService : AccessibilityService() {
     /** Every move's end (swap, layout, route — their `finally`): the swap waiting for it starts now, the gate still claimed,
      *  so no route or layout gets in between; else the gate is free. [ctlAfter]: where a swap left the controller. */
     private fun endMove(ctlAfter: Int? = null) {
-        if (!moveGate.end()) return
+        if (!moveGate.end()) return afterMoveRecents()   // b19: free, a RECENTS asked during the move opens (a queued swap: it waits)
         if (instance !== this) { Log.w(TAG, "queued swap dropped — the service stopped"); return }
         Log.w(TAG, "queued swap — starting it now")
         runSwap(ctlAfter)
@@ -2107,6 +2462,11 @@ class ForegroundAppService : AccessibilityService() {
                 Say.path(NavCards.HELP_LAYER, inWayfinder = true), CueOrigin.System)
         }
         InputMonitor.gatedListener = { t, c, v, src -> onGatedEvent(t, c, v, src) }
+        // b19 (H1a): Keyboard & mouse holding the controller — its pills (on the deck's screen), and the end of a hold that went
+        // with its wfpad (a new one starts with none)
+        app.wayfinder.deck.DeckHold.say = { text, d -> handler.post { vibrateShort(); Overlays.pill(text, CueOrigin.Screen(d ?: controllerDisplay()), group = "focus") } }
+        // b19 fix (H1a): the router's ledger goes with the wfpad, held or not (layerGone), then the hold ends with its pill
+        PadLayerCtl.onHoldGone = { app.wayfinder.deck.DeckHold.layerGone() }
         // b18o: turbo buttons the hand holds — the input layer's and a controller's ("TU"), and the app's own (ExtEngine)
         InputMonitor.turboListener = { c, v, at, src -> onTurboLine(c, v, at, src) }
         ExtEngine.turboSink = { src, b, held, at -> buttonEngine?.onTurbo(b, held, ExtPadsCtl.srcOfGated(src), at, ButtonEngine.TURBO_APP) }
@@ -2143,6 +2503,9 @@ class ForegroundAppService : AccessibilityService() {
         InputMonitor.start(this)
         installGestureListener()                        // Blank gesture, focus chord
         syncFocusModel()
+        // 1.5-beta2 (GitHub #145): AYN's lock watched (the Controller page's line), read once now
+        runCatching { contentResolver.registerContentObserver(android.provider.Settings.System.getUriFor(AynLockRules.KEY), false, aynLockWatch) }
+        readAynLock()
         applyFocusLock()                                // Re-apply a saved lock
         handler.postDelayed(idleWatcher, idleCheckMs)  // Auto-off idle timer
         refreshDisplays()
@@ -2185,6 +2548,7 @@ class ForegroundAppService : AccessibilityService() {
             app.wayfinder.lights.StickLights.screenSampler = null; app.wayfinder.lights.StickLights.screenStop = null
             PadLayerCtl.onEmergencyOff = null
             PadLayerCtl.onLayerFailed = null
+            PadLayerCtl.onHoldGone = null; app.wayfinder.deck.DeckHold.say = { _, _ -> }   // b19 (H1a) (the deck's hide ended any hold)
             ExtEngine.releaseAll(); GyroEngine.follow(null, null)
             // the root helper outlives us (same process): stop its samplers, give every app the plain
             // pad, and put back performance / Hz / DND (review 2026-09-25: they kept running)
@@ -2202,8 +2566,10 @@ class ForegroundAppService : AccessibilityService() {
         }
         blanker?.wakeAll()
         // Don't leave AYN's native lock on once Wayfinder isn't managing it.
-        if (current && AppSettings.focusLockEnabled && AppSettings.focusLockTop)
-            Thread { PServiceBridge.exec("settings put system screen_focus_lock 0") }.start()
+        // 1.5-beta2 (GitHub #145): only Wayfinder's own (a top lock set in the Thor's settings stays)
+        if (current) runCatching { contentResolver.unregisterContentObserver(aynLockWatch) }
+        if (current && AppSettings.aynLockByUs)
+            Thread { PServiceBridge.exec("settings put system screen_focus_lock 0"); AppSettings.setAynLockByUs(false) }.start()
         // Note: InputMonitor is process-scoped and idempotent — we deliberately do
         // NOT stop it here. The a11y service can be unbound/rebound while the process
         // lives; tearing the socket down and rebinding races into "address in use".
@@ -2246,6 +2612,9 @@ class ForegroundAppService : AccessibilityService() {
             // (PPSSPP) comes back with a focus change only. The window list tells: Recents gone → its exit, and the screen it
             // covered is looked at again ([recheckAfterRecents])
             recentsDisplay?.let { d -> if (recentsGone(d)) exitRecents() }
+            // b19: an entry still waiting comes on once the window list shows the overview on a screen (no timer); b19 review:
+            // no screen shows it long after it was set, the wait ends
+            if (recentsDisplay == null && recentsPending) { val o = overviewDisplay(); if (o != null) enterRecents(o) else recentsNotFound() }
             recheckAfterRecents()
             return
         }
@@ -2276,11 +2645,20 @@ class ForegroundAppService : AccessibilityService() {
                 // the watch took Recents (a "launcher" package) for a frontend covering the moved app and brought that app back
                 // over it; and once Recents was left for the home or another card, the next look would bring it back again
                 swapWatchGen++
-                enterRecents(displayId ?: focusedDisplayId())
-            } else if (recentsDisplay != null) for (ms in listOf(250L, 900L)) handler.postDelayed({
+                // b19: the event's screen, else the one the window list shows the overview on; never the focus model (frozen
+                // during a swap, it named the screen being left and the controller mode never came on). None yet: waiting
+                val on = displayId ?: overviewDisplay()
+                if (on != null) enterRecents(on)
+                else if (recentsDisplay == null) { recentsWait(); Log.d(TAG, "recents: event on no screen read: waiting for the window list") }
+            } else if (recentsDisplay != null || recentsPending) for (ms in listOf(250L, 900L)) handler.postDelayed({
                 // twice: Recents can still be animating out at the first look
                 val d = recentsDisplay
                 if (d != null && !recentsStillOpen(d)) { Log.d(TAG, "recents: left ($pkg/$cls)"); exitRecents() }
+                // b19: an entry still waiting ends once no screen shows the overview, at the later look only (it can still be
+                // animating in at the first)
+                else if (d == null && recentsPending && ms == 900L && overviewDisplay() == null) {
+                    recentsPending = false; Log.d(TAG, "recents: gone before its mode came on ($pkg/$cls)")
+                }
             }, ms)
         }
 
@@ -2306,6 +2684,7 @@ class ForegroundAppService : AccessibilityService() {
                 return
             }
             if (displayId != null) {
+                movedOnto.remove(displayId)   // b19 (R1): its home came forward: an app a move left there is left (or seen) since
                 if (displayApps.containsKey(displayId)) {
                     Log.d(TAG, "Launcher $pkg on display $displayId — clearing tracked app")
                     displayApps.remove(displayId)
@@ -2450,6 +2829,10 @@ class ForegroundAppService : AccessibilityService() {
      *  release taps unless the hold fired or it made a combo (AYN + a button). Main thread. */
     private inner class AynPress(val src: Int) {
         var holdFired = false
+        /** 1.5-beta2 (Q8, GitHub #51): taps let go in a row ([AynTaps]); [resolve] ends the wait for a second one (posted only
+         *  while a double tap is set). */
+        var taps = 0
+        val resolve = Runnable { val n = taps; taps = 0; if (n > 0) tapped(n) }
         val hold = Runnable {
             val a = AppSettings.aynHold ?: return@Runnable
             if (buttonEngine?.aynInCombo(src) == true) return@Runnable      // AYN + a button: a combo, not a hold
@@ -2462,10 +2845,11 @@ class ForegroundAppService : AccessibilityService() {
         fun down() {
             holdFired = false
             handler.removeCallbacks(hold)
+            handler.removeCallbacks(resolve)               // 1.5-beta2 (Q8): a second tap may be coming
             val engine = buttonEngine
-            // 1.3.1 (GitHub #44): recording a combo, or AYN + a button — the engine has it first
-            if (engine != null && engine.capturing) { engine.onAyn(true, src); return }
-            engine?.onAyn(true, src)
+            // 1.3.1 (GitHub #44): recording a combo, or AYN + a button — the engine has it first. b19 (ps-F17): true = recording,
+            // or the Test page's press: no hold timer (its release is no tap either)
+            if (engine?.onAyn(true, src) == true) return
             // with AYN combos, the hold waits a little longer (time to press the combo's button). Device pass (P2-10, A's note):
             // the engine's one value — its combo list comes up before this hold ([ButtonEngine.listDelay])
             val aynCombos = ControlsStore.effective(buttonHost.currentApp()).any { it.trigger.modifier == ThorButton.AYN }
@@ -2474,15 +2858,32 @@ class ForegroundAppService : AccessibilityService() {
         fun up(canceled: Boolean) {
             handler.removeCallbacks(hold)
             val combo = buttonEngine?.onAyn(false, src) == true
-            if (!canceled && !holdFired && !combo) handler.post { onAynButton(src) }
+            // 1.5-beta2 (Q8): a cancel, a hold or a combo spends the taps (as Home's); else one more — it waits for a second
+            // one only while a double tap is set, else it acts at once as before
+            if (canceled || holdFired || combo) { taps = 0; return }
+            taps++
+            if (AynTaps.waits(taps, AppSettings.aynDouble != null)) { handler.postDelayed(resolve, AynTaps.DOUBLE_MS); return }
+            val n = taps; taps = 0
+            handler.post { tapped(n) }
         }
-        fun cancel() = handler.removeCallbacks(hold)
+        /** 1.5-beta2 (Q8): [n] taps in a row, let go: the double tap's action, else the tap's ([onAynButton]). */
+        private fun tapped(n: Int) {
+            val d = AppSettings.aynDouble
+            if (d != null && AynTaps.isDouble(n, true)) { Log.d(TAG, "AYN button double tap → $d"); Companion.perform(d, src) }
+            else onAynButton(src)
+        }
+        fun cancel() { handler.removeCallbacks(hold); handler.removeCallbacks(resolve); taps = 0 }
     }
     private val aynPresses = HashMap<Int, AynPress>()
     private fun ayn(src: Int) = aynPresses.getOrPut(src) { AynPress(src) }
 
     private fun aynButtonKey(event: KeyEvent): Boolean {
-        if (!AppSettings.aynButtonOurs || event.scanCode != 194) return false
+        if (event.scanCode != 194) return false
+        // b19 (ps-F17): the Test page in front with the controller lights it, asked before whose the button is: with "Just
+        // switching screens" AYN's drawer stays shut there too (this filter runs before AYN's own key check)
+        if ((event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) &&
+            buttonEngine?.testAyn(event.action == KeyEvent.ACTION_DOWN, 0, first = event.repeatCount == 0) == true) return true
+        if (!AppSettings.aynButtonOurs) return false
         when (event.action) {
             KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) ayn(0).down()
             KeyEvent.ACTION_UP -> ayn(0).up(event.isCanceled)
@@ -2495,6 +2896,7 @@ class ForegroundAppService : AccessibilityService() {
      *  Thor's does. Main thread. */
     private fun padAyn(src: Int, down: Boolean) {
         if (src > 0) ButtonNames.inHand(src)
+        if (buttonEngine?.testAyn(down, src) == true) return          // b19 (ps-F17): the Test page's, before AYN's drawer
         if (!AppSettings.aynButtonOurs) { if (!down) openAynDrawer(); return }
         if (down) ayn(src).down() else ayn(src).up(false)
     }
@@ -2511,6 +2913,8 @@ class ForegroundAppService : AccessibilityService() {
 
     // ── Quick panel (our drawer) ────────────────────────────────────
     private var panelReturnTo: Int? = null
+    /** b19: the lock (on, top) as the panel opened. Its lock tile changed it: the user's choice at the close ([lockChosen]). */
+    private var panelLock: Pair<Boolean, Boolean>? = null
     /** Between the AYN press and the panel's window (main thread only). */
     private var panelOpening = false
     /** The panel took the controller when it opened (GitHub #31: off = touch only, nothing to give back). */
@@ -2528,11 +2932,18 @@ class ForegroundAppService : AccessibilityService() {
         // The bottom screen — over a dual-screen game's second screen too (1.3): the panel is an
         // accessibility overlay, drawn above its Presentation window (1.1's activity opened invisible
         // underneath, hence a side sheet on the top screen, still the fallback below)
-        val d = onDisplay ?: bottom ?: PRIMARY_DISPLAY
+        // 1.5-beta2 (GitHub #139): docked on a TV or monitor, where the TV shows: the controller's screen when it is the TV's
+        // own, else the top one (a TV mirrors it), never the dark bottom one. Undocked: the bottom screen, as before
+        // (review R2: a TV is "its own" when an app's window is on it, not by the focus model: PanelRules.tv)
+        val ctl = controllerDisplay()
+        val tv = if (!Dock.docked) null else PanelRules.tv(ctl, getSystemService(DisplayManager::class.java).displays
+            .filter { Dock.isExternal(it) && appWindowOn(it.displayId) }.map { it.displayId })
+        val d = PanelRules.place(onDisplay, Dock.docked, bottom, tv ?: ctl, tv != null, PRIMARY_DISPLAY)
         panelReturnTo = focusedDisplayId()
+        panelLock = AppSettings.focusLockEnabled to AppSettings.focusLockTop
         panelApp()?.let { a -> GameProfiles.ask(a); handler.postDelayed({ if (QuickPanelWindow.isOpen) GameProfiles.ask(a) }, 1500) }
         if (blanker?.isBlanked(d) == true) blanker?.wake(d)   // else it'd open under the black cover
-        val takes = AppSettings.panelTakesController
+        val takes = PanelRules.takes(AppSettings.panelTakesController, Dock.docked)   // 1.5-beta2 (GitHub #139): docked, always
         panelTook = takes
         panelOver = displayApps[d]
         panelOpening = true
@@ -2542,8 +2953,8 @@ class ForegroundAppService : AccessibilityService() {
                 if (!panelOpening) return@post   // cancelled by a second press
                 panelOpening = false
                 // an overlay window (1.3, GitHub #30 / #32): the app under it is neither paused nor resumed
-                val shown = QuickPanelWindow.show(this, d) ||
-                    (d != PRIMARY_DISPLAY && QuickPanelWindow.show(this, PRIMARY_DISPLAY).also { if (it) panelOver = displayApps[PRIMARY_DISPLAY] })
+                val shown = QuickPanelWindow.show(this, d, takes) ||
+                    (d != PRIMARY_DISPLAY && QuickPanelWindow.show(this, PRIMARY_DISPLAY, takes).also { if (it) panelOver = displayApps[PRIMARY_DISPLAY] })
                 if (!shown) { Log.w(TAG, "quick panel: couldn't open on $d"); onQuickPanelClosed(); return@post }
                 if (takes) focusPanel(QuickPanelWindow.displayId ?: d, 0)   // the controller follows the panel
             }
@@ -2654,7 +3065,7 @@ class ForegroundAppService : AccessibilityService() {
         // screen or docked, where the Hub is, as before. AYN's own bottom-off is read in the thread (root)
         val other = if (AppSettings.controlsOtherScreen && !Dock.docked) ControlsPlace.other(game, PRIMARY_DISPLAY, secondDisplayId()) else null
         val otherTaken = other != null && (blanker?.isBlanked(other) == true || coveredByPresentation(other) ||
-            inputDeck?.let { it.isShowing && !it.beside && it.displayId == other } == true)
+            inputDeck?.covers(other) == true)
         // b18i (D1, option C): whether the game pauses itself while the page is open — its frames, from now ([onFpsLook])
         startPauseWatch(pkg, game)
         // Home + X pressed on a connected controller: the page opens on ITS controls (2026-10-03). dev build 16 (WP6):
@@ -2774,14 +3185,39 @@ class ForegroundAppService : AccessibilityService() {
     /** Open the Hub on [page], where the Hub lives (Appearance → Hub screen). */
     private fun openHubPage(page: String) {
         val d = if (AppSettings.hubOnTop) PRIMARY_DISPLAY else secondDisplayId() ?: PRIMARY_DISPLAY
+        // b19 (V02, Q7a): an "Open Wayfinder: ‹page›" combo pressed over an app marks the page, as the quick panel's
+        // tiles do: one B on it goes back to that app ([BackToApp])
+        val ctl = controllerDisplay()
+        val n = BackToApp.ask(page, ctl, appOn(ctl), MainActivity.inFront(), android.os.SystemClock.uptimeMillis())
         runCatching {
-            startActivity(Intent(this, MainActivity::class.java).putExtra("page", page)
+            startActivity(Intent(this, MainActivity::class.java).putExtra("page", page).apply { if (n != null) putExtra(BackToApp.EXTRA, n) }
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_USER_ACTION),
                 android.app.ActivityOptions.makeBasic().setLaunchDisplayId(d).toBundle())
         }.onFailure { Log.w(TAG, "open page: ${it.message}"); return }
-        // the page is driven with the controller: send it there, exactly as Home + right stick does
-        // (a lock moves with it) — it stayed on the game's screen (review 2026-09-25)
-        if (d != controllerDisplay()) handler.postDelayed({ focusAction(top = d == PRIMARY_DISPLAY) }, 300)
+        // b19 (V02, Q7a): no send to the page's screen any more. The Hub's lend takes the controller there when the page
+        // shows ([onHubShown]) and gives it back when it is left; the send (Home + right stick's path) wrote the saved lock, or
+        // turned it on under "Stays where you send it"
+    }
+
+    /** The app on screen [d], for the quick panel ([panelApp]) and an "Open Wayfinder" combo (b19, V02): null over Wayfinder,
+     *  a launcher or Wayfinder's Hub. */
+    private fun appOn(d: Int): String? {
+        fun ok(p: String?) = p?.takeIf { it !in launcherPackages && it != packageName }
+        // build 18 (E3, pF07): over Wayfinder's Hub there's no app to play or keep for — the tracked app is the one behind
+        // the Hub (Wayfinder is never tracked): "Now playing" and "Keep" named a game that wasn't in front
+        if (MainActivity.hubOn(d)) return null
+        // 1.3: that screen is covered by another app's second screen (a dual-screen game): the game,
+        // not the frontend underneath ("Now playing: iiSU" over WatermelonDS)
+        val covered = d != PRIMARY_DISPLAY && runCatching { coveredByPresentation(d) }.getOrDefault(false)
+        return (if (covered) null else ok(displayApps[d])) ?: ok(displayApps[PRIMARY_DISPLAY]).takeIf { covered }
+    }
+
+    /** b19 (V02): B on a page the quick panel or an "Open Wayfinder" combo opened over an app: the window went behind, the
+     *  controller goes back to that app's screen [back], 150 ms later as Game controls' close. Not the user's send: nothing
+     *  is written (no lock; the Hub's lend ends at the window's stop). Lock on: that lend's restore ([onHubHidden]) does it. */
+    private fun onBackToApp(back: Int) {
+        val to = BackToAppRules.returnTo(AppSettings.focusLockEnabled, back) ?: return
+        handler.postDelayed({ if (!deckInTheWay(to)) focusDisplay(to) { syncFocusModel() } }, 150)
     }
 
     /** 1.4: a game profile Home + X just made (key, as made): removed on close if still untouched. */
@@ -2830,6 +3266,9 @@ class ForegroundAppService : AccessibilityService() {
      *  page (FEATURES B5.7): an untouched new game profile dropped here left that page on a profile that no longer existed, its
      *  edits lost (Profiles.update). Leaving the Hub ends it as B would. */
     private fun onGameControlsToHub(d: Int, token: Int) {
+        // b2 (review): no new window, so no onHubShown: the deck's "Sending to" reads its game's screen again (the Hub there).
+        // It kept naming the game with its switch live while the Hub was in front
+        deckFollow(d)
         val back = controlsReturnTo
         if (back != null) controlsParked = token   // the one session, set aside by the window that holds it
         stopPauseWatch()   // b18i (D1): the Hub stays over the game — no "paused itself" pill under it
@@ -2843,6 +3282,7 @@ class ForegroundAppService : AccessibilityService() {
      *  the lock stayed set aside after Game controls closed. b18i (leftovers): the session it set aside goes on (B from the Games
      *  page "All apps" opened); with no session at all (a restored window), the lend stays and the window's stop ends it. */
     private fun onHubToGameControls(token: Int) {
+        deckFollow(null)   // b2 (review): and back: Game controls in place belongs to the game under it (DeckHoldRules.keepsTarget)
         if (token != hubToken || hubOn == null) return
         if (controlsParked == token) controlsParked = 0
         else if (controlsReturnTo == null) return   // cleared here, nothing would give the lock back
@@ -2854,7 +3294,8 @@ class ForegroundAppService : AccessibilityService() {
     // screen with the controller locked there, the Hub — which lives on top — couldn't be driven).
     // The lock is set aside meanwhile (AYN's top lock lifted if the Hub is on the bottom; our own
     // bottom lock doesn't pull focus back), and restored when the Hub is left.
-    private var hubOn: Int? = null
+    /** b19: read from any thread too ([lockSuspended] through [controllerDisplay], P2-2), as [hubReturnTo] is. */
+    @Volatile private var hubOn: Int? = null
     /** b18j (WI-8, device b18v v2 runs 2b / 4b): the Hub's lend of the controller — the screen it goes back to when the Hub is
      *  left — and the lock's restore an ended lend asks for. Every lend taken or ended counts: a restore still waiting when
      *  another lend is taken or ended is moot, so a finished or superseded move leaves nothing behind. Pure (FocusProbeTest). */
@@ -2883,6 +3324,12 @@ class ForegroundAppService : AccessibilityService() {
         set(v) = hubLend.set(v)
     private var hubToken = 0
     private fun onHubShown(d: Int, token: Int) {
+        // b19 fix (H1a, F2): a Wayfinder window is up (the Hub, a page, Game controls; on any screen, a focus move or not): it
+        // needs the controller, so Keyboard & mouse's hold ends first. Game controls opened on the game's own screen moved no
+        // focus, and the deck kept the D-pad under it
+        app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.FOCUS)
+        deckOffWindow(d)      // b19 fix (H1a, review): and never under the deck, before it takes the controller
+        deckFollow(d)         // b2 (O2): the deck's "Sending to" reads its game's screen again (the Hub there: Wayfinder)
         controlsGameFound()   // b18g (WI-6): Game controls' window is up — its game, detected before the window existed, switches it
         controlsShown(d)      // b18i (D1): Game controls on another screen than the game's takes the controller now
         if (MainActivity.gameControls != null) return        // Game controls does this itself
@@ -2907,6 +3354,7 @@ class ForegroundAppService : AccessibilityService() {
         }.apply { isDaemon = true }.start()
     }
     private fun onHubHidden(token: Int) {
+        deckFollow(null)   // b2 (O2): a Wayfinder window went: the deck's "Sending to" reads its game's screen again
         if (token != hubToken) return
         hubOn = null
         endParkedControls()   // b18i (leftovers): Game controls turned Hub in place, left — its session ends as on B
@@ -2933,18 +3381,32 @@ class ForegroundAppService : AccessibilityService() {
     }
     /** A page that holds the controller against the lock is open (the Hub, Game controls) — one that took it from another screen
      *  (as [onHubShown]'s `ctl == d`): on the lock's own screen the lock keeps it there, and the focus follows any finger. */
-    private fun lockSuspended() = ControllerScreen.suspended(hubReturnTo != null, controlsReturnTo != null, controlsAside)
+    /** b19 (d2): only a lend that holds something counts ([ControllerScreen.hubHolds]): with the lock moved onto the Hub's own
+     *  screen it holds nothing. Any thread. */
+    private fun lockSuspended() = ControllerScreen.suspended(hubHolds(), controlsReturnTo != null, controlsAside)
+    /** b19 (d2): the Hub's lend holds the controller against the lock now: the Hub on another screen than the lock's. */
+    private fun hubHolds() = ControllerScreen.hubHolds(hubReturnTo != null, hubOn, AppSettings.focusLockEnabled, lockTarget())
+    /** b19 (d2): the user placed the controller (a send, the lock combo, Which screen, the panel's lock tile, a follow-move in
+     *  "Stays where you send it"). That is the last word on where it goes: the Hub's lend ends without a move (HubLend.set
+     *  counts it, so a restore still waiting is moot). It never pulls the controller back to the Hub nor keeps AYN's lock off
+     *  afterwards. The lock just applied is the user's. */
+    private fun lockChosen() { if (hubReturnTo != null) hubReturnTo = null }
 
     /** The panel closed: the controller (and its lock) go back where they were. */
     private fun onQuickPanelClosed() {
         val back = panelReturnTo ?: PRIMARY_DISPLAY
-        panelReturnTo = null; panelOver = null
+        val lockWas = panelLock
+        panelReturnTo = null; panelOver = null; panelLock = null
         if (!panelTook) return   // touch-only (#31): the game never lost the controller
-        // 1.4: closed because the screens went off — nothing can take focus now: at the wake
-        if (!screenOn) { lockOnWake = AppSettings.focusLockEnabled; if (!lockOnWake) focusOnWake = back; return }
+        // b19: the panel's lock tile changed the lock (applied now): the user's choice, the Hub's lend ends
+        if (lockWas != null && lockWas != (AppSettings.focusLockEnabled to AppSettings.focusLockTop)) lockChosen()
+        // 1.4: closed because the screens went off — nothing can take focus now: at the wake. b19: the same rule as below (a lend
+        // that holds the controller keeps it on the Hub; Game controls holding it gets it back at [back])
+        if (!screenOn) { lockOnWake = lockHolds(); if (!lockOnWake) focusOnWake = hubOn?.takeIf { hubHolds() } ?: back; return }
         handler.postDelayed({
             val hub = hubOn
-            if (hub != null && hubReturnTo != null) focusDisplay(hub) { syncFocusModel() }
+            // b19 (d2): only while the lend holds it; a lend on the lock's own screen falls to the lock below (AYN's lock re-armed)
+            if (hub != null && hubHolds()) focusDisplay(hub) { syncFocusModel() }
             // device pass (P2-2): Game controls holding it against the lock gets it back too (the lock sent it to the game's
             // screen with the page still open) — [back] is where it was when the panel opened
             else if (lockHolds()) applyFocusLock(announce = false)
@@ -3391,6 +3853,12 @@ class ForegroundAppService : AccessibilityService() {
         }
     } catch (e: Exception) { null }
 
+    /** 1.5-beta2 (GitHub #139, review R2): an app's window is on [displayId] (a TV showing its own screen, not mirroring). The
+     *  window's type only: a busy game's unreadable window counts too. Wayfinder's overlays (the panel) are not apps. */
+    private fun appWindowOn(displayId: Int): Boolean = try {
+        getWindowsOnAllDisplays().get(displayId).orEmpty().any { it.type == AccessibilityWindowInfo.TYPE_APPLICATION }
+    } catch (e: Exception) { false }
+
     private fun appOnDisplay(displayId: Int): String? = try {
         val wins = getWindowsOnAllDisplays().get(displayId)
         if (BuildConfig.DEBUG) Log.d(TAG, "appOnDisplay $displayId: " + wins?.joinToString { w ->
@@ -3498,6 +3966,10 @@ class ForegroundAppService : AccessibilityService() {
         if (aynButtonKey(event)) return true
         // An open Thor Keyboard owns the whole pad (nothing leaks to the app).
         if (app.wayfinder.keyboard.ThorKeyboardService.instance?.captureKey(event) == true) return true
+        // b19 (H1a): the Thor's Back while Keyboard & mouse holds the controller gives it back (its press and release consumed)
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP) &&
+            ButtonEngine.printedButton(event) == ThorButton.BACK && ExtPadsCtl.srcOfDevice(event.device) == 0 &&
+            app.wayfinder.deck.DeckHold.backKey(event.action == KeyEvent.ACTION_DOWN)) return true
         if (recentsKey(event)) return true
         return buttonEngine?.onKey(event) ?: false
     }
@@ -3511,6 +3983,8 @@ class ForegroundAppService : AccessibilityService() {
         override fun nativePress(button: ThorButton, src: Int) {
             // dev build 17 (theme G): a connected controller's Back on its own pad (its game sees its Back)
             if (button == ThorButton.BACK) { if (buttonEngine?.pressBackOnPad(src) != true) performGlobalAction(GLOBAL_ACTION_BACK); return }
+            // b19 (H1a): a Home tap gives Keyboard & mouse's hold back first (then Home goes home, as ever)
+            app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.HOME)
             // the welcome tour in front: a Home tap stays on it (it asks you to HOLD Home; a short press lost the tour)
             if (TourPractice.inFront) {
                 // build 18 (E12, ps-F7): the pressing controller's Home ("PS goes home…"), and the tour's own button's name (B13)
@@ -3520,6 +3994,7 @@ class ForegroundAppService : AccessibilityService() {
             }
             QuickPanelWindow.close()   // Home leaves the panel too (it's a drawer)
             swapWatchGen++             // and the user's Home wins over a post-swap watch
+            recentsParkedAt = 0L       // b19: and over a Recents asked during a move (it does not open after it)
             // Android's Home only knows the TOP screen: with the controller on the bottom one,
             // Home left that screen alone and sent the top one home (2026-09-24). Home
             // goes home on the screen that HAS the controller. Only the controller's Home comes
@@ -3537,30 +4012,13 @@ class ForegroundAppService : AccessibilityService() {
         }
 
         override fun showChordHint(modifier: ThorButton, chords: List<Binding>, src: Int): Boolean {
-            // dev build 17 (theme G, D4): on a controller with no Back / AYN of its own, Home + Select / Start stand for them —
-            // not where the user has a combo of their own (it wins, [ButtonEngine.standDown])
-            val look = ButtonNames.lookOfSrc(src)
-            val extra = if (modifier == ThorButton.HOME) ExtPadsCtl.standInsOf(this@ForegroundAppService, src)?.let { si ->
-                Say.standInLines(ExtRules.StandIns(si.back && chords.none { it.trigger.button == ThorButton.SELECT },
-                    si.ayn && chords.none { it.trigger.button == ThorButton.START }), look, aynJob()) }.orEmpty() else emptyList()
-            if (chords.isEmpty() && extra.isEmpty()) return false
+            // b19 (MORE-D21): the words from the one builder ([comboList]) Hints & pop-ups' Show it uses too; the gates stay here
+            val l = comboList(modifier, chords, src) ?: return false
             if (AppSettings.chordHint == 2 && !TourPractice.active) return false   // 1.4 (GitHub #52): off (the tour still shows it)
             if (modifier == ThorButton.HOME) TourPractice.sawHint()
-            // In words: where the controller is and how it behaves (several ways to route it —
-            // the hint says which one is on), then the combos, the button in bold
-            // 1.3.2: the AYN button's own hold fires while you read its combos — so the list says what it does
-            // build 18 (E6, MORE-21): actions by their titles, as everywhere else ("Game controls", not "game controls")
-            val holdLine = if (modifier == ThorButton.AYN) AppSettings.aynHold?.let { listOf("keep holding" to chordLabel(it)) }.orEmpty() else emptyList()
-            // build 18 (E12, ps-F14): holding a connected controller's Home, what its own Back / AYN-job buttons do alone (a
-            // DualSense player never found Recent apps on a touchpad double-click) — a line under the list, at its width
-            val also = if (modifier == ThorButton.HOME && src > 0) HeldWords.also(ownButtons(), look)?.let { listOf("Also" to it) }.orEmpty()
-                else emptyList()
-            // dev build 15 (WP2, plan F-b): in the names of the controller holding it ("Keep PS held… △") — FocusCue draws
-            // PlayStation's marks from the text. dev build 17 (WP10): a held list of ITS controller (critique K12), on the
-            // controller's screen — it covers a tip or a pill there, never ends one. Build 18 (E12, MORE-D32): what to do
-            // first, then where the controller is
-            return Overlays.held(Held.CHORDS, CueOrigin.Press(src), listOf(Say.keepHeld(modifier, look), controllerWhere()),
-                chords.map { it.trigger.button.spoken(look) to chordLabel(it) } + extra + holdLine, footer = also)
+            // dev build 17 (WP10): a held list of ITS controller (critique K12), on the controller's screen — it covers a tip or
+            // a pill there, never ends one
+            return Overlays.held(Held.CHORDS, CueOrigin.Press(src), l.title, l.cells, footer = l.footer)
         }
 
         override fun combosOffApp(): String? {
@@ -3589,7 +4047,83 @@ class ForegroundAppService : AccessibilityService() {
 
         override fun standsIn(src: Int, b: ThorButton): Boolean = ExtPadsCtl.standsIn(this@ForegroundAppService, src, b)
         override fun padAyn(src: Int, down: Boolean) = this@ForegroundAppService.padAyn(src, down)
+
+        // b19 (H7, ps-F9): "Game + combos" — over a game its Home's tap is the game's PS / Guide; over a Wayfinder window
+        // (the Hub, Game controls) or the tour it does Home's usual job ([nativePress]). b19 fix: the window on top read at
+        // the press (a controller's Home only), not [wayfinderOnTop]: that one is refreshed every 500 ms, so a tap just after
+        // Game controls closed went home and left the game, and one just after a page opened sent a MODE the Hub ate
+        override fun homeTapToGame(src: Int): Boolean =
+            src > 0 && ExtPadsCtl.homeTapsToGame(this@ForegroundAppService, src, appOnDisplay(controllerDisplay()) == packageName, TourPractice.inFront)
+        /** b19 fix (H1a): Home went to Android unowned (no combo of Home in this app: its combos Off): a Home tap there gives
+         *  Keyboard & mouse's hold back as [nativePress] does, or the deck kept the controller from the launcher and the game. */
+        override fun homeUnowned(src: Int) { if (src == 0) app.wayfinder.deck.DeckHold.end(app.wayfinder.deck.DeckHoldRules.End.HOME) }
+        /** A0 (no native change): its MODE pressed on its own pad and let go 60 ms later, as Back's short press
+         *  ([ButtonEngine.pressBackOnPad]); the game reads KEYCODE_BUTTON_MODE from that player's own device. */
+        override fun gameHomeTap(src: Int) {
+            if (!ExtPadsCtl.canPress(src)) return              // its pad went away meanwhile: nothing (never Android's Home)
+            ExtPadsCtl.press(src, ThorInput.BTN_MODE, 1)
+            handler.postDelayed({ ExtPadsCtl.press(src, ThorInput.BTN_MODE, 0) }, ExtEngine.TAP_MS)
+        }
+
+        // b19 (ps-F17): Test it composed, in front (resumed, its window focused) and on the controller's screen: the Thor keeps
+        // a focused window per screen, so a page on top must not take the Home of a game played on the bottom one. The
+        // volatile reads first: the screen is asked only while the page is up
+        override fun testHolds(): Boolean = PadTest.active && PadTest.inFront && controllerDisplay() == PadTest.display
+        override fun testPress(b: ThorButton, down: Boolean, src: Int) = PadTest.onHeld(b, down, src)
     }
+    /** b19 (MORE-D21): the combo list of [modifier] held on controller [src]: its title, cells and footer; null = nothing to
+     *  list. One builder: holding the button ([buttonHost]'s showChordHint) and Hints & pop-ups' Show it ([postPreview]) both
+     *  read it, so the preview never differs from the real list. No gate and no side effect here: the Off choice and the
+     *  tour's step stay in showChordHint. */
+    private fun comboList(modifier: ThorButton, chords: List<Binding>, src: Int): HeldWords.Lines? {
+        // dev build 17 (theme G, D4): on a controller with no Back / AYN of its own, Home + Select / Start stand for them —
+        // not where the user has a combo of their own (it wins, [ButtonEngine.standDown])
+        val look = ButtonNames.lookOfSrc(src)
+        val extra = if (modifier == ThorButton.HOME) ExtPadsCtl.standInsOf(this, src)?.let { si ->
+            Say.standInLines(ExtRules.StandIns(si.back && chords.none { it.trigger.button == ThorButton.SELECT },
+                si.ayn && chords.none { it.trigger.button == ThorButton.START }), look, aynJob()) }.orEmpty() else emptyList()
+        if (chords.isEmpty() && extra.isEmpty()) return null
+        // In words: where the controller is and how it behaves (several ways to route it —
+        // the hint says which one is on), then the combos, the button in bold
+        // 1.3.2: the AYN button's own hold fires while you read its combos — so the list says what it does
+        // build 18 (E6, MORE-21): actions by their titles, as everywhere else ("Game controls", not "game controls")
+        val holdLine = if (modifier == ThorButton.AYN) AppSettings.aynHold?.let { listOf("keep holding" to chordLabel(it)) }.orEmpty() else emptyList()
+        // build 18 (E12, ps-F14): holding a connected controller's Home, what its own Back / AYN-job buttons do alone (a
+        // DualSense player never found Recent apps on a touchpad double-click) — a line under the list, at its width
+        val also = if (modifier == ThorButton.HOME && src > 0) HeldWords.also(ownButtons(), look)?.let { listOf("Also" to it) }.orEmpty()
+            else emptyList()
+        // dev build 15 (WP2, plan F-b): in the names of the controller holding it ("Keep PS held… △") — FocusCue draws
+        // PlayStation's marks from the text. Build 18 (E12, MORE-D32): what to do first, then where the controller is
+        return HeldWords.Lines(listOf(Say.keepHeld(modifier, look), controllerWhere()),
+            chords.map { it.trigger.button.spoken(look) to chordLabel(it) } + extra + holdLine, footer = also)
+    }
+
+    /** b19 (MORE-D21): Show it on Hints & pop-ups ([showPreview]): [which] hint from its one builder, on screen [display] (the
+     *  Hub's), under its own token ([Held.PREVIEW]): it sits where the real one sits ([CueSpot]), never takes the focus or a
+     *  touch, and a new one replaces it. No tour step and no Off gate: the page draws the button only while the hint is on.
+     *  Main thread. */
+    private fun postPreview(which: HintPreview, display: Int) {
+        val o = CueOrigin.Window(display)
+        when (which) {
+            // the real one's style, place and time (Held.RECENTS)
+            HintPreview.RECENTS -> HeldWords.recents(AppSettings.recentsHint, ButtonNames.handLook)?.let {
+                Overlays.held(Held.PREVIEW, o, emptyList(), it, at = AppSettings.recentsHintAt, compact = true, limitMs = Held.RECENTS.maxMs) }
+            HintPreview.COMBOS -> {
+                // what holding Home here would list (ButtonEngine's hint: the app with the controller), in the hand's names;
+                // Back's or AYN's list when Home has none
+                val src = ButtonNames.handSrc
+                val all = ControlsStore.effective(buttonHost.currentApp())
+                val l = HeldWords.listButton(all, standIns = ExtPadsCtl.standInsOf(this, src) != null)
+                    ?.let { m -> comboList(m, all.filter { it.trigger.modifier == m }, src) }
+                if (l == null) { Overlays.pill("Nothing to show: you have no combos", o); return }
+                // shown at once, for its reading time (a held list stays while held: here nobody holds it)
+                val words = CueContent.Table(l.title, l.cells, footer = l.footer).words()
+                Overlays.held(Held.PREVIEW, o, l.title, l.cells, footer = l.footer,
+                    limitMs = CueTiming.readMs(words).coerceAtLeast(HeldWords.PREVIEW_MIN_MS))
+            }
+        }
+    }
+
     /** dev build 17 (theme G): what a controller's AYN button's tap does, as the combo list says actions. */
     private fun aynJob(): String = if (AppSettings.aynButtonOurs) chordLabel(AppSettings.aynTap) else ThorAction.AYN_DRAWER.title
     private val analogShield by lazy { AnalogShield(this) }
@@ -3607,17 +4141,59 @@ class ForegroundAppService : AccessibilityService() {
         ControlsStore.active().filter { it.trigger.modifier == null && it.trigger.button == ThorButton.BACK && it.action != ThorAction.BACK }
             .map { HeldWords.Own(ThorButton.BACK, it.trigger.press, chordLabel(it)) } +
             listOfNotNull(HeldWords.Own(ThorButton.AYN, Press.TAP, aynJob()),
-                AppSettings.aynHold?.takeIf { AppSettings.aynButtonOurs }?.let { HeldWords.Own(ThorButton.AYN, Press.HOLD, chordLabel(it)) })
+                AppSettings.aynHold?.takeIf { AppSettings.aynButtonOurs }?.let { HeldWords.Own(ThorButton.AYN, Press.HOLD, chordLabel(it)) },
+                // 1.5-beta2 (Q8, GitHub #51): its double tap, when one is set
+                AppSettings.aynDouble?.takeIf { AppSettings.aynButtonOurs }?.let { HeldWords.Own(ThorButton.AYN, Press.DOUBLE_TAP, chordLabel(it)) })
 
     /** Where the controller is now, in words — build 18 (E12, V16): the strip's and the combos sheet's mode words
      *  ([Say.controllerMode]); the combos that move it are in the list itself. */
     private fun controllerWhere(d: Int = controllerDisplay()) =
         HeldWords.where(screenName(d), AppSettings.focusLockEnabled, AppSettings.focusSticky, AppSettings.focusLockTop)
 
-    /** Build 18 (E12): the held list's words — pure (OverlayRulesTest). */
+    /** Build 18 (E12): the held list's words — pure (OverlayRulesTest). b19 (MORE-D21): and the Recents hint's (HintPreviewTest). */
     internal object HeldWords {
         /** A press of a controller's own Back / AYN-job button with no modifier, and what it does. */
         class Own(val button: ThorButton, val press: Press, val what: String)
+
+        /** b19 (MORE-D21): a combo list's words: its [title] lines, its (button, action) [cells] and its [footer] ("Also"). */
+        data class Lines(val title: List<String>, val cells: List<Pair<String, String>>, val footer: List<Pair<String, String>>)
+
+        /** b19 (MORE-D21): Show it's combo list stays at least this long (a short list's reading time is 1.5 s). */
+        const val PREVIEW_MIN_MS = 3000L
+
+        /** b19 (MORE-D21): the list Show it shows: Home's, as holding Home would show it (its combos, or the stand-in lines of
+         *  a controller with no Back / AYN of its own: [standIns]), else Back's, else AYN's; null = no list at all. */
+        fun listButton(bindings: List<Binding>, standIns: Boolean): ThorButton? {
+            fun has(m: ThorButton) = bindings.any { it.trigger.modifier == m }
+            return when {
+                has(ThorButton.HOME) || standIns -> ThorButton.HOME
+                has(ThorButton.BACK) -> ThorButton.BACK
+                has(ThorButton.AYN) -> ThorButton.AYN
+                else -> null
+            }
+        }
+
+        /** b19 (MORE-D21): the Recents hint's cells, built here for the real one ([enterRecents]) and for Show it
+         *  ([postPreview]): the two never differ. [mode] = [AppSettings.recentsHint]: 0 words, 1 symbols, 2 off (null). [look]:
+         *  the names of the controller in hand. */
+        fun recents(mode: Int, look: PadLook): List<Pair<String, String>>? {
+            fun m(b: ThorButton) = Say.menu(b, look)   // the button for that meaning, in the hand's names (dev build 15, WP2; 17: Say)
+            // build 18 (E4, pF19 / MORE-11): Select and Start named on the controller in hand ("Create" / "Options" on a DualSense) —
+            // plain names, a cue is View text
+            val select = Say.btn(ThorButton.SELECT, look); val start = Say.btn(ThorButton.START, look)
+            // build 18 (E8, ps-F3): X closes a card too (a Thor habit) — the hint names both; close all takes two presses
+            val close = "${m(ThorButton.Y)} / ${m(ThorButton.X)}"
+            // 1.3 (GitHub #13): full, compact (one slim line of symbols, no title) or off; top centre or a corner
+            return when (mode) {
+                2 -> null
+                // build 18 (E4 addendum, MORE-D19): the symbols are drawn icons (FocusCue: CueIcons), never a typed ↗ × ⌂ ↩
+                1 -> listOf("◀ ▶" to "", m(ThorButton.A) to CueIcons.OPEN.toString(), close to CueIcons.CLOSE.toString(),
+                    "$select ×2" to CueIcons.CLOSE_ALL.toString(), start to CueIcons.HOME.toString(), m(ThorButton.B) to CueIcons.BACK.toString())
+                // 1.3.2: one line with words, at the very top (a titled two-row card covered the middle card)
+                else -> listOf("Recent apps" to "", "◀ ▶" to "browse", m(ThorButton.A) to "open", close to "close",
+                    select to "twice: close all", start to "home", m(ThorButton.B) to "back")
+            }
+        }
 
         /** Which ones a short line keeps first: Back twice (Recent apps), Back held, the AYN-job tap, then the rest. */
         private val RANK = listOf(ThorButton.BACK to Press.DOUBLE_TAP, ThorButton.BACK to Press.HOLD, ThorButton.AYN to Press.TAP,
@@ -3768,7 +4344,8 @@ class ForegroundAppService : AccessibilityService() {
             handler.post {
                 Log.i(TAG, "controller follows ${move.pkg} to ${move.toDisplay}")
                 if (AppSettings.focusSticky) {
-                    // "Stays where sent": as if sent there — the lock moves with it
+                    // "Stays where sent": as if sent there — the lock moves with it (b19: and the Hub's lend ends, as for a send)
+                    lockChosen()
                     AppSettings.setFocusLock(true, top = move.toDisplay == PRIMARY_DISPLAY)
                     applyFocusLock(announce = false)
                 } else focusDisplay(move.toDisplay) { syncFocusModel() }
@@ -3973,6 +4550,8 @@ class ForegroundAppService : AccessibilityService() {
         for ((displayId, pkg) in finalState) {
             if (Shell.isPkg(pkg)) displayApps[displayId] = pkg!!
             else displayApps.remove(displayId)
+            // b19 (R1): the app this move left there, which Quickstep did not see come forward (Recents' B, [movedOnto])
+            if (Shell.isPkg(pkg)) movedOnto[displayId] = pkg!! else movedOnto.remove(displayId)
         }
         followMove?.takeIf { it in clean }?.let { follow(it) }
         // not following: the controller where it belongs — the vacated screen's home took the focus on a send
@@ -4021,6 +4600,9 @@ class ForegroundAppService : AccessibilityService() {
 
     private fun launchOnDisplay(pkg: String, targetDisplayId: Int, aggressive: Boolean, fromDisplay: Int? = null,
                                 reopenOk: Boolean = false) {
+        // b19 review (R1): every Wayfinder move of an app onto a screen goes through here (a swap or send, a route, a pair,
+        // Open, the restore after a restart): Quickstep may not have seen it come forward there ([movedOnto], Recents' B)
+        if (Shell.isPkg(pkg)) movedOnto[targetDisplayId] = pkg
         val shizukuReady = ShizukuHelper.isAvailable() && ShizukuHelper.hasPermission()
         // 1.3.2: apps that break after a live move (Firefox) are reopened on the other screen instead — only for
         // the user's own move of a running app, with a real force-stop (never in retries, routing, Open, pairs)

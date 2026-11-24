@@ -104,4 +104,56 @@ internal object TokenArgb {
 
     /** An Int colour (AppSettings) as this object's Long. */
     fun of(argb: Int): Long = argb.toLong() and 0xFFFFFFFFL
+
+    /** 1.5-beta2 (GitHub #134): the face buttons' built-in colours, slot 0-3 = the Xbox-way letter A B X Y — an Xbox pad's
+     *  (green, red, blue, yellow) and PlayStation's marks' (1.4, GitHub #50: ✕ ○ □ △ in the same slots). Were ControlGlyphs'
+     *  FACE / PS_FACE literals, unchanged. */
+    val FACE_XBOX = listOf(0xFF34C759, 0xFFFF453A, 0xFF0A84FF, 0xFFFFD60A)
+    val FACE_PS = listOf(0xFF6F9FE6, 0xFFFF5A5F, 0xFFE38AC8, 0xFF3DDC97)
+
+    /** 1.5-beta2 (GitHub #134): the colour of face slot [slot] (0-3, [FACE_XBOX]'s order) as Button colours says — [mode]
+     *  [ButtonColours.COLOURED] (or anything unknown): the built-in one ([ps]: PlayStation's); [ButtonColours.ONE]: null, the
+     *  badge takes the other buttons' neutral look; [ButtonColours.OWN]: the pick in [own] (made opaque), else the built-in. */
+    fun faceColour(slot: Int, ps: Boolean, mode: Int, own: List<Long?>): Long? {
+        val built = (if (ps) FACE_PS else FACE_XBOX).getOrNull(slot) ?: return null
+        return when (mode) {
+            ButtonColours.ONE -> null
+            ButtonColours.OWN -> own.getOrNull(slot)?.let { it or 0xFF000000 } ?: built
+            else -> built
+        }
+    }
+
+    /** 1.5-beta2 (GitHub #134): the least contrast a picked colour's rim needs against the card to be its badge's edge (the
+     *  built-in colours all have more: the yellow Y on Light is about 1.3); under it the badge takes the neutral rim. */
+    const val FACE_RIM_MIN = 1.2
+
+    /** 1.5-beta2 (GitHub #134): a picked colour [c] keeps its own rim on card [under] ([FACE_RIM_MIN]). */
+    fun faceRimReads(c: Long, under: Long): Boolean = contrast(c, under) >= FACE_RIM_MIN
+
+    /** 1.5-beta2 (GitHub #134, review F1): the least contrast a picked colour's letter needs on a controller drawing's face
+     *  disc (WCAG's 3 : 1 for large text and shapes); under it the drawing's own ink is used. */
+    const val FACE_LETTER_MIN = 3.0
+
+    /** 1.5-beta2 (GitHub #134, review F1): letter colour [letter] reads on the drawing's face disc [disc]. */
+    fun faceLetterReads(letter: Long, disc: Long): Boolean = contrast(letter, disc) >= FACE_LETTER_MIN
+}
+
+/**
+ * 1.5-beta2 (GitHub #134): Appearance's "Button colours" — the face buttons' badges [COLOURED] (the default, as before), in
+ * [ONE] colour (the other buttons' neutral chip and the text colour) or in [OWN] colours: [own] = the picks for A B X Y (the
+ * Xbox-way letters; a PlayStation mark takes its letter's slot), null = as Coloured. A colour goes with its letter or mark,
+ * wherever the names put it. A data class: the theme ([GlassColors.faces]) compares it by value.
+ */
+data class ButtonColours(val mode: Int = COLOURED, val own: List<Long?> = NONE) {
+    /** Slot [slot]'s colour ([TokenArgb.faceColour]); null = One colour. */
+    fun colour(slot: Int, ps: Boolean): Long? = TokenArgb.faceColour(slot, ps, mode, own)
+    /** Slot [slot] has a colour of the user's own (only then may its rim give way: [TokenArgb.faceRimReads]). */
+    fun picked(slot: Int): Boolean = mode == OWN && own.getOrNull(slot) != null
+
+    companion object {
+        const val COLOURED = 0
+        const val ONE = 1
+        const val OWN = 2
+        val NONE: List<Long?> = listOf(null, null, null, null)
+    }
 }

@@ -7,7 +7,8 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import kotlin.math.abs
 
-/** Where the keyboard's output goes (the IME's InputConnection). */
+/** Where the keyboard's output goes (the IME's InputConnection: [FieldSink], 1.5-beta2 (GitHub #129): never asked on the
+ *  main thread). */
 interface KeySink {
     fun commit(text: String)
     fun deleteBackward()
@@ -24,6 +25,9 @@ interface KeySink {
     fun space() {
         if (KeyboardRules.doubleSpace(textBeforeCursor(2))) { deleteBackward(); commit(". ") } else commit(" ")
     }
+    /** 1.5-beta2 (GitHub #129, review): the field has not had all that was sent or asked yet (a held Backspace waits for it,
+     *  [KeyboardController.repeatReady]). A sink that sends at once is never busy. */
+    fun busy(): Boolean = false
 }
 
 enum class KeyKind { CHAR, SHIFT, BACKSPACE, SPACE, ENTER, GLOBE, TO_SYMBOLS, TO_SYMBOLS_2, TO_LETTERS, CLIPBOARD, TO_EMOJI, EMOJI_NEXT }
@@ -65,6 +69,7 @@ internal fun enterActionOf(imeOptions: Int): EnterAction =
  * A = press, B = close, X = backspace, Y = space, L2 = shift, R2 = symbols,
  * L1/R1 = jump a word, Start = enter, Select = next language.
  * Holding A on a key opens its accents (then left/right + A picks one).
+ * 1.5-beta2 (Q2, GitHub D#127): L2 held = Shift held ([shiftDown] / [shiftUp]); a tap is Shift as before.
  */
 class KeyboardController(private val sink: () -> KeySink?) {
 
@@ -100,6 +105,12 @@ class KeyboardController(private val sink: () -> KeySink?) {
     var canMove: () -> Boolean = { false }
     /** A lit bar button pressed with A: the host does what its tap does (the legend: [toggleHelp] here). */
     var onBar: ((BarKey) -> Unit)? = null
+    /** 1.5-beta2 (Q7, GitHub D#125 / #106): Keyboard's "Number row above the letters" is on — the host says
+     *  ([KeyboardSettings.numberRow]). */
+    var numberRowOn: () -> Boolean = { false }
+    /** Q7: the letters page has the number row as its row 0 (its letters start at row 1). The other pages never: the
+     *  symbols page's top row already is the digits. */
+    fun numberRowShown(): Boolean = page == Page.LETTERS && numberRowOn()
     /** The top bar's buttons, in their order on it. */
     fun barKeys(): List<BarKey> = if (canMove()) listOf(BarKey.BUTTONS, BarKey.MOVE, BarKey.HIDE) else listOf(BarKey.BUTTONS, BarKey.HIDE)
     /** The lit bar button; null = a key (or nothing) is lit. */
@@ -150,6 +161,8 @@ class KeyboardController(private val sink: () -> KeySink?) {
         return when (page) {
             Page.LETTERS -> {
                 val r = l.rows
+                // Q7: the number row (the symbols page's digits) above the letters while Keyboard's switch is on
+                (if (numberRowShown()) listOf(chars(SYMBOLS_1[0])) else emptyList()) +
                 listOf(chars(r[0]), chars(r[1])) +
                     listOf(
                         (if (l.cased) listOf(KeySpec(KeyKind.SHIFT, weight = 1.5f)) else emptyList()) +
@@ -172,27 +185,36 @@ class KeyboardController(private val sink: () -> KeySink?) {
 
     /** What a CHAR key types right now (shift + the layout's casing rules, e.g. Turkish i → İ). */
     fun display(key: KeySpec): String =
-        if (key.kind == KeyKind.CHAR && page == Page.LETTERS && shift != Shift.OFF) upper(key.text) else key.text
+        if (key.kind == KeyKind.CHAR && page == Page.LETTERS && shiftOn()) upper(key.text) else key.text
+
+    /** The letters are capitals now: Shift on, or held (Q2: L2 down, [shiftHeld]). The Shift key is drawn on too. */
+    fun shiftOn(): Boolean = shift != Shift.OFF || shiftHeld
 
     // ── pressing ─────────────────────────────────────────────────────────
     /** 1.3: Space held and slid — the text cursor moves ([delta] characters). */
     fun slideCursor(delta: Int) { if (delta != 0) sink()?.moveCursor(delta) }
 
+    /** 1.5-beta2 (GitHub #129, review): a held key's next repeat may go (Backspace held, KeyboardUi): only once the field has
+     *  had the previous one. The typing goes out on its own thread now, so without this a slow field (Chrome loading a page)
+     *  queued 18 deletes a second, and the text went on disappearing after the key was let go. */
+    fun repeatReady(): Boolean = sink()?.busy() != true
+
     fun press(key: KeySpec) {
         val s = sink() ?: return
+        if (shiftHeld && key.kind != KeyKind.SHIFT) shiftUsed = true          // Q2: L2's release is a hold's then
         when (key.kind) {
             KeyKind.CHAR -> {
                 s.commit(display(key))
                 if (shift == Shift.ONCE) shift = Shift.OFF
                 // Punctuation ends a symbols run, like every phone keyboard.
-                if (page != Page.LETTERS && key.text in listOf("'", "\"") ) page = Page.LETTERS
+                if (page != Page.LETTERS && key.text in listOf("'", "\"") ) toPage(Page.LETTERS)     // 1.5-beta2 (Q7, review): the lit key kept (toPage)
                 afterEdit()
             }
             KeyKind.SPACE -> {
                 // Double space → ". " (and a capital next) — b18p (GitHub #108): the sink's, which may ask its field off the
                 // main thread
                 s.space()
-                if (page != Page.LETTERS && page != Page.EMOJI) page = Page.LETTERS
+                if (page != Page.LETTERS && page != Page.EMOJI) toPage(Page.LETTERS)     // 1.5-beta2 (Q7, review): the lit key kept (toPage)
                 afterEdit()
             }
             KeyKind.BACKSPACE -> { s.deleteBackward(); afterEdit() }
@@ -203,11 +225,11 @@ class KeyboardController(private val sink: () -> KeySink?) {
                 Shift.LOCKED -> Shift.OFF
             }.also { lastShiftTap = System.currentTimeMillis(); shiftTaps++ }
             KeyKind.GLOBE -> nextLayout()
-            KeyKind.TO_SYMBOLS -> { page = Page.SYMBOLS; clampFocus() }
-            KeyKind.TO_SYMBOLS_2 -> { page = Page.SYMBOLS_2; clampFocus() }
-            KeyKind.TO_LETTERS -> { page = Page.LETTERS; clampFocus() }
+            KeyKind.TO_SYMBOLS -> toPage(Page.SYMBOLS)
+            KeyKind.TO_SYMBOLS_2 -> toPage(Page.SYMBOLS_2)
+            KeyKind.TO_LETTERS -> toPage(Page.LETTERS)
             // 1.3.2 (GitHub #45): the last copied texts in the strip above — pick one to paste it
-            KeyKind.TO_EMOJI -> { page = Page.EMOJI; clampFocus() }
+            KeyKind.TO_EMOJI -> toPage(Page.EMOJI)
             KeyKind.EMOJI_NEXT -> { emojiGroup = (emojiGroup + 1) % EMOJI_GROUPS.size; clampFocus() }
             KeyKind.CLIPBOARD -> {
                 ClipHistory.read()
@@ -217,10 +239,34 @@ class KeyboardController(private val sink: () -> KeySink?) {
     }
     private var lastShiftTap = 0L
 
+    /** Q7: another page, the lit key kept by its row counted from the bottom ([clampFocus]: the number row's letters page
+     *  has a row more than the others). */
+    private fun toPage(p: Page) { val n = rows().size; page = p; clampFocus(n) }
+
     fun nextLayout() {
+        val n = rows().size
         if (layouts.size > 1) layoutIndex = (layoutIndex + 1) % layouts.size
-        page = Page.LETTERS; clampFocus()
+        page = Page.LETTERS; clampFocus(n)
         onLayoutChanged?.invoke(layout.id)
+    }
+
+    // ── 1.5-beta2 (Q2, GitHub D#127): L2 held = Shift held, while the controller drives the keys ──
+    /** L2 is down: the letters are capitals until it comes up ([shiftUp]), the Shift key drawn on ([shiftOn]). */
+    var shiftHeld by mutableStateOf(false)
+        private set
+    private var shiftDownAt = 0L
+    /** A key typed while L2 is down: its release is a hold's, however short. */
+    private var shiftUsed = false
+
+    /** L2 pressed at [at] (the event's uptime ms). Nothing changes yet: a tap is told at the release. */
+    fun shiftDown(at: Long) { shiftHeld = true; shiftDownAt = at; shiftUsed = false }
+
+    /** L2 let go at [at]. A tap ([KeyboardRules.shiftTap]) is the Shift key's (once, twice quickly = caps lock, again =
+     *  off); a hold leaves Shift as it is: the letters typed meanwhile were capitals. */
+    fun shiftUp(at: Long) {
+        if (!shiftHeld) return
+        shiftHeld = false
+        if (KeyboardRules.shiftTap(at - shiftDownAt, shiftUsed)) press(KeySpec(KeyKind.SHIFT))
     }
     var onLayoutChanged: ((String) -> Unit)? = null
 
@@ -240,8 +286,11 @@ class KeyboardController(private val sink: () -> KeySink?) {
     private var shiftTaps = 0
 
     fun reset() {
-        page = Page.LETTERS; popup = null
-        if (shift == Shift.LOCKED) shift = Shift.OFF
+        toPage(Page.LETTERS); popup = null                                  // 1.5-beta2 (Q7, review): the lit key kept (toPage)
+        shiftHeld = false                                                   // Q2: a new field, L2's release not ours
+        // 1.5-beta2 (GitHub #129, review): off, not the previous field's: the new field's caps answer comes a moment later
+        // (asked off the main thread), and a letter typed before it took the old field's Shift
+        shift = Shift.OFF
         afterEdit()
     }
 
@@ -251,9 +300,12 @@ class KeyboardController(private val sink: () -> KeySink?) {
     fun alternates(key: KeySpec, row: Int = -1, col: Int = -1): List<String> {
         if (key.kind != KeyKind.CHAR) return emptyList()
         val letters = page == Page.LETTERS
-        val alts = layout.alternatesFor(key.text, if (letters) row else -1, col)
-        return if (letters && shift != Shift.OFF) alts.map { upper(it) } else alts
+        val alts = layout.alternatesFor(key.text, if (letters) digitRow(row) else -1, col)
+        return if (letters && shiftOn()) alts.map { upper(it) } else alts
     }
+
+    /** Q7: [row] for the top row's digit ([topRowDigit]) — none (-1) while the number row shows: the digits are on it. */
+    private fun digitRow(row: Int): Int = if (numberRowShown()) -1 else row
 
     /** Upper case for this layout — but ß stays ß (no capital in normal use; "SS" is two letters). */
     private fun upper(s: String) = if (s == "ß") s else s.uppercase(layout.locale)
@@ -261,8 +313,8 @@ class KeyboardController(private val sink: () -> KeySink?) {
     /** The small hint on [key] at ([row], [col]) of the letters page (KB4: the top row reads 1…0 by position). */
     fun hint(key: KeySpec, row: Int, col: Int): String? {
         if (key.kind != KeyKind.CHAR || page != Page.LETTERS) return null
-        val h = layout.hintFor(key.text, row, col) ?: return null
-        return if (shift != Shift.OFF) upper(h) else h
+        val h = layout.hintFor(key.text, digitRow(row), col) ?: return null
+        return if (shiftOn()) upper(h) else h
     }
 
     fun openPopup(key: KeySpec, row: Int = -1, col: Int = -1): Boolean {
@@ -275,12 +327,17 @@ class KeyboardController(private val sink: () -> KeySink?) {
     fun choosePopup(option: String?) {
         popup = null
         if (option == null) return
+        if (shiftHeld) shiftUsed = true                                     // Q2
         sink()?.commit(option)
         if (shift == Shift.ONCE) shift = Shift.OFF
         afterEdit()
     }
 
     fun movePopup(delta: Int) { popup?.let { popupIndex = (popupIndex + delta).coerceIn(0, it.second.lastIndex) } }
+
+    /** 1.5-beta2 (Q6, GitHub D#127): the held key let go — the lit option is typed (the first one if the finger didn't
+     *  slide: the top row's digit, else the key's hint). */
+    fun chooseLit() { popup?.let { (_, opts) -> choosePopup(opts.getOrNull(popupIndex)) } }
 
     // ── controller ───────────────────────────────────────────────────────
     /** D-pad / stick step. dx, dy ∈ {-1, 0, 1}. */
@@ -316,6 +373,9 @@ class KeyboardController(private val sink: () -> KeySink?) {
     private var armed: Pair<Page, Pair<Int, Int>>? = null
     fun controllerArm(downAt: Long) {
         armed = null
+        // Q2: A went down with L2 held — its key is a capital even if L2 comes up first (a roll: L2, A, L2 up, A up)
+        armedCaps = shiftHeld
+        if (shiftHeld) shiftUsed = true
         if (popup != null) return
         // the focus at downAt = what the first move made after it left behind (else the focus now)
         val m = moves.firstOrNull { it.first > downAt }
@@ -332,8 +392,11 @@ class KeyboardController(private val sink: () -> KeySink?) {
         (at ?: focus)?.takeIf { it.first == BAR }?.let { f -> barKeys().getOrNull(f.second)?.let { pressBar(it) }; return }
         val k = at?.let { rows().getOrNull(it.first)?.getOrNull(it.second) }
             ?: focusedKey() ?: run { focus = defaultFocus(rows()); return }
-        press(k)
+        val caps = armedCaps; armedCaps = false
+        if (caps && !shiftHeld) { shiftHeld = true; press(k); shiftHeld = false } else press(k)
     }
+    /** Q2: L2 was held when A went down ([controllerArm]). */
+    private var armedCaps = false
 
     fun controllerLongPress() { val (r, c) = focus ?: return; focusedKey()?.let { openPopup(it, r, c) } }
 
@@ -344,25 +407,42 @@ class KeyboardController(private val sink: () -> KeySink?) {
         if (focus == null && popup == null) focus = defaultFocus(rows())
     }
 
-    fun dismissFocus() { focus = null; popup = null; padActive = false; helpOpen = false }
+    // Q2: the keys closed with L2 down — its release goes nowhere, so Shift held ends here
+    fun dismissFocus() { focus = null; popup = null; padActive = false; helpOpen = false; shiftHeld = false }
 
-    private fun defaultFocus(grid: List<List<KeySpec>>): Pair<Int, Int> =
-        (grid.size / 2 - 1).coerceAtLeast(0).let { r -> r to grid[r].size / 2 }
+    /** The middle key of the middle letter row (Q7: the number row above doesn't move it). */
+    private fun defaultFocus(grid: List<List<KeySpec>>): Pair<Int, Int> {
+        val top = if (numberRowShown()) 1 else 0
+        return ((grid.size - top) / 2 - 1).coerceAtLeast(0).let { it + top }.coerceAtMost(grid.lastIndex).let { r -> r to grid[r].size / 2 }
+    }
 
-    private fun clampFocus() {
+    /** The lit key kept in the grid shown now. [fromRows]: the rows the page had before a change (Q7) — a row keeps its
+     *  place counted from the bottom, so the bottom row stays the bottom row (and Shift's row Shift's) between the letters
+     *  with the number row and a page without one. The same row count: as before. */
+    private fun clampFocus(fromRows: Int = rows().size) {
         val f = focus ?: return
         if (f.first == BAR) { focus = BAR to f.second.coerceIn(0, barKeys().lastIndex); return }   // b18n: the bar stays lit
         val grid = rows()
-        val r = f.first.coerceIn(0, grid.lastIndex)
+        val r = (f.first + grid.size - fromRows).coerceIn(0, grid.lastIndex)
         focus = r to f.second.coerceIn(0, grid[r].lastIndex)
     }
 
-    /** Column in [to] whose centre is closest to key [c] of [from] (rows differ in width). */
-    private fun nearestColumn(from: List<KeySpec>, c: Int, to: List<KeySpec>): Int {
-        fun centres(row: List<KeySpec>): List<Float> {
-            val total = row.sumOf { it.weight.toDouble() }.toFloat()
+    /** Column in [to] whose centre is closest to key [c] of [from] (rows differ in width). b19 (H1a): the one rule
+     *  ([WeightedRows.nearest]), shared with Keyboard & mouse's controller. */
+    private fun nearestColumn(from: List<KeySpec>, c: Int, to: List<KeySpec>): Int =
+        WeightedRows.nearest(from.map { it.weight }, c, to.map { it.weight })
+}
+
+/** b19 (H1a): moving up or down between two rows of keys of different widths (pure): Wayfinder Keyboard's and Keyboard &
+ *  mouse's controller move the same way (KeyboardMoveTest, DeckNavTest). */
+object WeightedRows {
+    /** The cell of the row weighted [to] whose centre is closest to cell [c] of the row weighted [from] (each row spread over
+     *  the same width, a cell as wide as its weight). */
+    fun nearest(from: List<Float>, c: Int, to: List<Float>): Int {
+        fun centres(row: List<Float>): List<Float> {
+            val total = row.sumOf { it.toDouble() }.toFloat()
             var x = 0f
-            return row.map { k -> val mid = (x + k.weight / 2f) / total; x += k.weight; mid }
+            return row.map { w -> val mid = (x + w / 2f) / total; x += w; mid }
         }
         val target = centres(from)[c.coerceIn(0, from.lastIndex)]
         return centres(to).withIndex().minByOrNull { abs(it.value - target) }!!.index
@@ -388,24 +468,68 @@ internal object KeyboardRules {
     /** Double space → ". ": the two characters before the cursor are a letter or digit, then a space. */
     fun doubleSpace(before: CharSequence): Boolean = before.length == 2 && before[1] == ' ' && before[0].isLetterOrDigit()
 
-    /**
-     * b18p (GitHub #108): the keyboard sends to and asks the field off the main thread — for a field of Wayfinder's own process
-     * only ([fieldPkg], the field's EditorInfo package, is [ownPkg]). There a web page (the Guide) answers through the main
-     * thread the keyboard would be waiting on: each question ran out Android's 2 s limit, several a key (one key froze
-     * Wayfinder ~12 s and raised "not responding", on a device). Any other app's field answers from its own process: as before.
-     */
-    fun offMain(fieldPkg: String?, ownPkg: String): Boolean = fieldPkg != null && fieldPkg == ownPkg
+    // b18p (GitHub #108) sent only a field of Wayfinder's own process off the main thread (offMain). 1.5-beta2 (GitHub #129):
+    // every app's field is, so the rule is gone: [FieldSink] sends and asks on the typing thread for all of them.
 
-    /**
-     * KB5: where the app's content may end, in px from the top of the strip's window (onComputeInsets'
-     * contentTopInsets): the window's full height minus the strip's measured height — never below the strip's own top
-     * ([stripTop]: something under the strip, such as AYN's keyboard-mode bar, would put the app under the strip) and only
-     * when it gives the app more room than [current]. null = keep [current]; unmeasured (≤ 0 / -1) = null.
-     */
-    fun stripInsetTop(windowH: Int, stripH: Int, stripTop: Int, current: Int): Int? {
-        if (windowH <= 0 || stripH <= 0 || stripTop < 0) return null
-        return minOf(windowH - stripH, stripTop).takeIf { it > current }
-    }
+    /** b19 (1.5-beta1 device pass F1): the keys go to the other screen when the keyboard is asked for. [moved], the move
+     *  button's choice for this field, wins on either screen (true: there; false: the field's screen). No move yet:
+     *  "Where it opens" ([placementOther] = Bottom screen) for a field on the top screen. Never without [otherScreen]. */
+    fun keysOnOther(moved: Boolean?, placementOther: Boolean, fieldOnTop: Boolean, otherScreen: Boolean): Boolean =
+        otherScreen && (moved ?: (placementOther && fieldOnTop))
+
+    /** 1.5-beta2 (GitHub #144): the screen the keys can go to besides the field's ([other]: the first other display), none
+     *  while the Thor is [docked] on a TV or monitor. Docked, the TV shows the top screen and the bottom one is dark (AYN's
+     *  black cover, or Wayfinder's dock blank) or is the TV itself: "Bottom screen" put the keys where nobody could see or
+     *  touch them. So docked, the keys open on the field's screen (the one the TV shows) and "Move" isn't offered. */
+    fun keysOtherScreen(docked: Boolean, other: Int?): Int? = if (docked) null else other
+
+    /** 1.5-beta2 (Q2): a hold of a controller button on the keys (ms) — A's accents ([ThorKeyboardService]), L2's Shift
+     *  (here and on Keyboard & mouse, [app.wayfinder.deck.DeckState.shiftLet]). */
+    const val HOLD_MS = 450L
+
+    /** Q2 (GitHub D#127): L2 let go [heldMs] after its press, [used] = a key typed meanwhile. A tap (today's Shift: once,
+     *  twice quickly = caps lock) is a press shorter than [HOLD_MS] with nothing typed; anything else was Shift held. */
+    fun shiftTap(heldMs: Long, used: Boolean): Boolean = !used && heldMs < HOLD_MS
+
+    /** 1.5-beta2 (Q6, GitHub D#127): a key held, its options open, the finger slid [dx] px from where it went down: the option
+     *  lit of [count], one more each [step] px the way the options run ([rtl]: right to left), the first one where it was
+     *  held (and back past it). */
+    fun slidePick(dx: Float, step: Float, count: Int, rtl: Boolean = false): Int =
+        if (count <= 0 || step <= 0f) 0 else ((if (rtl) -dx else dx) / step).toInt().coerceIn(0, count - 1)
+
+    /** 1.5-beta2 (big test t7): a start of the input is a new field (the letters page, Shift off, the lit row kept:
+     *  [KeyboardController.reset]) unless the app restarted the same box ([sameBox]: a restart, [FieldSink.sameEditor])
+     *  while its keys stayed up. [keysClosed]: the keys closed since they last showed. Compose gives every box of a window
+     *  one view and the same editor, so a box of Wayfinder's own opened after another came as a restart of the same box
+     *  and kept the last box's page (symbols stayed symbols). Chrome's restart of the box being typed in (GitHub #129)
+     *  keeps its keys up, and its page with them. */
+    fun newField(sameBox: Boolean, keysClosed: Boolean): Boolean = !sameBox || keysClosed
+
+    /** 1.5-beta2 (big test t8): the field's input type asks for text (any class but none). */
+    fun typesText(inputType: Int?): Boolean =
+        inputType != null && (inputType and android.text.InputType.TYPE_MASK_CLASS) != android.text.InputType.TYPE_NULL
+
+    /** 1.5-beta2 (big test t8): the app's box went while the keys stay up: the input starts again on nothing to type
+     *  into ([nowText] false) on the same view of the same app ([sameView]; review: another view that takes typing itself,
+     *  a terminal's or a remote desktop's, is not a box that went) right after a box ([wasText]), and the keys are on the other
+     *  screen with no keyboard window on the box's screen ([noWindowHere]). An app hides the keyboard through its window's
+     *  insets (Compose does), which see only a keyboard WINDOW on that screen: with Keyboard's "Keep a thin bar" off there
+     *  is none, so that hide reached nobody and the keys stayed up with the controller. With a window there the app's own
+     *  hide works, as before. A game whose view starts with no box (input type none) is not a box that went. */
+    fun fieldGone(wasText: Boolean, nowText: Boolean, sameView: Boolean, noWindowHere: Boolean): Boolean =
+        wasText && !nowText && sameView && noWindowHere
+
+    /** 1.5-beta2 (gv2 F2, h_diag A): a show of the keys right after a box went ([fieldGone]: [boxWent]) on what has nothing to
+     *  type into ([typesNow] false) is Android's, not the app's: the app's hide reached nobody, so Android still counts the
+     *  keys up and shows them again on the input that replaced the box (ATTACH_NEW_INPUT). Counted as a request, it stopped
+     *  both closes of the box gone (the keys stayed up with the controller). A next box that types text still counts. */
+    fun carriedOver(boxWent: Boolean, typesNow: Boolean): Boolean = boxWent && !typesNow
+
+    /** 1.5-beta2 (gv2 F2): Start's done / go / search / send ([action]) closes the keys when they are on the other screen
+     *  ([keysOnOther]), with "Keep a thin bar" on (1.4's, Eden) and off (no keyboard window on the box's screen: the app's
+     *  own hide reached nobody). New line and next keep them. On the box's screen the app hides them itself, as before. */
+    fun closesOnAction(keysOnOther: Boolean, action: EnterAction): Boolean =
+        keysOnOther && action != EnterAction.NEWLINE && action != EnterAction.NEXT
 }
 
 /** Build 18: the keyboard's own words (the move button, its keys, the typing line). */

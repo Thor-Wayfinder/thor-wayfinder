@@ -23,10 +23,17 @@ enum class CueKind { PILL, TIP, HELD }
 /** A held list's token. [maxMs]: never on screen longer (a missed release). Critique K12: one list per controller — its
  *  [key] carries the controller, so one's release never hides another's (two held lists on one screen stack). */
 enum class Held(val maxMs: Long) {
-    CHORDS(8000), SHIFT(8000), RECENTS(5000);
+    CHORDS(8000), SHIFT(8000), RECENTS(5000),
+    /** b19 (MORE-D21): Hints & pop-ups' Show it, a hint shown before it is chosen. Its own key: Recents' exit and a combo's
+     *  release never take it down, and it never hides a real list (one held meanwhile covers it). Its time is the hint's own
+     *  ([Overlays.held]'s limitMs), never more than this. */
+    PREVIEW(7000);
     /** [src]: the controller, as its presses count (0: the Thor, or a list about no controller — Recents). */
     fun key(src: Int = 0) = "$name@$src"
 }
+
+/** b19 (MORE-D21): the hint a Show it button shows ([ForegroundAppService.showPreview]): the Recents line or the combo list. */
+enum class HintPreview { RECENTS, COMBOS }
 
 sealed class CueContent {
     data class Line(val text: String) : CueContent()

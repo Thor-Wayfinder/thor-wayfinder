@@ -27,6 +27,7 @@ tools/wfmap_test
 tools/wfhid_test
 tools/wfuhid_test
 tools/wfmerge_test
+tools/wfpark_test
 app/src/debug/
 .vscode/
 *.pem

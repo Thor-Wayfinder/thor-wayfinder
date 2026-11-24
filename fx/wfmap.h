@@ -25,6 +25,11 @@
 // that went with the game keeps doing so, the button held before it isn't withheld.
 // b18o: the copy's buttons a hand holds a turbo button for, told to Wayfinder ([wf_turbo_held]) — their on / off pulses are
 // no presses there (a Home tap with a turbo button held goes home).
+// b19: the shift button's lone tap, when its own job is Wayfinder's, is told to Wayfinder ([wf_shift_ext]); before, it was
+// lost (the copy got nothing, Wayfinder got only a stray release).
+// b19 (GitHub #96): both sticks on one of the game's sticks (`ms=1|2`, [wf_map.merge_sticks]): the one pushed further wins.
+// b19 (H1a): Keyboard & mouse holds the controller ("h 1", [wf_hold]): the gate stays open as under Home, and Home / Back's
+// own changes are echoed to Wayfinder in the order of the presses ([wf_state.app_hold]).
 //
 // Header-only so fx/wfmap_test.c can test it on its own.
 #ifndef WFMAP_H
@@ -85,6 +90,10 @@ typedef struct {
     // 1.3 (`apl=1` / `apr=1`): this PHYSICAL stick is Wayfinder's (mouse, scroll, 4 keys): centred for the
     // game, its shaped position sent to the app ([wf_app_stick], "T" lines). [0] left, [1] right.
     int app_stick[2];
+    // b19 (GitHub #96, `ms=1|2`): both PHYSICAL sticks drive one of the game's sticks: 1 its left one (the game's right stick
+    // rests), 2 its right one (the left rests). The one pushed further wins, as a whole stick, after each one's own shape;
+    // `sw` means nothing then. 0 = each stick its own (default).
+    int merge_sticks;
 } wf_map;
 
 typedef struct {
@@ -122,6 +131,12 @@ typedef struct {
     // nothing or to Wayfinder, or it is turbo / toggle: the copy follows its rhythm or its latch, not the finger). Copied
     // from the profile with its shift button and `bg=1` ([wf_state_map]); all 0 = no profile.
     unsigned short seen_as[WF_NK];
+    // b19 (H1a): Wayfinder's Keyboard & mouse holds the controller ([wf_hold], "h 1"): the gate stays open as while Home is
+    // held (nothing reaches the game, presses are echoed to Wayfinder) and Home / Back's own changes are echoed too, in the
+    // order of the presses. Wayfinder's, not the pad's: a state made again keeps it (wfpad's init_state, [wf_state_rest],
+    // [wf_replay]). [hold_until]: when it lapses with no renewal ([wf_hold_lapsed], the now_ms clock).
+    int app_hold;
+    long hold_until;
 } wf_state;
 
 
@@ -187,14 +202,16 @@ static inline int wf_back_gates(const wf_state *s) {
 }
 
 /** The gate is open (nothing reaches the game): Home held, Back held (unless the profile gives Back
- *  to the game, or this Back press went with the game), or the profile's shift button held. */
+ *  to the game, or this Back press went with the game), or the profile's shift button held. b19 (H1a): or Keyboard & mouse
+ *  holding the controller ([wf_state.app_hold]). */
 static inline int wf_gate(const wf_state *s) {
-    return s->key[WF_HOME] || wf_back_gates(s) || (s->shift && s->key[s->shift]);
+    return s->app_hold || s->key[WF_HOME] || wf_back_gates(s) || (s->shift && s->key[s->shift]);
 }
 
 /** The gate follows Home / Back / the shift button ([wf_gate]) — at [wf_event]'s Home / Back / shift change, and when a
- *  resync's replay keeps a Back's decision ([wf_replay], b18n). At its open, what's held now is NOT consumed; at its close,
- *  whatever is back at rest is free again. */
+ *  resync's replay keeps a Back's decision ([wf_replay], b18n). b19 (H1a): and Keyboard & mouse's hold, at its start and end
+ *  ([wf_hold]) and at a replay's end. At its open, what's held now is NOT consumed; at its close, whatever is back at rest is
+ *  free again. */
 static inline void wf_gate_follow(wf_state *s) {
     int g = wf_gate(s);
     if (g && !s->gated) {         // gate opens: what's held now is NOT consumed
@@ -250,7 +267,8 @@ static inline void wf_put(const wf_state *s, const wf_map *m, wf_out *o, int d, 
     if ((d == WF_L2 || d == WF_R2) && !from_trigger) trig_full[d == WF_R2] = 1;
 }
 
-/** Source state at rest (a new pad, or the pad gone): nothing held, axes at rest. */
+/** Source state at rest (a new pad, or the pad gone): nothing held, axes at rest. b19 (H1a): Wayfinder's hold stays
+ *  ([wf_state.app_hold]); its gate opens again at the replay's end ([wf_replay]), on what is held then. */
 static inline void wf_state_rest(wf_state *s) {
     memset(s->key, 0, sizeof s->key);
     for (int i = 0; i < s->na; i++) s->abs[s->axes[i]] = wf_rest(s, s->axes[i]);
@@ -336,15 +354,19 @@ static inline int wf_event(wf_state *s, int type, int code, int value, int *prin
         if (wf_is_system(p) || is_shift) {
             if (is_shift && value == 2) return 1;
             if (is_shift && value == 1) s->shift_used = 0;
-            // released alone (no other button, no Home / Back meanwhile): the game gets a short tap
-            if (is_shift && value == 0 && !s->shift_used && !s->key[WF_HOME] && !s->key[WF_BACK])
+            // released alone (no other button, no Home / Back meanwhile): the game gets a short tap. b19 (H1a): never
+            // under a hold (nothing reaches the game then)
+            if (is_shift && value == 0 && !s->shift_used && !s->key[WF_HOME] && !s->key[WF_BACK] && !s->app_hold)
                 s->shift_tap_until = s->now_ms + 60;
             // b18g (B4): Back pressed while a game button is held (Select + Back) goes with the game — no gate, the held
             // button stays down. Not under a gate already open (Home, the shift button): Home + Back stays Wayfinder's.
             if (p == WF_BACK && value == 1 && !s->gated) s->back_hot = wf_game_key_held(s);
             if (p == WF_BACK && value == 0) s->back_hot = 0;
             wf_gate_follow(s);
-            return is_shift;              // Home/Back themselves always reach Android; the shift button is Wayfinder's
+            // Home/Back themselves always reach Android; the shift button is Wayfinder's. b19 (H1a): under a hold, Home / Back's
+            // changes (not a repeat) are echoed too: the app reads them in the order of the presses (a press under Home is a
+            // combo's), as its J lines can come before Home's own key
+            return is_shift || (s->app_hold && value != 2);
         }
         if (value == 1 && s->shift && s->key[s->shift]) s->shift_used = 1;
         // b18l (review): never the release of a button held since before the gate opened (not pressed again under it, not
@@ -401,6 +423,9 @@ static inline void wf_replay(wf_state *s, const unsigned char *held, const wf_st
     // the shift button held through: used as before (a button withheld from an earlier gate, replayed under it, isn't a
     // use), or by a key pressed under it during the drop
     if (old && s->shift && old->shift == s->shift && old->key[s->shift] && s->key[s->shift]) s->shift_used = old->shift_used || fresh;
+    // b19 (H1a): a hold's gate opens on what is held now (a state made again under Keyboard & mouse's hold: what the hand held
+    // before it comes back at the give-back, a press made under it stays withheld). No hold: the gate is already where it is
+    wf_gate_follow(s);
 }
 
 /**
@@ -411,9 +436,78 @@ static inline void wf_replay(wf_state *s, const unsigned char *held, const wf_st
  */
 static inline int wf_ext_event(const wf_state *s, const wf_map *m, int printed, int value) {
     if (printed < 0 || printed >= WF_NK || m->keymap[printed] != WF_EXT) return 0;
+    // b19: never the shift button's own press / release. Its press opens its gate, its job is its lone tap ([wf_shift_ext]);
+    // a press said before it became the shift was let go then ([wf_shift_takes])
+    if (s->shift && printed == s->shift) return 0;
     if (value == 0) return 1;
     return value == 1 && !s->gated && !s->ckey[printed];
 }
+
+/** b19: the shift button's lone tap said to Wayfinder ([wf_shift_ext]), the caller's, kept across resyncs and profiles: the
+ *  code said pressed (0 = none) and the tap it was ([wf_state.shift_tap_until]). */
+typedef struct { int code; long until; } wf_tap_said;
+
+/**
+ * b19 (b18p side finding): the shift button's lone tap when its own job is Wayfinder's (keymap WF_EXT: keys, a mouse button,
+ * an action, a macro, several buttons, a long / double press). Wayfinder plays it: "X <shift> 1" as the tap starts (its lone
+ * release, [wf_event]) and "X <shift> 0" as it ends (60 ms on). [wf_compute] gives the copy nothing for such a job, and the
+ * shift's own press / release never go to Wayfinder ([wf_ext_event]). State-based like the copy: a tap that ends, a new tap
+ * over the last (let go first, then pressed: two taps, not one long press), a profile that drops it or another shift button,
+ * a state made again: whatever is no longer the tap said is said let go. Writes up to 2 (code, value) pairs into [codes] /
+ * [vals], releases first; returns how many. Pure.
+ */
+static inline int wf_shift_ext(const wf_state *s, const wf_map *m, wf_tap_said *said, int *codes, int *vals) {
+    int on = s->shift > 0 && s->shift < WF_NK && m->keymap[s->shift] == WF_EXT && s->shift_tap_until &&
+             s->now_ms < s->shift_tap_until;
+    int n = 0;
+    if (said->code && (!on || said->code != s->shift || said->until != s->shift_tap_until)) {
+        codes[n] = said->code; vals[n++] = 0; said->code = 0; said->until = 0;
+    }
+    if (on && !said->code) { codes[n] = s->shift; vals[n++] = 1; said->code = s->shift; said->until = s->shift_tap_until; }
+    return n;
+}
+
+/**
+ * b19: map [next] replaces [cur] while [s] holds what it holds. A held button that [next] makes the shift button, whose job
+ * under [cur] was Wayfinder's: its "X" press is let go now (from here on its release is the shift's, never said:
+ * [wf_ext_event]). Returns its printed code, 0 = none. Pure.
+ */
+static inline int wf_shift_takes(const wf_state *s, const wf_map *cur, const wf_map *next) {
+    int k = next->shift;
+    return k > 0 && k < WF_NK && k != cur->shift && s->key[k] && cur->keymap[k] == WF_EXT ? k : 0;
+}
+
+/** b19 (H1a): a hold with no renewal ("h 1" again: the app renews it every 2 s) for this long lapses by itself
+ *  ([wf_hold_lapsed]): an app stopped or stuck never leaves the game without its controller. */
+#define WF_HOLD_MS 6000L
+
+/** b19 (H1a): "h <0|1>"'s argument: 1 or 0, -1 for anything else (the line then changes nothing). */
+static inline int wf_hold_arg(const char *v) {
+    return v && (v[0] == '0' || v[0] == '1') && v[1] == 0 ? v[0] - '0' : -1;
+}
+
+/**
+ * b19 (H1a): Keyboard & mouse holds the controller ([on] 1, at [now_ms]: until WF_HOLD_MS later, each "h 1" renews it) or
+ * gives it back (0). The gate follows ([wf_gate_follow]): at the hold's start what the hand holds is let go for the game and
+ * comes back at the give-back; a press made under the hold stays silent for the game until it is let go. A hold that starts
+ * says where Home and Back are, as (code, value) pairs into [codes] / [vals] (2): the app counts them from there, in the
+ * order of the presses (the send combo's Home is held as the hold starts and let go under it). Returns how many: 0 for a
+ * renewal or a give-back. Pure.
+ */
+static inline int wf_hold(wf_state *s, int on, long now_ms, int *codes, int *vals) {
+    int n = 0;
+    if (on && !s->app_hold) {
+        codes[n] = WF_HOME; vals[n++] = s->key[WF_HOME];
+        codes[n] = WF_BACK; vals[n++] = s->key[WF_BACK];
+    }
+    s->app_hold = on != 0;
+    s->hold_until = on ? now_ms + WF_HOLD_MS : 0;
+    wf_gate_follow(s);
+    return n;
+}
+
+/** b19 (H1a): the hold ran out at [now_ms]: no renewal for WF_HOLD_MS. */
+static inline int wf_hold_lapsed(const wf_state *s, long now_ms) { return s->app_hold && now_ms >= s->hold_until; }
 
 /**
  * 1.3 — after [wf_event] for a HAT axis that moved from [oldv] to [newv]: the D-pad directions it
@@ -460,6 +554,15 @@ static inline void wf_shape(const wf_state *s, int ax, int ay, int *x, int *y, i
     *x = cx + (int)(nx >= 0 ? nx + .5f : nx - .5f);
     *y = cy + (int)(ny >= 0 ? ny + .5f : ny - .5f);
 }
+/** b19 (GitHub #96): how far a stick at (x, y) is pushed, for [wf_compute]'s merge: the square of its distance from the
+ *  centre, as a fraction of its half-range (0 = the centre, 1 = the edge). No libm, like [wf_shape]. */
+static inline float wf_reach(const wf_state *s, int ax, int ay, int x, int y) {
+    int cx = wf_rest(s, ax), cy = wf_rest(s, ay);
+    float hx = (float)(s->info[ax].maximum - cx), hy = (float)(s->info[ay].maximum - cy);
+    if (hx <= 0 || hy <= 0) return 0.f;
+    float fx = (x - cx) / hx, fy = (y - cy) / hy;
+    return fx * fx + fy * fy;
+}
 /** Round 8: a trigger's range — nothing below [tlo] %, a full pull from [thi] %. */
 static inline int wf_trig_range(const wf_state *s, const wf_map *m, int a, int v) {
     if (m->tlo <= 0 && (m->thi <= 0 || m->thi >= 100)) return v;
@@ -502,8 +605,8 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
     }
     // Wayfinder's virtual presses (a trigger pressed this way = a full pull)
     // (silent under Home / Back; under the shift button they ARE its layer's outputs — a button target; b18g: not silent
-    // under a Back that went with the game)
-    if (!s->key[WF_HOME] && !wf_back_gates(s)) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
+    // under a Back that went with the game; b19 (H1a): silent under Keyboard & mouse's hold)
+    if (!s->app_hold && !s->key[WF_HOME] && !wf_back_gates(s)) for (int c = 1; c < WF_NK; c++) if (s->vkey[c]) wf_put(s, m, o, c, 0, &hx, &hy, trig_full);
     // 1.3: a remapped D-pad direction leaves the game's D-pad for its target (another button, a
     // direction, nothing, or Wayfinder); the other directions stay as they are
     int hat_x_off = 0, hat_y_off = 0;
@@ -549,7 +652,17 @@ static inline void wf_compute(const wf_state *s, const wf_map *m, wf_out *o) {
     // 1.3: a stick that is Wayfinder's (mouse / scroll / keys) rests for the game
     if (m->app_stick[0]) { lx = wf_rest(s, WF_LX); ly = wf_rest(s, WF_LY); }
     if (m->app_stick[1]) { rx = wf_rest(s, WF_RX); ry = wf_rest(s, WF_RY); }
-    if (m->swap_sticks) { int t; t = lx; lx = rx; rx = t; t = ly; ly = ry; ry = t; }
+    // b19 (GitHub #96, `ms`): both PHYSICAL sticks on one of the game's. The one pushed further wins, as a whole (its two
+    // axes together: never one hand's x with the other's y), after each stick's own shape (its deadzone hides its drift); the
+    // game's other stick rests. A tie stays the target's own stick. `sw` means nothing then. A stick that is Wayfinder's
+    // (apl / apr) rested above, so it never wins. The inversions, the D-pad and the gyro below act on the game's sticks
+    if (m->merge_sticks) {
+        if (s->info[WF_LX].maximum && s->info[WF_RX].maximum) {
+            float rl = wf_reach(s, WF_LX, WF_LY, lx, ly), rr = wf_reach(s, WF_RX, WF_RY, rx, ry);
+            if (m->merge_sticks == 1) { if (rr > rl) { lx = rx; ly = ry; } rx = wf_rest(s, WF_RX); ry = wf_rest(s, WF_RY); }
+            else { if (rl > rr) { rx = lx; ry = ly; } lx = wf_rest(s, WF_LX); ly = wf_rest(s, WF_LY); }
+        }
+    } else if (m->swap_sticks) { int t; t = lx; lx = rx; rx = t; t = ly; ly = ry; ry = t; }
     if (m->inv_ly) ly = 2 * wf_rest(s, WF_LY) - ly;
     if (m->inv_ry) ry = 2 * wf_rest(s, WF_RY) - ry;
     if (m->inv_lx) lx = 2 * wf_rest(s, WF_LX) - lx;
@@ -666,7 +779,7 @@ static inline void wf_app_stick(const wf_state *s, const wf_map *m, int side, in
 }
 
 /**
- * Parse a profile line: "L=n|x|0 k<src>=<dst> sw=0|1 dl=0|1 il=0|1 ir=0|1 td=0|1" (codes in
+ * Parse a profile line: "L=n|x|0 k<src>=<dst> sw=0|1 ms=0|1|2 dl=0|1 il=0|1 ir=0|1 td=0|1" (codes in
  * hex or decimal; dst 0 = itself, 65535 = none, 0x220..0x223 = D-pad). Home/Back can't be
  * remapped. Returns 0 on success; on any bad token the map is left untouched.
  */
@@ -711,6 +824,8 @@ static inline int wf_parse(wf_map *out, const wf_state *s, const char *line) {
             m.shift = (int)n; continue;
         }
         if (!strcmp(k, "thi")) { if (n < 50 || n > 100) return -1; m.thi = (int)n; continue; }
+        // b19 (GitHub #96): both sticks on one of the game's: 0 none · 1 its left stick · 2 its right stick
+        if (!strcmp(k, "ms")) { if (n < 0 || n > 2) return -1; m.merge_sticks = (int)n; continue; }
         if (n != 0 && n != 1) return -1;
         if (!strcmp(k, "sw")) m.swap_sticks = (int)n;
         else if (!strcmp(k, "dl")) m.dpad_ls = (int)n;

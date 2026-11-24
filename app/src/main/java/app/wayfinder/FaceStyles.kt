@@ -84,6 +84,7 @@ data class PadLook(
     val noHome: Boolean = false,        // no Home: Select + Start held is its Home (wfhid's Select + Start Home)
     val back: String? = null,           // build 18 (A15): its own Back button's name ("touchpad click")
     val ayn: String? = null,            // build 18 (A15): its own AYN button's name ("Mute")
+    val home: String? = null,           // 1.5-beta2 (GitHub #137): the button its mapping moved Home to ("touchpad click")
 )
 
 /** dev build 15 (WP2): one controller's vocabulary — the names of its buttons ([PadLook]); [ButtonNames] delegates here. */
@@ -96,6 +97,14 @@ object Vocab {
     fun psSymbol(xboxLetter: ThorButton) = when (xboxLetter) { A -> "✕"; B -> "○"; X -> "□"; Y -> "△"; else -> null }
     /** The Xbox-way letter that names position [b] (its glyph colour); Nintendo names: [b] itself. */
     fun shown(b: ThorButton, look: PadLook) = if (look.names == FaceStyle.NINTENDO) b else faceSwap(b)
+    /** 1.5-beta2 (GitHub #134): Button colours' slots, in order — the Xbox-way letters (ui.TokenArgb.FACE_XBOX's order). */
+    val FACE_ORDER = listOf(A, B, X, Y)
+    /** 1.5-beta2 (GitHub #134): the slot (0-3) of Xbox-way letter [xboxLetter] (a PlayStation mark: its letter's); null = not a
+     *  face letter. */
+    fun letterSlot(xboxLetter: ThorButton): Int? = FACE_ORDER.indexOf(xboxLetter).takeIf { it >= 0 }
+    /** 1.5-beta2 (GitHub #134): the colour slot of position [b] on [look] — the letter it shows ([shown]), so a colour goes with
+     *  its letter or mark wherever the names put it; null = not a face button, or a Joy-Con held sideways (no letters). */
+    fun faceSlot(b: ThorButton, look: PadLook): Int? = if (look.sideways || b !in FACE_ORDER) null else letterSlot(shown(b, look))
     /** The position that does menu job [job] (A confirm · B back · X · Y) on [look]. */
     fun menuPos(job: ThorButton, look: PadLook) = if (look.xbox) faceSwap(job) else job
 
@@ -112,6 +121,7 @@ object Vocab {
             // a left Joy-Con: its Capture button is its Home (sideways, its − its Start: wfhid's sideways map). dev build 17
             // (D4): held upright too — a lone left Joy-Con has no Home button
             ThorButton.HOME -> when {
+                look.home != null -> look.home                        // 1.5-beta2 (GitHub #137): Home moved to another button
                 k == ControllerKind.JOYCON_L -> "Capture"
                 look.noHome -> "Select + Start" + Say.HELD       // a sentence that holds it drops the mark (Say.heldName)
                 k == ControllerKind.PLAYSTATION -> "PS"
@@ -153,7 +163,13 @@ object Vocab {
     /** dev build 17 (theme G, D4): a spare button's name — the field wfhid reads it from ([page] / [usage], its "F" line: our
      *  page 0xFF01 = a PlayStation pad's built-in layout, 0xFF00 = a Nintendo one's; 0x0C the Consumer page; 9 Buttons).
      *  null = no name known (the caller says "its own button"). */
-    fun spareName(page: Int, usage: Int): String? = when {
+    fun spareName(page: Int, usage: Int, kind: ControllerKind = ControllerKind.GENERIC): String? = when {
+        // 1.5-beta2 (GitHub #137): its own Home button can do Back or AYN now (the Home / Back / AYN row trades them)
+        homeField(page, usage, kind) -> when (kind) {
+            ControllerKind.PLAYSTATION -> "PS"
+            ControllerKind.XBOX -> "Xbox button"
+            else -> if (page == 0xFF01) "PS" else "Home button"
+        }
         page == 0xFF01 && usage == 14 -> "touchpad click"
         page == 0xFF01 && usage == 15 -> "Mute"
         page == 0xFF00 && usage == 0x16 -> "Capture"
@@ -161,6 +177,12 @@ object Vocab {
         page == 9 -> "button $usage"
         else -> null
     }
+
+    /** 1.5-beta2 (GitHub #137): the field of [kind]'s own Home button (wfhid's layouts: a PlayStation pad's 0xFF01 13, a
+     *  Nintendo one's 0xFF00 0x15, AC Home on the Consumer page, an Xbox pad's button 13 in its newer Bluetooth layout). */
+    fun homeField(page: Int, usage: Int, kind: ControllerKind): Boolean =
+        (page == 0xFF01 && usage == 13) || (page == 0xFF00 && usage == 0x15) || (page == 0x0C && usage == 0x223) ||
+            (kind == ControllerKind.XBOX && page == 9 && usage == 13)
 
     /** D8: "Button names on screen" (0 Automatic · 1 as printed · 2 Xbox · 3 PlayStation) → (PlayStation style, as printed). */
     fun migrateNames(old: Int): Pair<Boolean, Boolean> = (old == 3) to (old == 1)
@@ -201,6 +223,7 @@ fun RemapTarget.short(look: PadLook): String = when (this) {
         ThorAction.BOTTOM_BRIGHTER -> "Bottom brighter"; ThorAction.BOTTOM_DIMMER -> "Bottom dimmer"
         ThorAction.TOP_LOUDER -> "Top louder"; ThorAction.TOP_QUIETER -> "Top quieter"
         ThorAction.BOTTOM_LOUDER -> "Bottom louder"; ThorAction.BOTTOM_QUIETER -> "Bottom quieter"
+        ThorAction.GUIDE_BUTTON -> a.shortTitle                    // 1.5-beta2 (Q1)
         else -> a.title
     }
 }

@@ -46,14 +46,16 @@ class ComboLanding(val focus: String?, val addOn: ThorAction? = null)
  *  An action's own combo row when the page draws one ([drawn]); else the AYN button's tap or hold row when that is what does
  *  it ([aynTap] / [aynHold]: null while those rows aren't drawn — the result's line said "AYN hold"); else, when Add a combo
  *  offers the action ([offered]: its part is on), its list opens on it — one A reaches its buttons, B lands on "+ Add a combo"
- *  (it opened on the page's first control: the AYN tap's row, unrelated). Any other key is kept. Pure: SearchIndexTest. */
+ *  (it opened on the page's first control: the AYN tap's row, unrelated). Any other key is kept. Pure: SearchIndexTest.
+ *  1.5-beta2 (Q8, GitHub #51): and its double tap's row ([aynDouble], "ayn:double"). */
 fun comboLanding(key: String?, drawn: (ThorAction) -> Boolean, offered: (ThorAction) -> Boolean,
-                 aynTap: ThorAction?, aynHold: ThorAction?): ComboLanding {
+                 aynTap: ThorAction?, aynHold: ThorAction?, aynDouble: ThorAction? = null): ComboLanding {
     val a = key?.let { k -> ThorAction.values().firstOrNull { "combo:${it.name}" == k } } ?: return ComboLanding(key)
     return when {
         drawn(a) -> ComboLanding(key)
         a == aynTap -> ComboLanding("ayn:tap")
         a == aynHold -> ComboLanding("ayn:hold")
+        a == aynDouble -> ComboLanding("ayn:double")
         offered(a) -> ComboLanding(null, a)
         else -> ComboLanding(key)
     }
@@ -70,7 +72,7 @@ val ACTION_CARDS: Map<ThorAction, NavCard> = mapOf(
 private val S_BRIGHTNESS = SearchEntry(NavCards.BRIGHTNESS, "both, top, bottom", "brightness bright dim dimmer brighter light screen top bottom backlight both")
 private val S_SHOTS = SearchEntry(NavCards.SCREENSHOTS, "which screen, where recordings go", "screenshot screenshots take capture picture photo print screen top bottom both stacked target record recording video folder movies gallery saved", ThorAction.SCREENSHOT)
 private val S_COMBOS = SearchEntry("Combos · Home, Back and the AYN button", "buttons combo combos system shortcuts bind chord shortcut hotkey ayn tap hold long press", HubPage.CONTROLS)
-private val S_GAME_CONTROLS = SearchEntry("Game controls: each game's buttons, gyro and macros", "remap mapping gyro motion aim macro turbo toggle chord game controls per game emulator buttons touching touch steam deck", HubPage.APPS)
+private val S_GAME_CONTROLS = SearchEntry("Game controls: each game's buttons, gyro and macros", "remap mapping gyro motion aim macro turbo toggle chord game controls per game emulator buttons touching touch steam deck one hand one-handed either hand both sticks", HubPage.APPS)
 private val S_AWAKE = SearchEntry(NavCards.AWAKE, "no screen timeout", "keep awake sleep screen on stay bottom timeout never", ThorAction.TOGGLE_KEEP_AWAKE)
 private val S_DND = SearchEntry(NavCards.DND, null, "dnd do not disturb notifications quiet silent game playing focus")
 private val S_LIGHTS = SearchEntry("Stick lights (RGB): colour, breathing, strobe, spectrum, screen colour", "rgb led joystick stick lights ring colour color breathing strobe spectrum rainbow screen same together sync both opposite", HubPage.LIGHTS)
@@ -103,13 +105,16 @@ val SEARCH_INDEX: List<SearchEntry> = listOf(
     SearchEntry(NavCards.NAMES_PRINTED, null, "button names xbox nintendo printed on the thor a b x y labels hints"),
     SearchEntry(NavCards.HOME_TWICE, "AYN's setting", "home two presses double press accident accidental twice ayn"),
     // build 18 (C11, T18-10): the name games list for the Thor's controller (on the Thor's page)
-    SearchEntry(NavCards.THOR_NAME, "the Thor's controller", "odin controller name wayfinder emulator eden list"),
+    SearchEntry(NavCards.THOR_NAME, "the Thor's controller", "odin controller name wayfinder emulator eden list two controllers player 1 gamenative gamehub winlator"),
     // T18-09: one entry for the Thor's face buttons (was two: the styles, and the PlayStation symbols)
     SearchEntry("Face buttons: Nintendo, Xbox or PlayStation", "face buttons nintendo xbox playstation layout abxy swap a b x y button names ps cross circle square triangle symbols prompts", HubPage.THOR),
     // dev build 15 (WP2, D1): each controller's own face (its page) — Automatic by default. T18-09: with a controller only
     SearchEntry("A controller's face buttons: Automatic, like the Thor, Nintendo, Xbox or PlayStation", "face buttons controller dualsense ps5 playstation xbox nintendo joy-con automatic like the thor cross circle confirm back swap a b button names", HubPage.CONTROLLER, needsPad = true),
     SearchEntry("Remove a controller's own controls", "delete remove reset own controls controller every game undo", HubPage.CONTROLLER, needsPad = true),
-    SearchEntry("A controller's Back and AYN buttons", "back ayn button touchpad mute capture share select start spare missing set up", HubPage.CONTROLLER, needsPad = true),
+    // 1.5-beta2 (GitHub #137): its Home too, swapped or cleared there
+    SearchEntry("A controller's Home, Back and AYN buttons", "home back ayn button touchpad mute capture share select start spare missing set up swap clear", HubPage.CONTROLLER, needsPad = true),
+    // b19 (H7, ps-F9): its own Home's three choices (its page's "What PS does" card)
+    SearchEntry("A controller's Home button: Home, Game + combos or Game only", "ps button guide xbox button capture tap hold emulator menu retroarch mode game combos", HubPage.CONTROLLER, needsPad = true),
     // dev build 18f: two switches on a controller's page (its card needs which controller: the Controller page, as above)
     SearchEntry("Plays as the Thor's controller (a connected controller)", "seat same as the thor odin emulator eden player 1 one player no mapping again remap merge both drive copy hidden", HubPage.CONTROLLER, needsPad = true),
     SearchEntry("Touchpad moves the pointer (PlayStation controllers)", "touchpad trackpad mouse pointer cursor click tap scroll two fingers dualsense dualshock ps4 ps5 laptop", HubPage.CONTROLLER, needsPad = true),
@@ -120,6 +125,9 @@ val SEARCH_INDEX: List<SearchEntry> = listOf(
     S_COMBOS,
     SearchEntry("Add a combo · two-button combos held or double-pressed", "add combo new shortcut hotkey chord hold double triple two buttons home back", HubPage.CONTROLS),
     SearchEntry("AYN's own drawer (keep it with the quick panel)", "ayn drawer odin menu fps dial hold double both panel assistant", HubPage.CONTROLS),
+    // 1.5-beta2 (Q8, GitHub #51): the AYN button's third slot (Combos, under its tap and hold). b2d pass (polish): its card,
+    // so Combos opens on that row (it opened on the tap row, two rows above)
+    SearchEntry(NavCards.AYN_DOUBLE, null, "ayn double tap twice two taps second press button slot"),
     SearchEntry("Swipe with the controller (Shorts, web pages)", "swipe scroll shorts tiktok reels touch finger gesture up down next video", HubPage.CONTROLS),
     // round 2: the topics that are one action land on it as the actions below do ([comboLanding])
     SearchEntry("Record the screen with a combo", "record video screen recording capture clip combo hotkey", HubPage.CONTROLS, ThorAction.RECORD_SCREEN),
@@ -130,6 +138,8 @@ val SEARCH_INDEX: List<SearchEntry> = listOf(
     SearchEntry("Gyro on / off (an action for a combo or a long press)", "gyro motion aim tilt toggle pause long press hold", HubPage.CONTROLS, ThorAction.GYRO_TOGGLE),
     SearchEntry("Guide & notes (the game's guide and your notes)", "guide notes walkthrough map single screen overlay companion", HubPage.CONTROLS, ThorAction.GUIDE),
     SearchEntry("Mouse mode (AYN's virtual mouse)", "mouse cursor pointer virtual stick ayn gamenative web", HubPage.CONTROLS, ThorAction.AYN_MOUSE),
+    // 1.5-beta2 (Q1, GitHub D#127, #3): the Mode press for the game, by every name it has
+    SearchEntry("Guide button (Xbox / PS) for the game", "guide mode xbox ps playstation home button moonlight steam link stream streaming", HubPage.CONTROLS, ThorAction.GUIDE_BUTTON),
     SearchEntry("Sleep (both screens off)", "sleep power off screens standby suspend lock button", HubPage.CONTROLS, ThorAction.SLEEP),
     SearchEntry("Close background apps", "clear close kill recent memory ram background", HubPage.CONTROLS, ThorAction.CLEAR_BACKGROUND),
     SearchEntry("Recent apps", "recents multitask overview switcher", HubPage.CONTROLS, ThorAction.RECENTS),
@@ -158,8 +168,9 @@ val SEARCH_INDEX: List<SearchEntry> = listOf(
     SearchEntry(NavCards.KB_WHERE, "the keyboard on the bottom screen", "keyboard placement bottom screen other screen dual type"),
     SearchEntry(NavCards.KB_DPAD, "Wayfinder Keyboard", "dpad d-pad keys keyboard typing cursor stick"),
     SearchEntry(NavCards.KB_BAR, "Wayfinder Keyboard", "black bar keyboard bar navigation bar nav bar strip thin bar hide typing screen top screen eden yuzu name box submits empty"),
+    SearchEntry(NavCards.KB_NUMBERS, "Wayfinder Keyboard", "number row numbers digits 123 keyboard typing top row"),   // 1.5-beta2 (Q7)
     SearchEntry(NavCards.KB_SPEED, "the trackpad", "mouse sensitivity speed cursor trackpad touch slower faster"),
-    SearchEntry("Keyboard & mouse for games", "deck trackpad mouse cursor pc keys f1 esc numpad emulator retroarch hotkeys media video volume game keys send keys", HubPage.KEYBOARD),
+    SearchEntry("Keyboard & mouse for games", "deck trackpad mouse cursor pc keys f1 esc numpad emulator retroarch hotkeys media video volume game keys send keys use the controller here gamepad", HubPage.KEYBOARD),
     SearchEntry("My pad: your own buttons (snippets, key combos)", "my pad custom buttons snippet text shortcut combo macro ctrl", HubPage.KEYBOARD),
     SearchEntry("Trackpad Direct mode (touch = the game's screen)", "direct touch trackpad swipe touchscreen game screen mouse deck megingiard pointer dot hide cursor invisible", HubPage.KEYBOARD),
     // ── More: Sound, Stick lights, Appearance, Hints, Features, Help ──
@@ -172,18 +183,24 @@ val SEARCH_INDEX: List<SearchEntry> = listOf(
     SearchEntry(NavCards.LIGHTS_FOLLOW, "stick lights", "lights brightness follow dim screen auto rgb led night"),
     SearchEntry(NavCards.THEME, "light, dark, black, your colours", "theme dark light mode colours colors night black oled pure amoled flat custom own"),
     SearchEntry(NavCards.OWN_COLOURS, "flat look, colour codes", "colour color custom hex picker flat theme background text accent card"),
+    // 1.5-beta2 (GitHub #134)
+    SearchEntry(NavCards.BUTTON_COLOURS, "coloured, one colour, your own", "button buttons colour color colours colors face abxy xbox playstation nintendo letters marks badge badges recolour recolor custom caps mono monochrome"),
     SearchEntry(NavCards.BACKDROP, "what's behind or aurora", "background wallpaper blur glass aurora transparent backdrop behind"),
     SearchEntry(NavCards.SEE_THROUGH, "transparency, blur", "transparent transparency blur glass see through opaque background frost"),
     SearchEntry(NavCards.REFRACTION, null, "glass refraction distortion lens light liquid highlight performance"),
     SearchEntry(NavCards.HUB_SCREEN, "which screen Wayfinder opens on", "hub screen top bottom placement deck opens"),
     SearchEntry("Hints & pop-ups · turn them off", "hints tips popups pop-ups tooltips notifications overlay off your controls", HubPage.HINTS),
-    SearchEntry(NavCards.RECENTS_HINT, "smaller, off, corner", "recents hint compact small corner hide recent apps"),
-    SearchEntry(NavCards.COMBO_LIST, null, "hint tooltip cheat sheet popup pop-up hold home back ayn list off"),
+    SearchEntry(NavCards.RECENTS_HINT, "smaller, off, corner", "recents hint compact small corner hide recent apps preview show see"),
+    SearchEntry(NavCards.COMBO_LIST, null, "hint tooltip cheat sheet popup pop-up hold home back ayn list off preview show see"),
     SearchEntry(NavCards.YOUR_COMBOS, null, "your controls sheet bottom screen popup pop-up combos companion off"),
     SearchEntry("Features · make Wayfinder simpler (lite)", "features lite simple simpler minimal just swap screens turn off parts disable", HubPage.FEATURES),
     S_TOUR,
     SearchEntry(NavCards.A11Y, "turn Wayfinder off or on", "accessibility service permission setup enable turn off disable stop pause quit wayfinder game refuses blocked anticheat cheat detection"),
     SearchEntry(NavCards.UPDATES, "once a day", "update updates new version github check release"),
+    // b19 (I12): the Guide's site data, by what you'd call it
+    SearchEntry(NavCards.GUIDE_DATA, "cookies", "cookie cookies site data clear browser cache storage sign in login privacy banner check forget guide"),
+    // 1.5-beta2 (Q10): the pinned pages' offline copies, next to it
+    SearchEntry(NavCards.GUIDE_COPIES, "pinned pages", "offline copy copies saved page pages pinned pin archive storage space free delete guide"),
     SearchEntry(NavCards.BACKUP, "and restore your settings", "backup back up restore export import save settings file new thor reinstall"),
     // round 2 (B20, FTU-18): the setup check's own words on Help (its "Battery optimisation" row is gone: a keyword now)
     SearchEntry("Android won't put it to sleep · keep Wayfinder running", "battery optimisation optimization background killed stopped sleep allow", HubPage.HELP),

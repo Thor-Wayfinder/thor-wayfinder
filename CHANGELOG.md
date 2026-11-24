@@ -1,5 +1,93 @@
 # Changelog
 
+## 1.5-beta2, November 2026 (pre-release)
+
+A second test version of 1.5: everything below is new since 1.5-beta1. 1.4.1 stays the current release, and the
+Download link and Wayfinder's update notice still point to it. Going back to 1.4.1 or 1.5-beta1 needs an uninstall, and
+Wayfinder's settings go with it: make a backup first (More › Help & status › Back up now).
+
+**New**
+- **Keyboard & mouse with the controller**: turn on "Use the controller here" at the bottom of Keyboard & mouse, or send
+  the controller toward its screen. The D-pad or the left stick picks a key, A presses it, X, Y, Start and Select are
+  Backspace, Space, Enter and Esc, L1 and R1 change pads, and B or the same switch gives the controller back. The game
+  keeps its screen and its controller the whole time. It needs Game controls on in that game.
+- **A stick that works as the other one** (#96): in Game controls, open the right stick and pick Left stick under What
+  the stick does. Both sticks then move the game's left stick and the one pushed further wins. The left stick has the
+  same choice the other way. Off unless you pick it.
+- **Guide button (Xbox / PS)**: a new action for a combo, a press of the Xbox or PS button for the game (Moonlight,
+  Steam Link). A game that ignores it gets Home.
+- **PS tap for the game**: a connected controller with a Home button of its own has a new choice on its page, "Game +
+  combos". A tap goes to the game as its PS or Guide press, and holding it still shows your combos.
+- **The AYN button's double tap** (#51): a third choice under its tap and hold, none by default. Once one is set, a
+  single tap waits 0.3 s to see if a second one comes.
+- **Button colours** (#134): Appearance › Button colours: Coloured (as before), One colour, or your own colours for A,
+  B, X and Y.
+- **Quick panel on the TV** (#139): docked, the quick panel opens on the screen the TV shows, and any combo can open it.
+- Wayfinder Keyboard: hold L2 for capitals while the controller types (a tap is Shift, as before); "Number row above the
+  letters" (Keyboard page, off by default); by touch, hold a key and let go to type its number or its first option.
+- Help & status: "Clear the Guide's site data" removes what guide sites saved (sign-ins, cookie choices, site checks),
+  and "Remove the offline copies" removes the offline copies of pinned pages. Your pinned pages and notes stay.
+- Hints & pop-ups: a Show it button under "Recent apps" and "Combo list while holding" shows the hint where it will
+  appear, for a few seconds.
+
+**Changes**
+- **One controller for games** (#102): while Game controls run, AYN's own controller is set aside, so apps that list
+  every controller (GameNative) only see Wayfinder's copy and can't give AYN's a player slot. It comes back when Game
+  controls stop.
+- **The Thor's own controller setting is kept** (#145): a "Top" picked in the Thor's settings no longer goes back to
+  Auto. Wayfinder only turns off a lock it turned on itself, or when you pick a screen in Wayfinder, and the Controller
+  page says when the Thor's setting holds the controller.
+- **Home, Back and AYN buttons** (#137): on a controller's page this row now asks for Home too, and the three can trade
+  buttons (Back on the Xbox button puts Home on Share) instead of refusing. The pages name each button by what it is.
+- **No dead space between keys**: a touch between two keys of Wayfinder Keyboard or Keyboard & mouse now types the
+  nearer key, like other keyboards.
+- **Where Game controls work: Nowhere**, with an app set to "Game controls in this app: On": that app keeps them, they
+  stop as soon as you leave it, and the card no longer says Off while that app runs them.
+- One B back from the quick panel's pages over a game (Stick lights, Wayfinder, an Open… page tile); its Back reads
+  "Back to game". The same for a page an "Open Wayfinder" combo opens.
+- Test it: PS, the touchpad click and Mute (on the Thor: Home, Back and AYN) only light up on the page, so every button
+  can be tested. Hold B or Back for a second to leave.
+- Backups now hold your controllers' settings and their own game controls. A backup made with 1.5-beta1 or earlier
+  doesn't have them, so make a new one after updating. A backup from another Thor brings back your controllers' game
+  controls; their settings only come back on the Thor that made it.
+- Guide & notes: the first search is the game's name and "guide" (it added "map", #108). Notes start each sentence
+  with a capital.
+- The Battery strip shows the 80 % limit, full or resting while plugged in, and the Battery page says "on the charger"
+  once.
+- Mouse mode (AYN): its line says to turn it off with Home + Back (AYN takes the face buttons while it is on).
+- Help & status › Troubleshooting: "RetroArch ignores the Thor's D-pad" (close RetroArch and open it again).
+- Build: the Gradle download is checked against its official checksum, and build plugins come only from Google's and
+  Maven Central's repositories.
+
+**Fixes**
+- **Wayfinder Keyboard crashing or freezing while typing in other apps** (#129): it now types and reads every app's box
+  off the main thread.
+- **Keys typing into the launcher instead of the game** (#142): with a game over a launcher, Keyboard & mouse and Guide
+  & notes now go over the launcher and send to the game.
+- **"Always bottom" touching the bottom screen** (#147): the tap that hands the controller back now waits while a finger
+  is on the bottom screen, so it no longer cuts that touch short.
+- **Home and the controls stopping until Wayfinder was restarted** (#145): the part of Wayfinder that reads the
+  controller now starts again by itself if it stops.
+- **Keyboard on a TV** (#144): docked, the keys open on the screen you are typing on.
+- The first press after Game controls start is no longer lost now and then.
+- Home + Back no longer sends an extra Back, and Home no longer stays held after AYN re-makes its controller.
+- Wayfinder Keyboard: leaving a box closes the keys even with "Keep a thin bar" off, Start's done / go / search closes
+  them when they are on the other screen, a new box opens on the letters page, and in Guide & notes one B then A opens
+  the keys again.
+- Recent apps: the controller works from the first press, B goes back to where you were, and opening it while an app
+  moves waits for the move. Its hint names every button.
+- With the controller locked to the top screen, the lock comes back after the quick panel closes over Wayfinder, and a
+  send while Wayfinder is open is no longer undone.
+- Keyboard: "Move up" from a box on the bottom screen keeps the keys on the top screen.
+- A controller that isn't connected says "Controller gone" once, and its Test page doesn't test the Thor instead.
+- Combos: a turbo button as the second button of a hold or double tap combo works. Game controls: a Shift button with a
+  job of its own does it on a tap, and its page offers only the presses that can work.
+- Speaker fix: the stereo widening could stay off until a restart after another audio tool was uninstalled.
+- Giving a controller back puts its input node back in one step, with the same permissions as the Thor's own.
+- Turning "Wayfinder handles controllers" off now removes the buttons layout files Wayfinder wrote for your controllers.
+- An "Open Wayfinder" combo pressed with the game on the other screen no longer turns the controller lock on.
+- Stick lights' brightness starts at 1 %, and a few setting lines that didn't match what the setting does were fixed.
+
 ## 1.5-beta1 — October 2026 (pre-release)
 
 A test version of 1.5: everything below is new since 1.4.1. 1.4.1 stays the current release — the Download link and

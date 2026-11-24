@@ -463,7 +463,7 @@ int main(int argc, char **argv) {
         /* timers: turbo flips, the shift button's tap, rumble (an effect's end, the refresh), our pad down too long */
         long now = now_ms();
         int timeout = -1;
-        if (wf_turbo_active(&HX.ws, &HX.wm) || HX.ws.shift_tap_until > now) timeout = 15;
+        if (wf_turbo_active(&HX.ws, &HX.wm) || hx_tap_timer()) timeout = 15;   /* b19 review: until the tap is over */
         if (!HX.idle) {                            /* (away: nothing to rumble — an effect started meanwhile plays once it is back) */
             if ((buzz_until > now || rum_lo > 0 || rum_hi > 0) && (timeout < 0 || timeout > 50)) timeout = 50;
             for (int i = 0; i < NEFF; i++) if (eff[i].playing && (timeout < 0 || timeout > 50)) timeout = 50;
@@ -513,7 +513,7 @@ int main(int argc, char **argv) {
             if ((rc = pad_up()) != 0) return finish(rc);
         }
         hx_tick();
-        if (timeout >= 0) { hx_flush(); rumble_update(now); }
+        if (timeout >= 0) { hx_flush(); rumble_update(now); hx_tap_over(); }
     }
     return finish(0);
 }

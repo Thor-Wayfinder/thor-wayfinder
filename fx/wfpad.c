@@ -43,9 +43,13 @@
 //                         "TU <code> <1|0> <ms>"  b18o: a hand holds (1) / let go of (0) a turbo button whose job is the
 //                                             copy's button <code> (printed), at <ms> (CLOCK_MONOTONIC, the key events'
 //                                             clock) — its on / off pulses are no presses (fx/wfmap.h wf_turbo_held)
+//                         "I hold lapsed"     b19 (H1a): Keyboard & mouse's hold got no renewal for 6 s: given back
 // stdin, one line each:  "m <profile>" (see wf_parse) · "g <0|l|r> <x> <y>" gyro as a stick ·
 //                        "w [k<code>] [a<axis>]…" watch controls · "p <code> <0|1>" virtual
 //                        press ("p 0 0" = all up) · "q" = quit cleanly ·
+//                        "h <0|1>" b19 (H1a): Keyboard & mouse holds the controller (1, renewed every 2 s: it lapses after 6
+//                        s without) or gives it back (0) — the gate held by the app (fx/wfmap.h wf_hold); a start says where
+//                        Home and Back are ("J" lines), Home / Back's changes are echoed while it holds; a new wfpad has none ·
 //                        "s <eventN>" docked: the copy is fed by Wayfinder's pad for an external controller (wfhid,
 //                        phys "wayfinder-ext-N") instead of AYN's pad — the SAME copy (name, number, buttons) for games,
 //                        so nothing is re-made and a running game keeps its controller · "s -" back to AYN's pad.
@@ -64,6 +68,17 @@
 // <why>" say which it is; on anything the UHID copy can't do (a code it can't express, the device not appearing, /dev/uhid
 // failing) the uinput copy comes back for the rest of the run. A second "R" line announces the swapped copy.
 // argv[7] "uniq=<serial>" (tests: a copy that isn't the real one).
+// 1.5-beta2 (GitHub #102) — argv "park" (with <race ms> 0 and grab): AYN's pad is grabbed, then its /dev/input node is SET
+// ASIDE (fx/wfpark.h: Android stops listing it at once, our fd keeps reading it), and only then is the copy made, UHID
+// straight away: #1 is free, so no takeover race, no layout switch, no 1.5 s swap. Every AYN pad found later (a re-make)
+// is set aside the moment it is grabbed. Lines "I park <eventN>" (set aside), "I park no <why>" (refused: at the start wfpad
+// exits 6 before making a copy — the helper starts the takeover instead; later it stays listed, hidden as before), "I park
+// off <why>" (AYN made its pad again 4 times in 30 s: no more parking this run). On exit the copy goes first, then the node
+// comes back (AYN's pad takes the number the copy freed); "q k" = quit and leave it aside (the helper starts the next wfpad
+// right away, or puts it back itself: PadPark.kt). 1.5-beta2 (GitHub #102, repair): the next wfpad is started ON the node
+// left aside (argv[1] = /dev/wayfinder-park/eventN.inputM, with "park"): it takes it where it is (fx/wfpark.h wfp_adopt), so
+// AYN's pad is never listed between two runs; refused = "I park no <why>", exit 6 (the node put back first, by the sweep).
+// argv "park-dir=<folder on /dev>" (tests only, honoured with test-src= alone): the folder instead of /dev/wayfinder-park.
 // On any exit the grab is released and the copy destroyed (the kernel does both anyway if
 // we are killed: closing the fds ungrabs and destroys).
 #include <dirent.h>
@@ -87,6 +102,7 @@
 
 #include "wfmap.h"
 #include "wfmerge.h"
+#include "wfpark.h"
 #include "wfuhid.h"
 
 #define NBITS(x) ((((x) - 1) / (8 * sizeof(long))) + 1)
@@ -116,8 +132,10 @@ static int want_uhid = 0, uhid_failed = 0, hfd = -1;
 static wfu_layout HL;
 static unsigned char hlast[WFU_MAXREP];
 static int hlast_ok = 0;
+static int hev = -1;              // 1.5-beta2 (gv2 F3, h_diag B): the UHID copy's own /dev/input node, kept open for its settle frame
 static const char *uniq = "wayfinder-thor";      // the serial: the same on every Thor, so its descriptor is too
 static long copy_made_us = 0, src_since_us = 0;  // when the copy / the current source appeared
+static long copy_write_us = 0;                    // 1.5-beta2 (big test t6, F3): the copy's last frame written ([wfu_settle_first])
 static int test_hooks = 0, test_uhid_fail = 0;    // argv "test-hooks" / "test-uhidfail": failure paths, for tests
 static const char *test_src_name = NULL;          // argv "test-src=<name>": a test instance takes only that pad
 static unsigned char watch_key[0x300], watch_abs[0x40];   // reported as "V" lines (gyro activation)
@@ -145,11 +163,31 @@ static void drop_uhid(void) {
     struct uhid_event e; memset(&e, 0, sizeof e); e.type = UHID_DESTROY;
     if (write(hfd, &e, sizeof e) < 0) { /* the kernel destroys it when the fd closes anyway */ }
     close(hfd); hfd = -1; hlast_ok = 0;
+    if (hev >= 0) { close(hev); hev = -1; }       // after the destroy: a node already gone closes at once
     clone_node[0] = 0;          // its eventN is free now — AYN's next pad may get it (never "the copy" then)
 }
 static void drop_clone(void) { if (ufd >= 0) { ioctl(ufd, UI_DEV_DESTROY); close(ufd); ufd = -1; clone_node[0] = 0; } drop_uhid(); }
-static void cleanup(void) { drop_source(); drop_clone(); }
-static void on_signal(int s) { (void)s; cleanup(); _exit(0); }
+/* 1.5-beta2 (GitHub #102): AYN's pad set aside while the copy runs (fx/wfpark.h) — argv "park"; [park_off]: refused or AYN
+   re-making it in a loop (this run); [keep_park]: "q k", left aside for the helper's next wfpad */
+static int want_park = 0, park_off = 0, keep_park = 0;
+static wfp_rec PK;
+static wfp_cap PCAP;
+/* 1.5-beta2 (GitHub #102, repair): the folders the park acts on — the real ones; a test instance's own folder ("park-dir=",
+   only with "test-src="), so a test never touches the running layer's /dev/wayfinder-park */
+static wfp_dirs PD = { "/dev/input", WFP_DIR, "/sys/class/input" };
+static int test_park_dir = 0;
+static volatile sig_atomic_t in_signal = 0;
+/** The copy first (the number it frees is AYN's again), then AYN's node back: 50 ms between, so Android has dropped the
+ *  copy before it lists AYN's pad. In the signal handler only the current source's node (syscalls only); on a normal exit
+ *  every live node in the folder (an orphan AYN pad set aside earlier too). */
+static void cleanup(void) {
+    drop_source(); drop_clone();
+    if (!want_park || keep_park) return;
+    if (PK.on) { usleep(50000); wfp_unpark(&PD, &PK); }
+    // (a test instance: its own fake pad's node only — its own folder swept, never the real one)
+    if (!in_signal && (!test_src_name || test_park_dir)) wfp_sweep(&PD);
+}
+static void on_signal(int s) { (void)s; in_signal = 1; cleanup(); _exit(0); }
 
 static long now_us(void) {
     struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -194,6 +232,8 @@ static int prepare_clone(int from) {
         memset(bits, 0, sizeof bits); ioctl(from, EVIOCGBIT(EV_MSC, sizeof bits), bits);
         for (int m = 0; m <= MSC_MAX; m++) if (TEST(m, bits)) ioctl(u, UI_SET_MSCBIT, m);
     }
+    // 1.5-beta2 (gv2 F3, h_diag B): MSC_SCAN for the settle frame (fx/wfuhid.h [wfu_settle]); AYN's pad has no EV_MSC
+    ioctl(u, UI_SET_EVBIT, EV_MSC); ioctl(u, UI_SET_MSCBIT, MSC_SCAN);
     memset(props, 0, sizeof props); ioctl(from, EVIOCGPROP(sizeof props), props);
     for (int p = 0; p <= INPUT_PROP_MAX; p++) if (TEST(p, props)) ioctl(u, UI_SET_PROPBIT, p);
     ioctl(u, UI_SET_PHYS, phys);
@@ -306,8 +346,15 @@ static int find_uhid_node(int above) {
             snprintf(clone_node, sizeof clone_node, "%s", node);
             // no kernel key repeat (HID keyboards get it; Android turns it off too when it opens the device)
             char path[48]; snprintf(path, sizeof path, "/dev/input/%s", clone_node);
-            int fd = open(path, O_RDWR | O_CLOEXEC);
-            if (fd >= 0) { unsigned int rep[2] = { 0, 0 }; ioctl(fd, EVIOCSREP, rep); close(fd); }
+            // 1.5-beta2 (gv2 F3, h_diag B): the node stays open (hev): the settle frame is written there ([settle_uhid])
+            int fd = open(path, O_RDWR | O_CLOEXEC | O_NONBLOCK);
+            // 1.5-beta2 (gv2 F3, review R1): sysfs shows the copy before ueventd makes its /dev/input node (a busy system,
+            // right after an install): wait for the node in the same 1.5 s, or this copy runs its whole life with no settle frame
+            if (fd < 0 && errno == ENOENT && tries < 59) { usleep(25000); continue; }
+            if (fd >= 0) { unsigned int rep[2] = { 0, 0 }; ioctl(fd, EVIOCSREP, rep); }
+            else out("I settle no-node %s", strerror(errno));   // the t6 way then ([settle_uhid]); PadLayer reads only "I copy"
+            if (hev >= 0) close(hev);
+            hev = fd;
             return 0;
         }
         usleep(25000);
@@ -430,7 +477,9 @@ static void replay_held(const unsigned long *ks, const wf_state *old) {
 
 /** Capabilities + current state of a (new) source. [old]: the state before ([before]), or NULL. */
 static void init_state(int fd, const wf_state *old) {
+    int hold = S.app_hold; long hold_until = S.hold_until;   // b19 (H1a): Keyboard & mouse's hold is Wayfinder's, not the pad's
     memset(&S, 0, sizeof S);
+    S.app_hold = hold; S.hold_until = hold_until;           // (its gate opens again at the replay's end: wf_replay)
     unsigned long kb[NBITS(KEY_MAX + 1)] = {0}, ab[NBITS(ABS_MAX + 1)] = {0}, ks[NBITS(KEY_MAX + 1)] = {0};
     ioctl(fd, EVIOCGBIT(EV_KEY, sizeof kb), kb);
     ioctl(fd, EVIOCGBIT(EV_ABS, sizeof ab), ab);
@@ -468,7 +517,8 @@ static const wf_state *resync_state(int fd) {
 /** 1.3: before the source state is thrown away (pad rebuilt, events dropped): a release for every button
  *  and D-pad direction Wayfinder plays that is down now, so no keyboard key stays held. */
 static void ext_release(void) {
-    for (int i = 0; i < S.nk; i++) { int p = S.keys[i]; if (S.key[p] && M.keymap[p] == WF_EXT) out("X %d 0", p); }
+    // b19: never the shift button (its press is never said: fx/wfmap.h [wf_ext_event]; its lone tap is [shift_tap_say]'s)
+    for (int i = 0; i < S.nk; i++) { int p = S.keys[i]; if (S.key[p] && M.keymap[p] == WF_EXT && !(S.shift && p == S.shift)) out("X %d 0", p); }
     static const int DIRS[4] = { WF_HAT_UP, WF_HAT_DOWN, WF_HAT_LEFT, WF_HAT_RIGHT };
     for (int i = 0; i < 4; i++) if (M.keymap[DIRS[i]] == WF_EXT && wf_dir_on(S.abs[WF_HX], S.abs[WF_HY], DIRS[i])) out("X %d 0", DIRS[i]);
 }
@@ -483,15 +533,38 @@ static void turbo_say(void) {
     for (int i = 0; i < n; i++) out("TU %d %d %ld", c[i], v[i], S.now_ms);
 }
 
+/* b19 (b18p side finding): the shift button's lone tap when its own job is Wayfinder's ("X <shift> 1" as it starts, "X <shift>
+   0" 60 ms on: fx/wfmap.h [wf_shift_ext]). Never cleared on a resync or a profile: a tap no longer running is said let go by
+   the next emit (a new profile and a state made again zero [wf_state.shift_tap_until]). */
+static wf_tap_said tapsaid;
+static void shift_tap_say(void) {
+    int c[2], v[2], n = wf_shift_ext(&S, &M, &tapsaid, c, v);
+    for (int i = 0; i < n; i++) out("X %d %d", c[i], v[i]);
+}
+
+/** 1.5-beta2 (gv2 F3, h_diag B): the UHID copy's settle frame (fx/wfuhid.h [wfu_settle]), on its own node (a UHID report
+ *  can't carry an MSC_SCAN that changes nothing). Nobody grabs the copy, so every reader gets it. The node not open: the
+ *  last report again, as in the t6 fix (it clears a kept time, it can't show a hidden SYN_DROPPED). */
+static void settle_uhid(void) {
+    struct input_event ev[2];
+    int n = wfu_settle(ev);
+    if (hev >= 0 && write(hev, ev, (size_t)n * sizeof *ev) == (ssize_t)(n * sizeof *ev)) return;
+    struct uhid_event z; memset(&z, 0, sizeof z);
+    z.type = UHID_INPUT2; z.u.input2.size = (unsigned short)HL.replen; memcpy(z.u.input2.data, hlast, (size_t)HL.replen);
+    if (write(hfd, &z, sizeof z) < 0 && errno != EAGAIN) out("E write: %s", strerror(errno));
+}
+
 /** Write the copy's new state: only what changed (everything after a fresh copy). b18l (GitHub #81, b18w B1): when Home or
  *  Back changes, in up to three reports — Home's change / Back's release first, then the rest (the gate letting go of what
  *  is held, or giving it back), Back's press last ([wf_frames]). In one report the UHID copy wrote the buttons before Home:
  *  R2 given back before Home's release made "Home + R2" in the app.
  *  b18o: first, what the hand holds as turbo buttons, said to Wayfinder ([turbo_say]) — before the copy's report, with or
- *  without a copy (it is the hand's). */
+ *  without a copy (it is the hand's). b19: then the shift button's lone tap when its job is Wayfinder's ([shift_tap_say]), with
+ *  or without a copy too (it is Wayfinder's). */
 static void emit(void) {
     S.now_ms = now_us() / 1000;
     turbo_say();
+    shift_tap_say();
     if (hfd >= 0) {                               // the UHID copy: whole reports, each when it changes something
         S.now_ms = now_us() / 1000;
         wf_out n; wf_compute(&S, &M, &n);
@@ -502,6 +575,12 @@ static void emit(void) {
             unsigned char rep[WFU_MAXREP];
             int len = wfu_report(&HL, st->key, WF_NK, st->abs, WF_NA, rep);
             if (out_full || !hlast_ok || memcmp(rep, hlast, (size_t)len)) {
+                /* 1.5-beta2 (big test t6, F3; gv2 F3, h_diag B): the frame after a quiet spell (and every frame of a young
+                   copy) goes after a settle frame: a SYN_DROPPED a reader holds is read there, not on this frame, and a
+                   kept time is cleared (fx/wfuhid.h [wfu_settle_first]); nothing changes for the readers */
+                long wnow = now_us();
+                if (hlast_ok && wfu_settle_first(copy_made_us, copy_write_us, wnow)) settle_uhid();
+                copy_write_us = wnow;
                 struct uhid_event e; memset(&e, 0, sizeof e);
                 e.type = UHID_INPUT2; e.u.input2.size = (unsigned short)len; memcpy(e.u.input2.data, rep, (size_t)len);
                 if (write(hfd, &e, sizeof e) < 0 && errno != EAGAIN) out("E write: %s", strerror(errno));
@@ -515,9 +594,17 @@ static void emit(void) {
     S.now_ms = now_us() / 1000;
     wf_out n; wf_compute(&S, &M, &n);
     // the uinput copy: the same reports as events, each with its SYN_REPORT (one write; the kernel syncs at each)
-    struct input_event ev[512];
-    int c = wf_frame_events(&OUT, &n, S.keys, S.nk, S.axes, S.na, out_full, ev, (int)(sizeof ev / sizeof *ev));
-    if (c && write(ufd, ev, (size_t)c * sizeof *ev) < 0 && errno != EAGAIN) out("E write: %s", strerror(errno));
+    // 1.5-beta2 (big test t6, F3; gv2 F3, h_diag B): after a quiet spell (and on every frame of a young copy), the settle
+    // frame first (ev[0..1], MSC_SCAN 0 + SYN_REPORT): a SYN_DROPPED a reader holds is read there, not on this frame, and a
+    // kept time is cleared; nothing changes for the readers (fx/wfuhid.h [wfu_settle_first])
+    struct input_event ev[514];
+    int c = wf_frame_events(&OUT, &n, S.keys, S.nk, S.axes, S.na, out_full, ev + 2, (int)(sizeof ev / sizeof *ev) - 2);
+    if (c) {
+        long wnow = now_us();
+        int z = wfu_settle_first(copy_made_us, copy_write_us, wnow) ? wfu_settle(ev) : 0;
+        copy_write_us = wnow;
+        if (write(ufd, ev + 2 - z, (size_t)(c + z) * sizeof *ev) < 0 && errno != EAGAIN) out("E write: %s", strerror(errno));
+    }
     OUT = n; out_full = 0;
 }
 
@@ -615,6 +702,20 @@ static int ayn_pads(char names[][32], int *nums, int max, int above, int exact) 
     return n;
 }
 
+/** 1.5-beta2 (GitHub #102): the source just grabbed out of Android's list (fx/wfpark.h) — at the start (before the copy is
+ *  made) and for every AYN pad found after (a re-make: listed only for the moment it took to grab it). A source that went
+ *  before ([wfp_forget]): its name dropped if gone, kept for the exit's sweep if alive (an orphan). Refused, or AYN re-making
+ *  its pad over and over: no more parking this run — AYN's pad stays listed, hidden by the helper, as before beta2. */
+static void park_source(void) {
+    if (!want_park || park_off || src < 0 || src_input < 0) return;
+    if (PK.on && !strcmp(PK.ev, src_node) && PK.input == src_input) return;
+    if (PK.on) wfp_forget(&PD, &PK);
+    if (wfp_cap_hit(&PCAP, now_us(), 4, 30000000L)) { park_off = 1; out("I park off AYN made its pad again 4 times in 30 s"); return; }
+    char why[96] = "";
+    if (wfp_park(&PD, src, src_node, src_input, &PK, why, sizeof why) == 0) out("I park %s", src_node);
+    else { park_off = 1; out("I park no %s", why); }
+}
+
 /** Look for AYN's (new) pad — the NEWEST one: same vendor as the copy, not the copy itself. Grab it. */
 static int find_source(void) {
     char names[16][32]; int nums[16];
@@ -640,6 +741,7 @@ static int find_source(void) {
         // fed (docked): AYN's held keys don't count, the external pad's do · merged (18f): both sources' count
         if (xsrc >= 0) { if (xmerge) merge_resync(was); else resync_from_x(was); }
         emit();
+        park_source();                            // 1.5-beta2 (GitHub #102): out of Android's list before "S"
         out("S %s %s", src_name, names[i]);
         return 0;
     }
@@ -685,6 +787,7 @@ static int newer_source(void) {
  *  Feeding (docked): the external pad drives the copy — what it holds stays held (AYN's pad is only drained). */
 static void lose_source(long *waiting_since, long *mismatch_since) {
     drop_source();
+    wfp_forget(&PD, &PK);                   // 1.5-beta2 (GitHub #102): gone = its name goes; an orphan stays aside
     if (xsrc < 0 || xmerge) kept_until_us = now_us() + KEEP_US;
     *mismatch_since = 0; *waiting_since = now_us(); out("W");
 }
@@ -856,7 +959,8 @@ static int rescale(int a, int v) {
 
 /** One command line from the helper. Returns 0 to quit. */
 static int command(char *line) {
-    if (line[0] == 'q') return 0;
+    // 1.5-beta2 (GitHub #102): "q k" = quit, AYN's node left aside (the helper's next wfpad takes it: a planned restart)
+    if (line[0] == 'q') { keep_park = !strcmp(line, "q k"); return 0; }
     // tests only (started with "test-hooks"; the app never is): the UHID copy's device failing
     if (test_hooks && !strcmp(line, "!uhid-lost")) { uhid_service(POLLHUP); return 1; }
     if (line[0] == 's' && line[1] == ' ') {
@@ -874,6 +978,17 @@ static int command(char *line) {
         if (sscanf(line + 2, "%c %d %d", &which, &x, &y) == 3 && (which == '0' || which == 'l' || which == 'r')
             && x >= -32767 && x <= 32767 && y >= -32767 && y <= 32767) {
             S.gyro_stick = which == 'l' ? 1 : which == 'r' ? 2 : 0; S.gyro_x = x; S.gyro_y = y; emit();
+        }
+        return 1;
+    }
+    // b19 (H1a): h <0|1> — Keyboard & mouse holds the controller (1, renewed every 2 s) or gives it back (0). A hold that
+    // starts says where Home and Back are ("J" lines: the app counts them from here, in the order of the presses)
+    if (line[0] == 'h' && line[1] == ' ') {
+        int on = wf_hold_arg(line + 2);
+        if (on >= 0) {
+            int was = S.app_hold, c[2], v[2], n = wf_hold(&S, on, now_us() / 1000, c, v);
+            for (int i = 0; i < n; i++) out("J %d %d %d", EV_KEY, c[i], v[i]);
+            if (S.app_hold != was) emit();                 // the copy lets go / gives back now (a renewal changes nothing)
         }
         return 1;
     }
@@ -898,6 +1013,9 @@ static int command(char *line) {
     if (line[0] == 'm' && (line[1] == ' ' || line[1] == 0)) {
         wf_map m;
         if (wf_parse(&m, &S, line + 1) == 0) {
+            // b19: a held button this profile makes the shift button, its job Wayfinder's till now: its "X" press let go now
+            // (its release is the shift's from here on, never said). The app resets its engine at every profile too
+            { int k = wf_shift_takes(&S, &M, &m); if (k) out("X %d 0", k); }
             M = m; memset(S.latch, 0, sizeof S.latch); memset(S.vkey, 0, sizeof S.vkey);
             // a new shift button (or none): the gate follows what's held now
             wf_state_map(&S, &M); S.shift_tap_until = 0;
@@ -933,14 +1051,25 @@ int main(int argc, char **argv) {
     grab = strcmp(argv[2], "grab") == 0;
     phys = argv[3];
     int race_ms = atoi(argv[4]);
+    const char *park_dir = NULL;
     named = argc > 5 && !strcmp(argv[5], "named");
     for (int i = 6; i < argc; i++) {
         if (!strcmp(argv[i], "uhid")) want_uhid = 1;
+        else if (!strcmp(argv[i], "park")) want_park = 1;    // 1.5-beta2 (GitHub #102)
         else if (!strcmp(argv[i], "test-hooks")) test_hooks = 1;
         else if (!strcmp(argv[i], "test-uhidfail")) test_uhid_fail = 1;
         else if (!strncmp(argv[i], "test-src=", 9) && argv[i][9]) test_src_name = argv[i] + 9;
         else if (!strncmp(argv[i], "uniq=", 5) && argv[i][5] && strlen(argv[i]) < 60) uniq = argv[i] + 5;
+        else if (!strncmp(argv[i], "park-dir=/dev/", 14) && argv[i][14] && strlen(argv[i]) < 60 && !strstr(argv[i], ".."))
+            park_dir = argv[i] + 9;
     }
+    if (!grab || race_ms > 0) want_park = 0;          // 1.5-beta2 (GitHub #102): only a grabbing start without the race
+    // 1.5-beta2 (GitHub #102, repair): a test's own folder, never with the real pad (no test-src=)
+    if (park_dir && test_src_name && strncmp(park_dir, WFP_DIR, strlen(WFP_DIR)) && strncmp(park_dir, "/dev/input", 10)) { PD.stage = park_dir; test_park_dir = 1; }
+    // a source the helper left aside ("q k"): "<folder>/eventN.inputM", only with "park" (taken where it is, below)
+    size_t pdl = strlen(PD.stage);
+    int adopt = !strncmp(argv[1], PD.stage, pdl) && argv[1][pdl] == '/';
+    if (adopt && !want_park) { out("E usage: a source set aside needs park"); return 1; }
 
     signal(SIGTERM, on_signal); signal(SIGINT, on_signal); signal(SIGPIPE, on_signal);
     wf_map_reset(&M);
@@ -972,6 +1101,41 @@ int main(int argc, char **argv) {
         if (rt) sched_setscheduler(0, SCHED_OTHER, &sp);
         if (!gone) { out("E no-switch"); cleanup(); return 4; }
         drop_source(); source_rest();
+    } else if (want_park) {
+        // 1.5-beta2 (GitHub #102): AYN's pad grabbed, its node set aside, THEN the copy — #1 is free, no race, no layout
+        // switch. UHID straight away (uinput if that fails). Set aside refused: exit 6 before any copy (the helper then
+        // starts the takeover instead)
+        if (ioctl(src, EVIOCGRAB, 1) < 0) { out("E grab: %s", strerror(errno)); cleanup(); return 1; }
+        src_since_us = now_us();
+        char why[96] = "";
+        if (adopt) {
+            // 1.5-beta2 (GitHub #102, repair): the node a planned restart left aside, taken where it is (never listed in
+            // between). Refused: exit 6, and cleanup's sweep puts it back first
+            if (wfp_adopt(&PD, src, argv[1] + pdl + 1, &PK, src_node, sizeof src_node, &src_input, why, sizeof why) < 0) {
+                src_input = -1; out("I park no %s", why); cleanup(); return 6;
+            }
+        } else {
+            snprintf(src_node, sizeof src_node, "%s", argv[1] + strlen("/dev/input/"));
+            src_input = input_num(src_node);
+            if (src_input < 0 || wfp_park(&PD, src, src_node, src_input, &PK, why, sizeof why) < 0) {
+                out("I park no %s", src_input < 0 ? "no input number" : why); cleanup(); return 6;
+            }
+        }
+        wfp_cap_hit(&PCAP, now_us(), 4, 30000000L);  // the first park of the run
+        out("I park %s", src_node);
+        if (want_uhid) {
+            close(ufd); ufd = -1;                      // the prepared uinput copy: not needed
+            if (uhid_plan(src, why, sizeof why) == 0 && uhid_create(src, why, sizeof why) == 0) {
+                emit(); out("R %s %s", clone_name, clone_node); out("I copy uhid %s", uniq);
+            } else {
+                uhid_failed = 1; out("I copy uinput %s", why);
+                if (make_uinput_copy() < 0) { out("E create: %s", strerror(errno)); cleanup(); return 1; }
+            }
+        } else {
+            if (create_clone() < 0) { out("E create: %s", strerror(errno)); cleanup(); return 1; }
+            emit();
+        }
+        out("S %s %s", src_name, src_node);
     } else {
         if (create_clone() < 0) { out("E create: %s", strerror(errno)); cleanup(); return 1; }
         if (grab && ioctl(src, EVIOCGRAB, 1) < 0) { out("E grab: %s", strerror(errno)); cleanup(); return 1; }
@@ -1004,6 +1168,8 @@ int main(int argc, char **argv) {
         if (newer_at && tmo > 300) tmo = 300;
         // b18n review: AYN's pad gone with what it held kept: wake when the keep runs out ([source_gone])
         if (src < 0 && kept_until_us) { long w = (kept_until_us - now_us()) / 1000 + 1; if (w < tmo) tmo = w > 1 ? (int)w : 1; }
+        // b19 (H1a): Keyboard & mouse's hold: wake when it lapses
+        if (S.app_hold) { long w = S.hold_until - now_us() / 1000 + 1; if (w < tmo) tmo = w > 1 ? (int)w : 1; }
         int hfd_polled = hfd;
         int r = poll(pf, 5, tmo);   // a slot at -1 (no AYN pad, no external pad, no UHID copy) is ignored by poll
         if (r < 0) { if (errno == EINTR) continue; break; }
@@ -1087,6 +1253,8 @@ int main(int argc, char **argv) {
             }
         }
         long t = now_us();
+        // b19 (H1a): Keyboard & mouse's hold, no renewal for 6 s (the app stopped, or hangs): the controller back to the game
+        if (wf_hold_lapsed(&S, t / 1000)) { int c[2], v[2]; wf_hold(&S, 0, t / 1000, c, v); emit(); out("I hold lapsed"); }
         if (turbo) { S.now_ms = t / 1000; emit(); }       // turbo: the output flips with time
         app_sticks(t);                                    // 1.3: sticks that are Wayfinder's
         if (S.shift_tap_until && S.now_ms >= S.shift_tap_until) S.shift_tap_until = 0;   // the tap is over (released above)

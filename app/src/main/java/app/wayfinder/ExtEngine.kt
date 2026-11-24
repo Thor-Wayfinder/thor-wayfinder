@@ -246,6 +246,8 @@ object ExtEngine {
         var dblWait: Runnable? = null
         var dblActive = false
         var turbo: Runnable? = null
+        /** b19: its press came and its release not yet: only then does a release finish anything ([handle]). */
+        var down = false
     }
     private val srcs = HashMap<Int, Src>()                  // (source, button) → its state
     private fun srcKey(src: Int, b: ThorButton) = (src shl 8) or b.ordinal
@@ -259,11 +261,15 @@ object ExtEngine {
         val b = PadRemap.BY_CODE[code] ?: return
         val r = remapOf(src) ?: PadRemap()
         // a release whose press was forgotten by reset(): nothing to finish (it fired a spurious
-        // tap of the button's output — review 2026-09-25)
-        if (value == 0 && srcs[srcKey(src, b)] == null) return
+        // tap of the button's output — review 2026-09-25). b19: nor one whose press this engine never started (a release
+        // under the shift button's gate, or a second one after a resync: once the button had been used, its long / double
+        // press tapped its job)
+        if (value == 0 && srcs[srcKey(src, b)]?.down != true) return
         val s = srcs.getOrPut(srcKey(src, b)) { Src() }
         if (value == 1) {
-            val chord = r.chords.firstOrNull { it.has(b) }
+            if (s.down) return                                   // b19: pressed already (its release not seen yet)
+            s.down = true
+            val chord = r.liveChords.firstOrNull { it.has(b) }
             if (chord != null) {
                 val other = if (chord.a == b) chord.b else chord.a
                 val o = srcs[srcKey(src, other)]
@@ -278,6 +284,7 @@ object ExtEngine {
             }
             start(b, s, r, src)
         } else {
+            s.down = false
             s.chord?.let { ch ->                                 // a chord ends with its first release
                 s.chord = null
                 val o = srcs[srcKey(src, if (ch.a == b) ch.b else ch.a)]

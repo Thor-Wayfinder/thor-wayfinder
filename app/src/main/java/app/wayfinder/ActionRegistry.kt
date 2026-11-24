@@ -25,8 +25,15 @@ enum class ThorAction(val title: String, val description: String) {
     SLEEP("Sleep", "Both screens off, like a press on the power button"),
     /** 1.3 (GitHub #12): the game's guide page and notes — the other screen, or beside the game. */
     GUIDE("Guide & notes", "The game's guide page and your notes — on the other screen, or beside the game on one screen"),
-    /** 1.3 (GitHub #17): AYN's virtual mouse on / off. */
-    AYN_MOUSE("Mouse mode (AYN)", "AYN's virtual mouse on or off — then click a stick to make it the pointer"),
+    /** 1.3 (GitHub #17): AYN's virtual mouse on / off. 1.5-beta2 (Q9, GitHub D#111): while it's on AYN takes the Thor's
+     *  face buttons and D-pad, so a combo ending on one of them can't turn it off; Home and Back reach Wayfinder (the Thor's
+     *  own names: AYN's mouse is the Thor's). */
+    AYN_MOUSE("Mouse mode (AYN)", "AYN's virtual mouse on or off; click a stick for the pointer. To turn it off, use " +
+        "${ThorButton.HOME.printed} + ${ThorButton.BACK.printed}"),     // 1.5-beta2 (Q9, review): 20 words at most, the why above
+    /** 1.5-beta2 (Q1, GitHub D#127, #3): a short Mode press for the game on the pressing controller's own pad (the Thor's
+     *  copy: the input layer's virtual press). Android turns a Mode the game ignores into Home (Generic.kcm). */
+    GUIDE_BUTTON("Guide button (Xbox / PS)", "A press of the Xbox / PS button for the game (Moonlight, Steam Link). " +
+        "A game that ignores it gets Home"),                             // 1.5-beta2 (Q1, review): 20 words at most
     /** 1.3: the game's gyro paused / back on (a combo, the AYN button, a button's long press). */
     GYRO_TOGGLE("Gyro on / off", "Pause the game's gyro, or turn it back on (set it up in ${Say.path(NavCards.GC_GYRO)})"),
     /** 1.4 (GitHub #58): the quick panel's screen recording, on a combo. Build 18 (GitHub #98): its folder is a choice. */
@@ -46,7 +53,7 @@ enum class ThorAction(val title: String, val description: String) {
     FOCUS_SWITCH_DOWN("Controller to the bottom screen", "The controller now works the bottom screen"),
     FOCUS_LOCK_TOGGLE("Lock the controller", "Keep the controller on its screen — touching the other one won't move it"),
     KEYBOARD("Keyboard & mouse", "Keys and a trackpad for the game, on the other screen"),
-    QUICK_MENU("Quick panel", "Brightness, volume, performance, fan and your shortcuts — on the bottom screen"),
+    QUICK_MENU("Quick panel", "Brightness, volume, performance, fan and your shortcuts on the bottom screen, or on the TV or monitor you play on"),
     BRIGHTER("Brighter", "Both screens brighter, keeping their difference"),
     DIMMER("Dimmer", "Both screens dimmer, keeping their difference"),
     /** 1.3.1 (GitHub #44): one screen's brightness, and the volume — both screens or one. */
@@ -84,6 +91,7 @@ val ThorAction.shortTitle: String get() = when (this) {
     ThorAction.TOGGLE_TOP_SCREEN -> "Top screen off/on"
     ThorAction.FOCUS_SWITCH_UP -> "Controller to top"
     ThorAction.FOCUS_SWITCH_DOWN -> "Controller to bottom"
+    ThorAction.GUIDE_BUTTON -> "Guide button"           // 1.5-beta2 (Q1)
     else -> title
 }
 
@@ -105,7 +113,8 @@ object ActionRegistry {
         ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH,
         ThorAction.RECORD_SCREEN, ThorAction.CLOSE_OTHER, ThorAction.AYN_DRAWER, ThorAction.HOME_HERE,
         ThorAction.SWIPE_UP, ThorAction.SWIPE_DOWN, ThorAction.SWIPE_LEFT, ThorAction.SWIPE_RIGHT,
-        ThorAction.TOGGLE_TOP_SCREEN, ThorAction.WAYFINDER_OFF, ThorAction.NOTHING -> true
+        ThorAction.TOGGLE_TOP_SCREEN, ThorAction.WAYFINDER_OFF, ThorAction.NOTHING,
+        ThorAction.GUIDE_BUTTON -> true
         else -> false
     }
 }

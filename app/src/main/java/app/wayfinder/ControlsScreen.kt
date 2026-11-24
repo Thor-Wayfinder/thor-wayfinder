@@ -87,7 +87,8 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit, go
     val landing = remember {
         comboLanding(app.wayfinder.ui.ReturnFocus.take(), drawn = { it in shownActions }, offered = { it in actions && Features.allows(it) },
             aynTap = AppSettings.aynTap.takeIf { pkg == null && AppSettings.aynButtonOurs },
-            aynHold = AppSettings.aynHold?.takeIf { pkg == null && AppSettings.aynButtonOurs })
+            aynHold = AppSettings.aynHold?.takeIf { pkg == null && AppSettings.aynButtonOurs },
+            aynDouble = AppSettings.aynDouble?.takeIf { pkg == null && AppSettings.aynButtonOurs })   // 1.5-beta2 (Q8)
     }
     // 1.4 (GitHub #51): the "Add a combo" list of actions — round 2: open from the start on [landing]'s action ([addOn])
     var addOn by remember { mutableStateOf(landing.addOn) }
@@ -195,7 +196,8 @@ fun ControlsScreen(myDisplayId: Int, pkg: String? = null, onBack: () -> Unit, go
                         Column(Modifier.padding(start = 4.dp)) {
                             // build 18 (C10, ps-F7): named on the controller in hand (Mute on a DualSense)
                             SectionHeader("${Say.btn(ThorButton.AYN)} button")
-                            Caption(if (AppSettings.aynButtonOurs) "A tap and a hold can each do an action — e.g. hold = bottom screen off. It never reaches the game."
+                            // 1.5-beta2 (Q8): and a double tap
+                            Caption(if (AppSettings.aynButtonOurs) "A tap, a hold and a double tap can each do an action. It never reaches the game."
                                 else "The AYN button opens AYN's own drawer. Turn on ${Say.path(NavCards.PANEL_AYN)} (or ${Nav.place(HubPage.FEATURES)}) to give it a tap and a hold.")
                             if (!AppSettings.aynButtonOurs && go != null)
                                 NavLink(NavCards.PANEL_AYN, go, modifier = Modifier.focusProperties { canFocus = listFocusable })
@@ -363,7 +365,8 @@ private val COMBO_GROUPS: List<Pair<String, List<ThorAction>>> = listOf(
         ThorAction.CLOSE_OTHER, ThorAction.HOME_HERE, ThorAction.HOME_TOP, ThorAction.HOME_BOTTOM, ThorAction.HOME_BOTH,
         ThorAction.TOGGLE_SECOND_SCREEN, ThorAction.TOGGLE_TOP_SCREEN, ThorAction.BACK, ThorAction.NOTHING),
     "Controller" to listOf(ThorAction.FOCUS_SWITCH_UP, ThorAction.FOCUS_SWITCH_DOWN, ThorAction.FOCUS_LOCK_TOGGLE,
-        ThorAction.GAME_CONTROLS, ThorAction.GYRO_TOGGLE, ThorAction.KEYBOARD, ThorAction.AYN_MOUSE),
+        ThorAction.GAME_CONTROLS, ThorAction.GYRO_TOGGLE, ThorAction.KEYBOARD, ThorAction.AYN_MOUSE,
+        ThorAction.GUIDE_BUTTON),   // 1.5-beta2 (Q1, GitHub D#127)
     "Brightness & volume" to listOf(ThorAction.BRIGHTER, ThorAction.DIMMER, ThorAction.TOP_BRIGHTER, ThorAction.TOP_DIMMER,
         ThorAction.BOTTOM_BRIGHTER, ThorAction.BOTTOM_DIMMER, ThorAction.LOUDER, ThorAction.QUIETER, ThorAction.TOP_LOUDER,
         ThorAction.TOP_QUIETER, ThorAction.BOTTOM_LOUDER, ThorAction.BOTTOM_QUIETER),

@@ -373,7 +373,7 @@ internal fun SetupChecks(onAllOk: (() -> Unit)? = null, firstProblem: FocusReque
             focus = focusOf(2)) {
             Setup.allowBackground(ctx)
         } }, {
-        FixRow(!AynHomeGuard.isOn(ctx), "Home combos work", "AYN's \"press Home twice\" blocks the Home combos", "Turn it off", focus = focusOf(3)) {
+        FixRow(!AynHomeGuard.isOn(ctx), "Home combos work", "AYN's “press Home twice” blocks the Home combos", "Turn it off", focus = focusOf(3)) {
             AynHomeGuard.turnOff { tick++ }
         } }, {
         // build 18 (B21, FTU-09): optional — your own keyboard stays

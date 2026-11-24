@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
  * layout switches — wfpad re-grabs the new one, a sweep here hides it).
  * When the layer stops, the copy is gone and AYN's pad would stay at #2 for good: we rebuild
  * it once more so it gets #1 back ([normalize]) — also at helper start (after a crash).
- * Commands (from the app): `G on` · `G off`. The binary is NOT taken from the command (a
+ * Commands (from the app): `G on` · `G off` (b19, H1a: `G h <0|1>`, Keyboard & mouse's hold). The binary is NOT taken from the command (a
  * forged line must never make root run a file of its choice): it is always the app's own
  * `files/wfpad`, and runs only if owned by the app uid and writable by nobody else.
  * Status lines back to the app: `P <state> <detail>`.
@@ -92,6 +92,8 @@ object PadLayer {
         // over AYN's pad left NO controller after app updates (release test 2026-09-24).
         // `-x` = the process name exactly: can't match the shell running pkill.
         runCatching { if (sh("pkill", "-x", "wfpad") != null) Thread.sleep(300) }
+        // 1.5-beta2 (GitHub #102): AYN's pad that a killed wfpad left set aside (its node out of /dev/input) comes back
+        runCatching { PadPark.restoreAll() }
         // external controllers (ExtPads): a previous helper's readers go too — the new one starts its own
         runCatching { sh("pkill", "-x", "wfhid") }
         // dev build 15 (C2): what that helper's ExtNodes took out of Android's list (this boot) comes back
@@ -110,7 +112,7 @@ object PadLayer {
             "off" -> { wanted = false; quitWfpad() }
             // G name <0|1> — the copy shows "<name> (Wayfinder)" (opt-in, Controller → Other controllers); a change
             // remakes the copy (the app sends it BEFORE "G on", so a start doesn't make it twice)
-            "name" -> { val n = p.getOrNull(2) == "1"; if (n != named) { named = n; if (proc != null) { plannedStop = true; quitWfpad() } } }   // a remake, not a crash
+            "name" -> { val n = p.getOrNull(2) == "1"; if (n != named) { named = n; if (proc != null) { plannedStop = true; quitWfpad(keep = true) } } }   // a remake, not a crash
             // G map <profile> — the profile of the app that has the controller (see wf_parse
             // in fx/wfmap.h; wfpad re-validates every token). Kept and re-sent to a new wfpad.
             "map" -> {
@@ -135,6 +137,12 @@ object PadLayer {
                 val t = p.drop(2).filter { it.isNotEmpty() }
                 if (t.size <= 4 && t.all { WATCH.matches(it) }) { watch = ("w " + t.joinToString(" ")).trimEnd(); toWfpad(watch) }
             }
+            // G h <0|1> — b19 (H1a): Keyboard & mouse holds the controller (1, the app renews it every 2 s; wfpad gives it back
+            // after 6 s without) or gives it back (0). Never kept: a new wfpad starts with none (the app holds it again)
+            "h" -> {
+                val v = p.getOrNull(2)
+                if (p.size == 3 && (v == "0" || v == "1")) toWfpad("h $v")
+            }
         }
     }
 
@@ -152,6 +160,12 @@ object PadLayer {
     }
 
     private fun quitWfpad() = toWfpad("q")
+    /** 1.5-beta2 (GitHub #102): [keep] = a planned restart ("q k"): AYN's pad stays set aside — listed again in between, it
+     *  would take the number the copy frees (the player order) and GameNative's player 1 (~320 ms after a hot-plug).
+     *  Repair: the next wfpad is started ON the node left aside ([aside], [resolveOriginal]) and takes it where it is; the
+     *  loop's top puts it back only when that next wfpad won't (docked, set aside not allowed now, no AYN pad found). */
+    @Volatile private var keepPark = false
+    private fun quitWfpad(keep: Boolean) { if (keep) { keepPark = true; toWfpad("q k") } else quitWfpad() }
 
     /** Why the last [trustedBinary] refused the file (shown in Help & status). */
     @Volatile private var untrustedWhy = ""
@@ -197,10 +211,13 @@ object PadLayer {
         thread = Thread { loop() }.apply { isDaemon = true; start() }
     }
 
-    /** AYN's pad node (never our clone, never an external pad's copy — [AynPad], GitHub #4). */
-    private fun resolveOriginal(): Pair<String, String>? {
+    /** AYN's pad node (never our clone, never an external pad's copy — [AynPad], GitHub #4). 1.5-beta2 (GitHub #102,
+     *  repair): one with no /dev/input node is skipped (a node that could not be put back: wfpad's "E open" every 0.5 s,
+     *  for ever), unless [adopt] and it is the node a planned restart left aside: then its path in [ParkRules.DIR]. */
+    private fun resolveOriginal(adopt: Boolean = false): Pair<String, String>? {
         val nodes = File("/sys/class/input").listFiles { f -> f.name.startsWith("event") } ?: return null
         val foreign = AynPad.foreignNames()
+        val aside = if (adopt) runCatching { File(ParkRules.DIR).list()?.toSet() }.getOrNull().orEmpty() else emptySet()
         // NEWEST first (sysfs inputN only grows): AYN can leave an old pad behind it never feeds again — taking the
         // lowest eventN started the copy on that dead pad, no Thor buttons at all (2026-10-06)
         // (one with no location — exactly like AYN's — before any other of its vendor, as wfpad does)
@@ -209,7 +226,9 @@ object PadLayer {
             val name = runCatching { File(n, "device/name").readText().trim() }.getOrNull() ?: continue
             val phys = runCatching { File(n, "device/phys").readText().trim() }.getOrDefault("")
             if (phys == CLONE_PHYS || name.contains("Mouse", true)) continue
-            if (AynPad.isAyn(n, foreign)) return "/dev/input/${n.name}" to name
+            if (!AynPad.isAyn(n, foreign)) continue
+            if (File("/dev/input/${n.name}").exists()) return "/dev/input/${n.name}" to name
+            ParkRules.asideName(n.name, AynPad.inputNumber(n), aside)?.let { return "${ParkRules.DIR}/$it" to name }
         }
         return null
     }
@@ -404,7 +423,7 @@ object PadLayer {
     internal fun holdCopy(on: Boolean) {
         held = on
         if (!on || proc == null) return
-        plannedStop = true; quitWfpad()
+        plannedStop = true; quitWfpad(keep = true)
         val until = System.currentTimeMillis() + 3000
         while (proc != null && System.currentTimeMillis() < until) Thread.sleep(50)
     }
@@ -456,7 +475,7 @@ object PadLayer {
     /** The copy is made again now (it takes #1 if free: the Thor goes back to player 1). */
     internal fun restartCopy() {
         if (proc == null) return
-        plannedStop = true; quitWfpad()
+        plannedStop = true; quitWfpad(keep = true)
     }
 
     /** The app went away (restart, update or uninstall): stop the layer NOW — the next helper
@@ -467,14 +486,15 @@ object PadLayer {
     }
 
     /** The app was uninstalled: leave the Thor exactly as AYN made it. */
-    fun onAppUninstalled() {
+    fun onAppUninstalled(clearAynLock: Boolean = true) {
         Log.i(TAG, "Wayfinder uninstalled: cleaning up")
         wanted = false; quitWfpad()
         runCatching { thread?.join(3000) }
+        runCatching { PadPark.restoreAll() }                // 1.5-beta2 (GitHub #102)
         runCatching { enableAllPads() }
         Thread.sleep(400)
         runCatching { normalize() }
-        runCatching { putSetting("screen_focus_lock", 0) }
+        if (clearAynLock) runCatching { putSetting("screen_focus_lock", 0) }   // 1.5-beta2 (GitHub #145): only Wayfinder's own
     }
 
     /** No copy around, but AYN's pad isn't the first controller while #1 is free (the copy had
@@ -533,6 +553,7 @@ object PadLayer {
         val foreign by lazy { AynPad.foreignNames() }
         val src = sourceNode
         val bad = me != null && me.reader >= 0 && me.number > 0 && me.product.isNotEmpty() && !compatMode && !docked && orderFixesAllowed &&
+            ParkRules.orderFixNeeded(parked) &&      // 1.5-beta2 (GitHub #102): AYN's pad set aside = not listed, nothing to fix
             !held && src != null && firstFixes < 2 && snap.any { !it.isClone && it.path == src && it.reader in 0 until me.reader &&
                 it.vendor == me.vendor && it.product == me.product && AynPad.isAyn(File(it.path), foreign) }
         val now = System.currentTimeMillis()
@@ -582,15 +603,53 @@ object PadLayer {
     @Volatile var compatMode = FORCE_COMPAT
         private set
 
+    // ── 1.5-beta2 (GitHub #102): AYN's pad set aside while the copy runs (fx/wfpark.h, [PadPark]) ──
+    /** wfpad says AYN's pad is out of Android's list now ("I park <eventN>"); "I park no" / "I park off" / a wfpad exit clear it. */
+    @Volatile private var parked = false
+    /** Given up for this helper: the folder or the link refused ([ParkRules.Refusal.STOP]). The takeover then, as before
+     *  beta2 (AYN's pad listed, hidden). 1.5-beta2 (GitHub #102, repair): only for that — it was set by every refusal and
+     *  never cleared, so one moment's race or a few AYN style flips turned the fix off until the next helper. */
+    @Volatile private var parkStopped = false
+    /** AYN made its pad again and again ("I park off", or two moment's races in a row at a start): paused since then, until
+     *  the layer's next start or [ParkRules.PAUSE_MS] (0 = not paused). */
+    @Volatile private var parkPausedAt = 0L
+    /** RETRY refusals in a row at a start ([ParkRules.RETRIES] = a pause), and the last refusal wfpad gave (its exit 6). */
+    @Volatile private var parkRetries = 0
+    @Volatile private var lastRefusal: ParkRules.Refusal? = null
+    /** AYN's pad left set aside by the last exit ("q k" while the layer goes on): the next start takes it where it is. */
+    @Volatile private var aside = false
+    /** "error park-restore" said once per layer start ([PadPark.failed] and no AYN pad left to read). */
+    @Volatile private var restoreFailSaid = false
+    private fun parkAllowed(): Boolean = ParkRules.allowed(prop("debug.wayfinder.park"), ExtNodes.unlinkAllowed(),
+        parkStopped || PadPark.failed || ParkRules.paused(parkPausedAt, System.currentTimeMillis()))
+    private fun prop(k: String): String = runCatching {
+        Class.forName("android.os.SystemProperties").getMethod("get", String::class.java).invoke(null, k) as String
+    }.getOrDefault("")
+
     private fun runLayer() {
         val failures = ArrayDeque<Long>()
         var lostRaces = 0
         var noSwitch = 0
         var tookNumber = false
+        // 1.5-beta2 (GitHub #102, repair): a layer start ("G on") sets AYN's pad aside again after a pause or a moment's race
+        parkPausedAt = 0L; parkRetries = 0; restoreFailSaid = false
         while (wanted) {
-            // docked (ExtPads): the external controller is the Thor's — no copy until undocked
-            if (docked) { Thread.sleep(300); continue }
-            val (path, name) = resolveOriginal() ?: run { Thread.sleep(1000); null } ?: continue
+            // docked (ExtPads): the external controller is the Thor's — no copy until undocked (1.5-beta2, GitHub #102: AYN's
+            // pad back in the list first, so ExtPads hides it as before)
+            if (docked) { aside = false; runCatching { PadPark.restoreAll() }; Thread.sleep(300); continue }
+            // 1.5-beta2 (GitHub #102): "park" = AYN's pad grabbed and taken out of Android's list, then the copy (UHID at once)
+            // takes the #1 it freed: no takeover race, no layout switch. Refused: the takeover as before (exit 6, below)
+            val park = parkAllowed()
+            // repair: a node a planned restart left aside ("q k") is the next wfpad's source, where it is — AYN's pad never
+            // listed in between. Else (not allowed now, nothing aside) every node back before AYN's pad is looked for
+            val adopt = aside && park
+            aside = false
+            if (!adopt) runCatching { PadPark.restoreAll() }
+            val (path, name) = resolveOriginal(adopt) ?: run {
+                // repair: a node that could not be put back and no other AYN pad: no Thor controller until a restart — said
+                // once (it was a silent loop)
+                if (PadPark.failed && !restoreFailSaid) { restoreFailSaid = true; status("error park-restore: AYN's controller could not be put back, restart the Thor") }
+                Thread.sleep(1000); null } ?: continue
             val exe = trustedBinary() ?: run { status("error binary-not-trusted: $untrustedWhy"); wanted = false; null } ?: break
             // The number the copy should end up with: the lowest one no OTHER pad holds (AYN's
             // pad may sit at #2 after an earlier run; the copy takes #1 all the same).
@@ -598,12 +657,12 @@ object PadLayer {
             // "uhid" (dev build 13): the copy becomes a UHID device with a serial ~1.5 s after it's made — Android's
             // descriptor for it then never changes, so emulators keep the Thor (fx/wfuhid.h); uinput if that fails
             firstFixes = 0; firstSince = 0L; sourceNode = null      // per wfpad run (review 2026-10-06: not per copy)
-            val pb = ProcessBuilder(exe, path, "grab", CLONE_PHYS, if (compatMode) "0" else "4000", if (named) "named" else "-",
-                if (uhidCopy) "uhid" else "-").redirectErrorStream(true)
+            parked = false; keepPark = false; lastRefusal = null
+            val pb = ProcessBuilder(ParkRules.wfpadArgs(exe, path, CLONE_PHYS, compatMode, named, uhidCopy, park)).redirectErrorStream(true)
             val p = runCatching { pb.start() }.getOrElse { status("error start ${it.message}"); Thread.sleep(2000); null } ?: continue
             copySettled = false; copyRAt = System.currentTimeMillis()
             proc = p
-            status("starting $name ($path, controller #$wantNumber)")
+            status("starting $name ($path, controller #$wantNumber)" + if (park) " (set aside)" else "")
             if (profile.isNotEmpty()) toWfpad("m $profile")
             toWfpad(watch)
             feedNode = null; feedMerge = false
@@ -629,7 +688,7 @@ object PadLayer {
                         runCatching { snapshot().filter { it.isClone }.maxByOrNull { it.hub }?.path }.getOrNull()?.also { cloneNode.set(it) } else null
                     node?.let { n -> runCatching {
                         val snap = snapshot(); hideOthers(n, snap)
-                        if (closeGap(n, snap)) { plannedStop = true; quitWfpad() }
+                        if (closeGap(n, snap)) { plannedStop = true; quitWfpad(keep = true) }
                         // (review H3: not from a late pass while the layer stops — no count left behind, no re-make)
                         else if (sweeping.get() && wanted && aynFirst(n, snap)) { busyUntil.set(System.currentTimeMillis() + 15_000); rebuildAynPad(null) }
                     } }
@@ -672,7 +731,7 @@ object PadLayer {
                         if (!compatMode && ((wantNumber > 0 && n > wantNumber) || oneFree)) {
                             lost = true
                             status("lost-race copy is #$n, AYN's pad was #$wantNumber — retrying")
-                            quitWfpad()
+                            quitWfpad(keep = parked)               // 1.5-beta2 (GitHub #102, repair): set aside = stays aside
                         } else {
                             lostRaces = 0; noSwitch = 0
                             nodePath?.let { hideOthers(it, snap) }
@@ -684,7 +743,7 @@ object PadLayer {
                                 val s2 = snapshot()
                                 val n2 = s2.firstOrNull { it.isClone && it.path == nodePath }?.number ?: 0
                                 if (proc === p && cloneNode.get() == nodePath && n2 > 1 && s2.none { it.gamepad && !it.isClone && it.number == 1 }) {
-                                    status("renumber: #1 is free now — taking it"); lost = true; quitWfpad()
+                                    status("renumber: #1 is free now — taking it"); lost = true; quitWfpad(keep = parked)   // (repair: stays aside)
                                 }
                             }.apply { isDaemon = true; start() }
                             onCloneChanged?.invoke()
@@ -702,7 +761,20 @@ object PadLayer {
                     "J", "X", "V", "T", "TU" -> send?.invoke("$line\n")
                     "M" -> if (f.getOrNull(1) != "ok") status("error profile-refused")
                     // which copy it is (UHID with a serial, or uinput and why) — information, not an error
-                    "I" -> { if (f.getOrNull(1) == "copy") { copyKind = f.drop(2).joinToString(" "); copySettled = true; status("copy ${copyKind}") } }
+                    "I" -> { if (f.getOrNull(1) == "copy") { copyKind = f.drop(2).joinToString(" "); copySettled = true; status("copy ${copyKind}") }
+                        // 1.5-beta2 (GitHub #102): AYN's pad out of Android's list ("I park eventN"), or not any more (refused,
+                        // AYN re-making it in a loop): given up for this helper, AYN's pad listed and hidden as before
+                        // repair: what the refusal means ([ParkRules.refusal]): STOP = never again in this helper, PAUSE = until
+                        // the layer's next start or 10 min, RETRY = set aside again at the next start (exit 6, below)
+                        if (f.getOrNull(1) == "park") when (f.getOrNull(2)) {
+                            "no", "off" -> { parked = false
+                                val r = ParkRules.refusal(f[2], f.drop(3).joinToString(" ")); lastRefusal = r
+                                when (r) { ParkRules.Refusal.STOP -> parkStopped = true
+                                    ParkRules.Refusal.PAUSE -> parkPausedAt = System.currentTimeMillis()
+                                    ParkRules.Refusal.RETRY -> {} }
+                                status("park ${f.drop(2).joinToString(" ")}: AYN's pad stays listed, hidden (${r.name.lowercase()})") }
+                            else -> { parked = f.getOrNull(2)?.let { NODE.matches(it) } == true; if (parked) parkRetries = 0; status("park ${f.getOrNull(2)}") }
+                        } }
                     // docked: the copy is fed by an external controller's pad (on), or by AYN's pad again (off). dev build 18f:
                     // "F on <eventN> m" = the merged feed (AYN's pad drives it too)
                     "F" -> { feedNode = if (f.getOrNull(1) == "on") f.getOrNull(2)?.takeIf { NODE.matches(it) } else null
@@ -719,6 +791,16 @@ object PadLayer {
             send?.invoke("TU 0 0 0\n")                                 // b18o: its engine gone — no turbo button held any more
             sweeping.set(false); sweeper.interrupt(); runCatching { sweeper.join(2000) }
             firstSince = 0L; firstFixes = 0                             // review H3: no count left running past the run
+            // 1.5-beta2 (GitHub #102): wfpad puts AYN's node back itself; this covers a wfpad killed outright. Not after "q k"
+            // while the layer goes on undocked: repair, the next wfpad takes it where it is ([aside], the loop's top)
+            val keepAside = !ParkRules.restoreAfterExit(keepPark, wanted, docked)
+            if (!keepAside) runCatching { PadPark.restoreAll() }
+            aside = keepAside
+            keepPark = false; parked = false
+            // refused before any copy (its sweep put the node back): repair, a moment's race = set aside again next start (a
+            // pause after [ParkRules.RETRIES] in a row); the rest was decided on its "I park" line
+            if (code == 6 && lastRefusal == ParkRules.Refusal.RETRY && ++parkRetries >= ParkRules.RETRIES) parkPausedAt = System.currentTimeMillis()
+            if (code == 6 && lastRefusal == null) parkStopped = true    // (no "I park" line: never again in this helper)
             proc = null
             enableAllPads()
             onCloneChanged?.invoke()
@@ -740,6 +822,8 @@ object PadLayer {
             val why = "exit $code" + if (lastWfpad.isNotEmpty()) ": $lastWfpad" else ""
             if (lost) {
                 if (++lostRaces >= 3) { status("error lost-race-3x ($why) — layer off"); wanted = false; break }
+            } else if (code == 6) {                            // 1.5-beta2 (GitHub #102): set aside refused, not a failure
+                status("park refused: the takeover instead")
             } else if (code == 4 && !compatMode) {             // AYN's pad didn't go away (GitHub #39)
                 if (++noSwitch >= 2) { compatMode = true; status("AYN's pad didn't restart — compatibility mode") }
             } else if (code != 2) {                            // 2 = no AYN pad for 10 s: just retry
@@ -749,6 +833,7 @@ object PadLayer {
             }
             Thread.sleep(500)
         }
+        runCatching { PadPark.restoreAll() }                    // 1.5-beta2 (GitHub #102): AYN's pad back in the list
         enableAllPads()
         if (tookNumber && !exiting) { Thread.sleep(300); runCatching { normalize() } }
         status("off")

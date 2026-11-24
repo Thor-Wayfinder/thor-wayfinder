@@ -226,4 +226,33 @@ static int wfu_report(const wfu_layout *L, const unsigned char *keyv, int nkv, c
     return o;
 }
 
+// ---- 1.5-beta2 (big test t6, F3; gv2 F3, h_diag B): a settle frame before the copy's frame after a quiet spell ----
+// What loses the first press after a layer start (proven on the Thor, h_diag B: 2 of 90 starts, InputReader's "Detected
+// input event buffer overrun" at the press's own time): EventHub opens the new copy, then sets its clock (EVIOCSCLOCKID).
+// When wfpad's first report lands in EventHub's queue between the two, evdev empties that queue and puts a SYN_DROPPED in
+// it, but does not mark it ready: EventHub is not woken and the SYN_DROPPED waits, hidden, for the next frame handed to the
+// readers, the user's first press. InputReader then resets the copy and drops everything up to the next SYN_REPORT: the
+// press itself. A report that changes nothing (the t6 fix: the last report again, a lone SYN_REPORT) never reaches the
+// readers (the input core hands a frame over only with 2 values or more), so it could not show that SYN_DROPPED.
+// The settle frame [wfu_settle] reaches them and changes nothing: MSC_SCAN 0 + SYN_REPORT (EV_MSC is handed over without a
+// value check; Android's keyboard mapper keeps the scan code only until the SYN_REPORT, its joystick mapper sees no axis
+// move). A reader holding a SYN_DROPPED reads it there (reset, drop, back at the settle's SYN_REPORT) and the frame after it
+// is read as it is. Its SYN_REPORT also clears a time the kernel kept (the t6 stamp). Written before the copy's frame after
+// [WFU_QUIET_US] without one, and before every frame while the copy is young ([WFU_YOUNG_US] after it was made: a hand
+// already moving as the layer starts loses no frame either). Cost: one small write before such a frame, no wait.
+#define WFU_QUIET_US 50000L
+#define WFU_YOUNG_US 2000000L
+/** A frame written at [now_us] to a copy made at [made_us] (0 = unknown), its last write at [last_us] (0 = none yet):
+ *  1 = a settle frame first ([wfu_settle]). */
+static int wfu_settle_first(long made_us, long last_us, long now_us) {
+    return last_us <= 0 || now_us - last_us >= WFU_QUIET_US || (made_us > 0 && now_us - made_us < WFU_YOUNG_US);
+}
+/** The settle frame into [ev] (room for 2): MSC_SCAN 0 + SYN_REPORT, no time of its own (the kernel stamps it). Its count. */
+static int wfu_settle(struct input_event *ev) {
+    memset(ev, 0, 2 * sizeof *ev);
+    ev[0].type = EV_MSC; ev[0].code = MSC_SCAN; ev[0].value = 0;
+    ev[1].type = EV_SYN; ev[1].code = SYN_REPORT; ev[1].value = 0;
+    return 2;
+}
+
 #endif

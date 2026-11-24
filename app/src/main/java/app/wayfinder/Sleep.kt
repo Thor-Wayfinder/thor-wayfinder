@@ -78,6 +78,9 @@ object SleepSettings {
     val lidProtection get() = b("lid", otherSleepApp == null)
     val pauseOnLid get() = b("lid_pause", true)
     val sleepOnDisplayGone get() = b("display_gone", false)
+    // 1.5-beta2 (big test t2): "Lid closed: Direct power off" (Q3) is removed before release: AYN's own
+    // settings app already charges the battery whenever the screen sleeps. A test build's
+    // "lid_direct" key may stay in thor_sleep (and in its backups): nothing reads it, restoring it changes nothing.
 
     val GRACE_OPTIONS = listOf(0, 5, 10, 60, 300, 600, 1800)
     fun graceLabel(s: Int) = when { s == 0 -> "Now"; s < 60 -> "$s s"; else -> "${s / 60} min" }
@@ -103,6 +106,9 @@ object SleepEngine {
     private var wakeLock: PowerManager.WakeLock? = null
     @Volatile var lidClosed = false
         private set
+    /** 1.5-beta2 (Q3 review; kept when the lid card went, big test t2): lid events seen ([onLid], main thread): the start's
+     *  `dumpsys window` probe counts only if none came while it ran (a newer event's [lidClosed] wins: the lid guard's). */
+    @Volatile private var lidEvents = 0
     private var started = false
 
     // ── lifecycle ────────────────────────────────────────────────────────
@@ -118,7 +124,12 @@ object SleepEngine {
         if (!app.getSystemService(AlarmManager::class.java).canScheduleExactAlarms())
             Thread { PServiceBridge.exec("appops set ${app.packageName} SCHEDULE_EXACT_ALARM allow") }.start()
         // `dumpsys window` lists a lid state per display policy (LID_ABSENT, LID_OPEN…).
-        Thread { lidClosed = PServiceBridge.exec("dumpsys window | grep -c mLidState=LID_CLOSED")?.trim()?.toIntOrNull()?.let { it > 0 } == true }.start()
+        // 1.5-beta2 (Q3 review): a lid event while the probe runs is newer than what it read: the probe's lid state is dropped
+        val seen = lidEvents
+        Thread {
+            val closed = PServiceBridge.exec("dumpsys window | grep -c mLidState=LID_CLOSED")?.trim()?.toIntOrNull()?.let { it > 0 }
+            if (lidEvents == seen) lidClosed = closed == true
+        }.start()
         started = true
         // A sleep that was running when we died (the battery ran out overnight, a reboot): with
         // the screen already on no screen-on comes — put the radios back now (review 2026-09-25)
@@ -162,6 +173,7 @@ object SleepEngine {
     // ── lid (hall sensor, from the root input helper) ────────────────────
     fun onLid(closed: Boolean) {
         lidClosed = closed
+        lidEvents++                                     // 1.5-beta2 (Q3 review): the start's probe is older now
         log(if (closed) "Lid closed" else "Lid opened")
         main.removeCallbacks(lidGuard); guardTries = 0; hotLogged = false
         if (!closed && hotDropped) {

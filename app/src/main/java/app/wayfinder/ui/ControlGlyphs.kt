@@ -22,6 +22,7 @@ import androidx.compose.material.icons.rounded.SwipeDown
 import androidx.compose.material.icons.rounded.SwipeLeft
 import androidx.compose.material.icons.rounded.SwipeRight
 import androidx.compose.material.icons.rounded.Dashboard
+import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.FiberManualRecord
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.BrightnessHigh
@@ -121,10 +122,9 @@ import app.wayfinder.Vocab
  * cheat sheet and the Controls page.
  */
 
-private val FACE = mapOf(
-    ThorButton.A to Color(0xFF34C759), ThorButton.B to Color(0xFFFF453A),
-    ThorButton.X to Color(0xFF0A84FF), ThorButton.Y to Color(0xFFFFD60A),
-)
+// 1.5-beta2 (GitHub #134): the face buttons (keyed by the Xbox-way letter) and their built-in colours (TokenArgb.FACE_XBOX,
+// the same values); a badge's colours come from [faceBadge] (Appearance's Button colours)
+private val FACE = Vocab.FACE_ORDER.mapIndexed { i, b -> b to Color(TokenArgb.FACE_XBOX[i]) }.toMap()
 
 /** dev build 15 (WP2): the controller whose names a composable draws — a controller's page / tab, or a window that
  *  follows the controller in hand ([ButtonNames.handLook]), provides its own; none = the Thor's. */
@@ -158,12 +158,12 @@ private fun PressTag(p: Press) {
 
 /** 1.3.1 — the AYN button (not a [ThorButton]: it never goes through combos), tapped or held. Build 18 (A15): on a controller
  *  whose own button does AYN's job ([PadLook.ayn]: a DualSense's Mute) the chip says that button's name ([aynGlyphText]),
- *  as wide as its word needs ([aynGlyphWidth]); the Thor and a stand-in keep "AYN". */
+ *  as wide as its word needs ([aynGlyphWidth]); the Thor and a stand-in keep "AYN". 1.5-beta2 (Q8, GitHub #51): [double] =
+ *  its double tap's ("×2", as a combo's). */
 @Composable
-fun AynGlyph(hold: Boolean, size: Dp = 30.dp, look: PadLook = currentLook()) {
+fun AynGlyph(hold: Boolean, size: Dp = 30.dp, look: PadLook = currentLook(), double: Boolean = false) {
     val g = LocalGlass.current
-    val chip = if (g.dark) Color(0x33FFFFFF) else Color(0x1A000000)
-    val rim = if (g.dark) Color(0x66FFFFFF) else Color(0x40000000)
+    val chip = g.glyphChip; val rim = g.glyphRim          // 1.5-beta2 (GitHub #134): the tokens (same values)
     val text = aynGlyphText(look)
     val need = size * aynGlyphWidth(text, size.value)
     val word: @Composable () -> Unit = {
@@ -177,7 +177,7 @@ fun AynGlyph(hold: Boolean, size: Dp = 30.dp, look: PadLook = currentLook()) {
         // b18r3 (r2 BUG-1): in a slot its word doesn't fit at the floor, its button's mark (a DualSense's Mute) — never a cut word
         val short = aynShort(text)
         if (short == null) word() else FitOrShort(need, word) { SysIconBadge(short, size, text, g.textPrimary, chip, rim) }
-        if (hold) PressTag(Press.HOLD)
+        if (hold) PressTag(Press.HOLD) else if (double) PressTag(Press.DOUBLE_TAP)
     }
 }
 
@@ -200,11 +200,8 @@ private fun FitOrShort(need: Dp, full: @Composable () -> Unit, short: @Composabl
     }
 }
 
-/** 1.4 (GitHub #50): PlayStation's symbol colours, keyed by the Xbox-position letter (A = ✕ …). */
-private val PS_FACE = mapOf(
-    ThorButton.A to Color(0xFF6F9FE6), ThorButton.B to Color(0xFFFF5A5F),
-    ThorButton.X to Color(0xFFE38AC8), ThorButton.Y to Color(0xFF3DDC97),
-)
+// 1.4 (GitHub #50): PlayStation's symbol colours, keyed by the Xbox-position letter (A = ✕ …) — 1.5-beta2 (GitHub #134):
+// TokenArgb.FACE_PS, read through [faceBadge]
 
 /**
  * dev build 14: PlayStation's four marks, drawn as shapes. As text (✕ ○ □ △) they came from different
@@ -306,9 +303,33 @@ fun DrawScope.drawMarked(l: TextLayoutResult, topLeft: Offset, color: Color) {
 
 /** dev build 16 (WP5, critique G2): the colour of face letter [xboxLetter] (named the Xbox way) on a drawing — the badges'
  *  colours (an Xbox pad's A B X Y), darker on the light theme. (Build 18: a drawing keeps this; the badges read by
- *  contrast, [faceInk].) */
-fun faceLetterColor(xboxLetter: ThorButton, dark: Boolean): Color? =
-    FACE[xboxLetter]?.let { if (dark) it else androidx.compose.ui.graphics.lerp(it, Color.Black, 0.38f) }
+ *  contrast, [faceInk].) 1.5-beta2 (GitHub #134): as Button colours says ([faces]); null = One colour (the drawing's ink).
+ *  Review F1: a colour of the user's own that doesn't read on the drawing's face [disc] (black on Dark, white on Light):
+ *  null too, the drawing's ink ([TokenArgb.faceLetterReads]). The built-in colours as before. */
+fun faceLetterColor(xboxLetter: ThorButton, dark: Boolean, faces: ButtonColours = ButtonColours(), disc: Color? = null): Color? {
+    val slot = Vocab.letterSlot(xboxLetter) ?: return null
+    val c = faces.colour(slot, false)?.let { Color(it) } ?: return null
+    val ink = if (dark) c else androidx.compose.ui.graphics.lerp(c, Color.Black, 0.38f)
+    return if (disc != null && faces.picked(slot) && !TokenArgb.faceLetterReads(ink.argbLong(), disc.argbLong())) null else ink
+}
+
+/** 1.5-beta2 (GitHub #134): one face badge's colours — its [disc] (fill), [rim] and the [ink] of its letter or mark. */
+internal class FaceBadge(val disc: Color, val rim: Color, val ink: Color)
+
+/**
+ * 1.5-beta2 (GitHub #134): the colours of the face badge in slot [slot] ([Vocab.faceSlot]: the Xbox-way letter it shows;
+ * [ps]: PlayStation's mark) on card [under], as Appearance's Button colours ([GlassColors.faces]) says — every face badge
+ * (pages, keyboard, deck, panel, the overlays' drawables) is drawn from here. Coloured: as before (the colour's disc at 26 %,
+ * 18 % [dim], its rim, the ink by contrast: [faceInk]). One colour: the other buttons' chip and rim, the text colour. Your
+ * own: the pick as Coloured, its rim the neutral one where it doesn't stand out from the card ([TokenArgb.faceRimReads]).
+ */
+internal fun faceBadge(slot: Int, ps: Boolean, g: GlassColors, under: Color, dim: Boolean = false): FaceBadge {
+    val argb = g.faces.colour(slot, ps)
+        ?: return FaceBadge(g.glyphChip, g.glyphRim, if (dim) g.textSecondary else g.textPrimary)
+    val c = Color(argb)
+    val rim = if (g.faces.picked(slot) && !TokenArgb.faceRimReads(argb, under.argbLong())) g.glyphRim else c
+    return FaceBadge(c.copy(alpha = if (dim) 0.18f else 0.26f), rim, faceInk(c, under))
+}
 
 /** Build 18 (A9): how far a badge's letter or mark may move from its colour — toward white over a dark card (the first
  *  is the colour itself, as before), toward black over a light one (the first is the light theme's 0.38 of before). */
@@ -348,14 +369,14 @@ fun glyphName(b: ThorButton, look: PadLook = ButtonNames.thorLook): String =
 @Composable
 internal fun MarkBadge(mark: FaceMark, size: Dp, dim: Boolean = false) {
     val g = LocalGlass.current
-    val c = PS_FACE.getValue(mark.xbox)
     val under = g.glyphUnder
-    val ink = remember(c, under) { faceInk(c, under) }
+    // 1.5-beta2 (GitHub #134): its colours as Button colours says (the slot of its letter: ✕ = A's)
+    val f = remember(mark, g, under, dim) { faceBadge(Vocab.letterSlot(mark.xbox) ?: 0, true, g, under, dim) }
     Box(
-        Modifier.size(size).background(c.copy(alpha = if (dim) 0.18f else 0.26f), CircleShape).border(1.5.dp, c, CircleShape)
+        Modifier.size(size).background(f.disc, CircleShape).border(1.5.dp, f.rim, CircleShape)
             .semantics { contentDescription = mark.spoken },
         contentAlignment = Alignment.Center,
-    ) { Canvas(Modifier.matchParentSize()) { drawFaceMark(mark, center, this.size.minDimension, ink) } }
+    ) { Canvas(Modifier.matchParentSize()) { drawFaceMark(mark, center, this.size.minDimension, f.ink) } }
 }
 
 /** A glyph's letters: the line box trimmed to them and centred, bold. Inside a line of text (a legend's inline badge) a
@@ -372,8 +393,7 @@ private fun letterStyle(fontSize: TextUnit) = TextStyle(
 fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false, look: PadLook = currentLook()) {
     val g = LocalGlass.current
     val ink = if (dim) g.textSecondary else g.textPrimary
-    val chip = if (g.dark) Color(0x33FFFFFF) else Color(0x1A000000)
-    val rim = if (g.dark) Color(0x66FFFFFF) else Color(0x40000000)
+    val chip = g.glyphChip; val rim = g.glyphRim          // 1.5-beta2 (GitHub #134): the tokens (same values)
     when {
         // a single Joy-Con held sideways: its four buttons have no letters that mean anything — the position, lit
         b in FACE && look.sideways -> FacePosGlyph(b, size, Vocab.name(b, look), ink, chip, rim, g.accent)
@@ -383,13 +403,13 @@ fun ButtonGlyph(b: ThorButton, size: Dp = 30.dp, dim: Boolean = false, look: Pad
             val mark = if (look.names == FaceStyle.PLAYSTATION) FaceMark.of(shown) else null
             if (mark != null) MarkBadge(mark, size, dim)
             else {
-                val c = FACE.getValue(shown)
                 val under = g.glyphUnder
-                val letterInk = remember(c, under) { faceInk(c, under) }
+                // 1.5-beta2 (GitHub #134): its colours as Button colours says (the slot of the letter shown)
+                val f = remember(shown, g, under, dim) { faceBadge(Vocab.letterSlot(shown) ?: 0, false, g, under, dim) }
                 Box(
-                    Modifier.size(size).background(c.copy(alpha = if (dim) 0.18f else 0.26f), CircleShape).border(1.5.dp, c, CircleShape),
+                    Modifier.size(size).background(f.disc, CircleShape).border(1.5.dp, f.rim, CircleShape),
                     contentAlignment = Alignment.Center,
-                ) { Text(shown.printed, color = letterInk, style = letterStyle((size.value * 0.55f).sp)) }
+                ) { Text(shown.printed, color = f.ink, style = letterStyle((size.value * 0.55f).sp)) }
             }
         }
         b == ThorButton.L1 || b == ThorButton.R1 || b == ThorButton.L2 || b == ThorButton.R2 -> {
@@ -655,11 +675,12 @@ fun AnnotatedString.Builder.appendButton(b: ThorButton, look: PadLook = ButtonNa
  * dev build 14: [ButtonGlyph]'s PlayStation badge for the View-based overlays (FocusCue's ImageSpans): the
  * same disc, rim and [faceMarkPath] in the same colours, so overlays and pages match. Square: size it with setBounds.
  * Build 18 (A9): its mark's colour chosen by contrast as the pages' ([faceInk]) — [under] = the overlay's card (ARGB;
- * null: the built-in theme's, from [dark]).
+ * null: the built-in theme's, from [g]'s dark). 1.5-beta2 (GitHub #134): [g] = the overlay's theme (GlassTokens.resolve), its
+ * colours as Button colours says ([faceBadge]).
  */
-class ButtonGlyphDrawable(private val mark: FaceMark, dark: Boolean, under: Int? = null) : android.graphics.drawable.Drawable() {
-    private val c = PS_FACE.getValue(mark.xbox)
-    private val ink = faceInk(c, under?.let { Color(it) } ?: defaultUnder(dark)).toArgb()
+class ButtonGlyphDrawable(private val mark: FaceMark, g: GlassColors, under: Int? = null) : android.graphics.drawable.Drawable() {
+    private val f = faceBadge(Vocab.letterSlot(mark.xbox) ?: 0, true, g, under?.let { Color(it) } ?: defaultUnder(g.dark))
+    private val ink = f.ink.toArgb()
     private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         strokeCap = android.graphics.Paint.Cap.ROUND; strokeJoin = android.graphics.Paint.Join.ROUND
     }
@@ -675,9 +696,9 @@ class ButtonGlyphDrawable(private val mark: FaceMark, dark: Boolean, under: Int?
         val rim = 0.05f * s   // ButtonGlyph's 1.5 dp at its usual 30 dp
         canvas.save()
         canvas.translate(bounds.exactCenterX() - s / 2f, bounds.exactCenterY() - s / 2f)
-        paint.style = android.graphics.Paint.Style.FILL; paint.color = c.copy(alpha = 0.26f * a / 255f).toArgb()
+        paint.style = android.graphics.Paint.Style.FILL; paint.color = f.disc.copy(alpha = f.disc.alpha * a / 255f).toArgb()
         canvas.drawCircle(s / 2f, s / 2f, s / 2f, paint)
-        paint.style = android.graphics.Paint.Style.STROKE; paint.strokeWidth = rim; paint.color = c.copy(alpha = a / 255f).toArgb()
+        paint.style = android.graphics.Paint.Style.STROKE; paint.strokeWidth = rim; paint.color = f.rim.copy(alpha = f.rim.alpha * a / 255f).toArgb()
         canvas.drawCircle(s / 2f, s / 2f, s / 2f - rim / 2f, paint)
         paint.strokeWidth = markStroke(mark) * s; paint.color = ink; paint.alpha = a
         canvas.drawPath(path, paint)
@@ -693,11 +714,11 @@ class ButtonGlyphDrawable(private val mark: FaceMark, dark: Boolean, under: Int?
  * Build 18 (E6 addendum, MORE-D32): [ButtonGlyph]'s lettered face button for the View overlays (the held list's A / B / X / Y
  * were bare letters beside PlayStation's drawn marks): the same disc, rim and letter colour as the pages' ([faceInk]).
  * [letter] = the letter shown (its colour: an Xbox pad's, as the pages'); [under] as [ButtonGlyphDrawable]'s. Square: size it
- * with setBounds.
+ * with setBounds. 1.5-beta2 (GitHub #134): [g] as [ButtonGlyphDrawable]'s.
  */
-class ButtonLetterDrawable(private val letter: ThorButton, dark: Boolean, under: Int? = null) : android.graphics.drawable.Drawable() {
-    private val c = FACE.getValue(letter)
-    private val ink = faceInk(c, under?.let { Color(it) } ?: defaultUnder(dark)).toArgb()
+class ButtonLetterDrawable(private val letter: ThorButton, g: GlassColors, under: Int? = null) : android.graphics.drawable.Drawable() {
+    private val f = faceBadge(Vocab.letterSlot(letter) ?: 0, false, g, under?.let { Color(it) } ?: defaultUnder(g.dark))
+    private val ink = f.ink.toArgb()
     private val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
     private val text = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
         typeface = android.graphics.Typeface.DEFAULT_BOLD; textAlign = android.graphics.Paint.Align.CENTER
@@ -708,9 +729,9 @@ class ButtonLetterDrawable(private val letter: ThorButton, dark: Boolean, under:
         val s = minOf(bounds.width(), bounds.height()).toFloat()
         val rim = 0.05f * s   // ButtonGlyph's 1.5 dp at its usual 30 dp
         val cx = bounds.exactCenterX(); val cy = bounds.exactCenterY()
-        paint.style = android.graphics.Paint.Style.FILL; paint.color = c.copy(alpha = 0.26f * a / 255f).toArgb()
+        paint.style = android.graphics.Paint.Style.FILL; paint.color = f.disc.copy(alpha = f.disc.alpha * a / 255f).toArgb()
         canvas.drawCircle(cx, cy, s / 2f, paint)
-        paint.style = android.graphics.Paint.Style.STROKE; paint.strokeWidth = rim; paint.color = c.copy(alpha = a / 255f).toArgb()
+        paint.style = android.graphics.Paint.Style.STROKE; paint.strokeWidth = rim; paint.color = f.rim.copy(alpha = f.rim.alpha * a / 255f).toArgb()
         canvas.drawCircle(cx, cy, s / 2f - rim / 2f, paint)
         text.color = ink; text.alpha = a; text.textSize = 0.55f * s   // ButtonGlyph's letter: 0.55 of the badge
         val fm = text.fontMetrics
@@ -743,6 +764,7 @@ fun actionIcon(a: ThorAction): ImageVector = when (a) {
     ThorAction.TOGGLE_KEEP_AWAKE -> Icons.Rounded.Coffee
     ThorAction.SLEEP -> Icons.Rounded.Bedtime
     ThorAction.AYN_MOUSE -> Icons.Rounded.Mouse
+    ThorAction.GUIDE_BUTTON -> Icons.Rounded.SportsEsports      // 1.5-beta2 (Q1)
     ThorAction.GYRO_TOGGLE -> androidx.compose.material.icons.Icons.Rounded.ScreenRotation
     ThorAction.GUIDE -> Icons.Rounded.MenuBook
     ThorAction.FOCUS_SWITCH_UP -> Icons.Rounded.VerticalAlignTop

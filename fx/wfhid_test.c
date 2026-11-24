@@ -614,6 +614,37 @@ int main(void) {
     CHECK(!KEY[WF_HOME] && KEY[0x133], "Home let go and X pressed in one report: X is the game's (Home's code first, as on the Thor)");
     nimbus(0, 0, 0, 0, 0, 0, 0);
 
+    // ── b19 (GitHub #96, `ms=1|2`): both sticks on one of the game's sticks (fx/wfmap.h), on a controller's own pad, and
+    //    docked (wfpad's engine with the Thor's game profile reads this pad) ──────────────────────────────────────────────
+    fresh(); hx_add_source(0, 0x000d, 0x0000, NIMBUS, sizeof NIMBUS); hx_apply_map(); nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(hx_profile("ms=1") == 0 && HX.wm.merge_sticks == 1, "#96 its own controls: ms=1 accepted");
+    nimbus(0, 0, 127, -127, 0, 0, 0);
+    CHECK(ABSV[WF_LX] == 32767 && ABSV[WF_LY] == -32767 && ABSV[WF_RX] == 0 && ABSV[WF_RY] == 0,
+          "#96 ...its right stick moves its pad's left stick, the right one rests (%d %d %d %d)", ABSV[WF_LX], ABSV[WF_LY], ABSV[WF_RX], ABSV[WF_RY]);
+    nimbus(127, 0, 20, 0, 0, 0, 0);
+    CHECK(ABSV[WF_LX] == 32767 && ABSV[WF_LY] == 0 && ABSV[WF_RX] == 0, "#96 ...its left stick pushed further: the left one's (%d %d)", ABSV[WF_LX], ABSV[WF_LY]);
+    nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(ABSV[WF_LX] == 0 && ABSV[WF_LY] == 0 && ABSV[WF_RX] == 0, "#96 ...let go: centred, nothing stuck");
+    CHECK(hx_profile("ms=3") == -1 && HX.prof_bad && HX.wm.merge_sticks == 1, "#96 ...ms=3 refused, the one in use kept");
+    nimbus(0, 0, 127, 0, 0, 0, 0);
+    CHECK(ABSV[WF_LX] == 32767 && ABSV[WF_RX] == 0, "#96 ...the right stick held (%d %d)", ABSV[WF_LX], ABSV[WF_RX]);
+    CHECK(hx_profile("") == 0 && ABSV[WF_RX] == 32767 && ABSV[WF_LX] == 0,
+          "#96 ...a profile without it while held: the right stick back on the right, the left centred (%d %d)", ABSV[WF_RX], ABSV[WF_LX]);
+    nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(hx_profile("ms=2") == 0, "#96 its own controls: ms=2 accepted");
+    nimbus(-127, 0, 0, 0, 0, 0, 0);
+    CHECK(ABSV[WF_RX] == -32767 && ABSV[WF_LX] == 0, "#96 ...ms=2: its left stick moves its pad's right stick (%d %d)", ABSV[WF_RX], ABSV[WF_LX]);
+    nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(hx_profile("") == 0, "#96 profile cleared");
+    // docked: its own pad passes its sticks as they are; wfpad's engine (the Thor's game profile, ms=1) merges them
+    dock_init(); CHECK(wf_parse(&DM, &D, "ms=1") == 0, "#96 docked: the Thor's game profile ms=1");
+    nevt = 0; nimbus(0, 0, 127, 0, 0, 0, 0); dock_feed();
+    CHECK(ABSV[WF_RX] == 32767 && DO.abs[WF_LX] == 32767 && DO.abs[WF_RX] == 0,
+          "#96 docked: its right stick moves the copy's left stick (%d %d %d)", ABSV[WF_RX], DO.abs[WF_LX], DO.abs[WF_RX]);
+    nevt = 0; nimbus(0, 0, 0, 0, 0, 0, 0); dock_feed();
+    CHECK(DO.abs[WF_LX] == 0 && DO.abs[WF_RX] == 0, "#96 docked: let go, both centred");
+    wf_map_reset(&DM);
+
     // ── buttons and sticks the game's controls give to Wayfinder (keys, actions, macros) ──
     fresh(); hx_add_source(0, 0x000d, 0x0000, NIMBUS, sizeof NIMBUS); hx_apply_map(); nimbus(0, 0, 0, 0, 0, 0, 0);
     CHECK(hx_profile("k0x130=65534 k0x220=65534 apl=1") == 0, "profile with Wayfinder's buttons and a Wayfinder stick");
@@ -645,6 +676,24 @@ int main(void) {
     CHECK(hx_vpress(0, 0) == 0 && !KEY[0x131], "p 0 0 lets it go");
     CHECK(hx_vpress(WF_HOME, 1) != 0 && hx_vpress(0x999, 1) != 0, "Home or an unknown code refused");
     CHECK(hx_profile("") == 0, "profile cleared");
+    // ── b19 (H7, A0): "Game + combos" — its Home stays the Thor's (h 1); the app's game tap is a virtual MODE on this pad
+    //    (ButtonEngine, the service's gameHomeTap: "p 316 1", 60 ms, "p 316 0"). No production change: the path pinned ──
+    fresh(); hx_add_source(0, 0x000d, 0x0000, NIMBUS, sizeof NIMBUS); hx_apply_map(); nimbus(0, 0, 0, 0, 0, 0, 0);
+    { int has = 0; for (int i = 0; i < HX.ws.nk; i++) has |= HX.ws.keys[i] == 0x13c;
+      CHECK(HX.home_wf && has, "b19 H7: Home is the Thor's, and its pad has MODE (0x13c) all the same"); }
+    memset(KEYEV, 0, sizeof KEYEV);
+    nimbus(0, 0, 0, 0, 0, 0, NB_HOME); nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(KEYEV[WF_HOME] == 2 && !KEY[WF_HOME] && !KEYEV[0x13c], "b19 H7: a Home tap is KEY_HOME down and up, no MODE (%d %d)", KEYEV[WF_HOME], KEYEV[0x13c]);
+    CHECK(hx_vpress(0x13c, 1) == 0 && KEY[0x13c] && !KEY[WF_HOME], "b19 H7: p 316 1 after it: MODE down on its pad, no Home");
+    CHECK(hx_vpress(0x13c, 0) == 0 && !KEY[0x13c] && KEYEV[0x13c] == 2 && KEYEV[WF_HOME] == 2,
+          "b19 H7: p 316 0: MODE up, one tap = two edges, no Home edge (%d %d)", KEYEV[0x13c], KEYEV[WF_HOME]);
+    // a second Home press already down: the MODE waits silent under its gate, and is out at its release
+    nimbus(0, 0, 0, 0, 0, 0, NB_HOME); memset(KEYEV, 0, sizeof KEYEV);
+    CHECK(hx_vpress(0x13c, 1) == 0 && !KEY[0x13c] && !KEYEV[0x13c] && KEY[WF_HOME], "b19 H7: p 316 1 under a held Home: silent");
+    nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(!KEY[WF_HOME] && KEY[0x13c], "b19 H7: ...out at Home's release");
+    CHECK(hx_vpress(0, 0) == 0 && !KEY[0x13c], "b19 H7: p 0 0 lets it go (a MODE never stays held)");
+    CHECK(hx_vpress(WF_HOME, 1) != 0 && !KEY[WF_HOME], "b19 H7: a virtual Home is still refused");
 
     // ── the hold-to-shift button on an external controller ──────────
     CHECK(hx_profile("sh=0x13a") == 0, "profile: Select is the shift button");
@@ -680,6 +729,50 @@ int main(void) {
     CHECK(said("J 1 314 0") && !KEY[0x13a] && !HX.ws.gated, "...let go: J 1 314 0, no Select tap for the game");
     CHECK(hx_profile("") == 0, "profile cleared");
     nimbus(0, 0, 0, 0, 0, 0, 0);
+    // b19 (b18p side finding): the shift button's own job Wayfinder's: its lone tap said as W lines (fx/wfmap.h wf_shift_ext),
+    // its own press / release never
+    CHECK(hx_profile("k0x13a=0xfffe sh=0x13a") == 0, "b19 profile: Select the shift, its job Wayfinder's");
+    HX.ws.now_ms = HX.now_ms = 60000; nlines = 0; nimbus(0, 0, 0, 0, 0, 0, NB_SELECT);
+    CHECK(said("J 1 314 1") && !said("W 314"), "b19 shift held: J, no W");
+    HX.ws.now_ms = HX.now_ms = 60100; nlines = 0; nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(said("J 1 314 0") && said("W 314 1") && !said("W 314 0") && !KEY[0x13a], "b19 lone release: W 314 1, no stray W 314 0, nothing for the game");
+    HX.ws.now_ms = HX.now_ms = 60200; nlines = 0; hx_flush();
+    CHECK(said("W 314 0") && !KEY[0x13a], "b19 ...60 ms on: W 314 0");
+    nlines = 0; hx_flush(); CHECK(!said("W 314"), "b19 ...said once");
+    CHECK(hx_profile("k0x13a=0xfffe") == 0, "b19 profile: Select Wayfinder's, no shift");
+    nlines = 0; nimbus(0, 0, 0, 0, 0, 0, NB_SELECT); CHECK(said("W 314 1"), "b19 Select pressed: W 314 1");
+    nlines = 0; CHECK(hx_profile("k0x13a=0xfffe sh=0x13a") == 0 && said("W 314 0"), "b19 ...a profile making it the shift: W 314 0 now");
+    nlines = 0; nimbus(0, 0, 0, 0, 0, 0, 0); CHECK(!said("W 314"), "b19 ...its release: no W line (no tap: used, hx_swap_map)");
+    // the shift held (its job Wayfinder's) through a profile without it: no stray W 314 0 (its press was never said)
+    nlines = 0; nimbus(0, 0, 0, 0, 0, 0, NB_SELECT); CHECK(said("J 1 314 1") && !said("W 314"), "b19 the shift held again: J, no W");
+    nlines = 0; CHECK(hx_profile("") == 0 && !said("W 314"), "b19 ...a profile without it: no stray W 314 0");
+    nlines = 0; nimbus(0, 0, 0, 0, 0, 0, 0); CHECK(!said("W 314") && !KEY[0x13a], "b19 ...let go: no W line, nothing for the game");
+    // b19 review: a pad that reports only on change. The tap's last report flushed in its last ms, then wfhid.c's next turn
+    // past it with no report: the loop still wakes (hx_tap_timer), its flush lets the tap go, and the tap is forgotten
+    // (hx_tap_over: the loop sleeps again). Before, the wake stopped once the tap's end was not ahead of the loop's clock.
+    CHECK(hx_profile("k0x13a=0xfffe sh=0x13a") == 0, "b19 review profile: Select the shift, its job Wayfinder's");
+    at(61000); nimbus(0, 0, 0, 0, 0, 0, NB_SELECT);
+    at(61100); nlines = 0; nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(said("W 314 1") && HX.ws.shift_tap_until == 61160 && hx_tap_timer(), "b19 review lone release: W 314 1, the loop wakes");
+    at(61150); nimbus(0, 0, 0, 0, 0, 0, NB_2);
+    at(61159); nlines = 0; nimbus(0, 0, 0, 0, 0, 0, 0); hx_tap_over();
+    CHECK(!said("W 314") && HX.ws.shift_tap_until == 61160, "b19 review ...A let go in the tap's last ms: nothing said, the tap kept");
+    at(61160); CHECK(hx_tap_timer(), "b19 review ...the loop's next turn, past it, no report: it still wakes");
+    nlines = 0; hx_flush(); hx_tap_over();
+    CHECK(said("W 314 0") && HX.ws.shift_tap_until == 0 && !hx_tap_timer(), "b19 review ...its flush: W 314 0, the tap forgotten, the loop sleeps");
+    at(61175); nlines = 0; hx_flush(); hx_tap_over(); CHECK(!said("W 314"), "b19 review ...said once");
+    // a game job on the shift: the same wake ends the copy's own tap
+    CHECK(hx_profile("sh=0x13a") == 0, "b19 review profile: Select the shift, its job the game's");
+    at(62000); nimbus(0, 0, 0, 0, 0, 0, NB_SELECT);
+    at(62100); nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(KEY[0x13a] && hx_tap_timer(), "b19 review lone release: the game's Select tap, the loop wakes");
+    at(62159); nimbus(0, 0, 0, 0, 0, 0, NB_2); hx_tap_over();
+    CHECK(KEY[0x13a] && KEY[0x130] && HX.ws.shift_tap_until == 62160, "b19 review ...A in the tap's last ms: the tap still on");
+    at(62160); CHECK(hx_tap_timer(), "b19 review ...past it, no report: the loop still wakes");
+    hx_flush(); hx_tap_over();
+    CHECK(!KEY[0x13a] && KEY[0x130] && !hx_tap_timer(), "b19 review ...its flush ends the game's tap, the loop sleeps");
+    nimbus(0, 0, 0, 0, 0, 0, 0);
+    CHECK(hx_profile("") == 0, "b19 review profile cleared");
 
     // ── a controller with no Home button: Select + Start held = Home ──
     CHECK(hx_parse_map("S=10 E=11 SE=20 ST=19 LX=0 LY=1") == 0, "a mapping without Home");

@@ -65,7 +65,10 @@ object Features {
     fun allows(a: ThorAction): Boolean = when {
         a == ThorAction.KEYBOARD -> deck && moreCombos
         a == ThorAction.QUICK_MENU -> AppSettings.aynButtonOurs || moreCombos
-        a == ThorAction.GAME_CONTROLS || a == ThorAction.GYRO_TOGGLE -> PadLayerCtl.mode != PadLayerCtl.Mode.NOWHERE && moreCombos
+        // 1.5-beta2 (review of big test t3, F8): with Nowhere, an app set to On still runs Game controls (its setting
+        // wins), so Home + X and the gyro toggle work while they run there
+        a == ThorAction.GAME_CONTROLS || a == ThorAction.GYRO_TOGGLE ->
+            (PadLayerCtl.mode != PadLayerCtl.Mode.NOWHERE || PadLayerCtl.wanted) && moreCombos
         a in SCREEN_ACTIONS -> true
         else -> moreCombos
     }

@@ -103,6 +103,7 @@ object NavCards {
     // ── Appearance ──
     val THEME = NavCard("appearance:theme", HubPage.APPEARANCE, "Theme")
     val OWN_COLOURS = NavCard("appearance:own", HubPage.APPEARANCE, "Your own colours")
+    val BUTTON_COLOURS = NavCard("appearance:buttons", HubPage.APPEARANCE, "Button colours")   // 1.5-beta2 (GitHub #134)
     val BACKDROP = NavCard("appearance:backdrop", HubPage.APPEARANCE, "Glass backdrop", inMore = true)
     val SEE_THROUGH = NavCard("appearance:see", HubPage.APPEARANCE, "See-through glass", inMore = true)
     val REFRACTION = NavCard("appearance:refraction", HubPage.APPEARANCE, "Light refraction", inMore = true)
@@ -111,6 +112,7 @@ object NavCards {
     val RECENTS_HINT = NavCard("hints:recents", HubPage.HINTS, "Recent apps — the controller hint")
     val LIMIT80 = NavCard("battery:limit", HubPage.BATTERY, "Stop charging at 80 %")
     val DIRECT = NavCard("battery:direct", HubPage.BATTERY, "Direct power when plugged in")
+    // 1.5-beta2 (big test t2): "Lid closed: Direct power off" (battery:lid_direct, Q3) removed before release
     val LID_PAUSE = NavCard("sleep:lidpause", HubPage.SLEEP, "Lid closed: pause media")
     val LIGHTS_FOLLOW = NavCard("lights:follow", HubPage.LIGHTS, "Follow the screens' brightness")
     val KB_WHERE = NavCard("keyboard:where", HubPage.KEYBOARD, "Where it opens")
@@ -119,6 +121,8 @@ object NavCards {
     val KB_SPEED = NavCard("keyboard:pointer_speed", HubPage.KEYBOARD, Say.POINTER_SPEED)
     /** b18i (D3, GitHub #99): the thin keyboard window on the typing screen (some games need it) — under Where it opens. */
     val KB_BAR = NavCard("keyboard:thin_bar", HubPage.KEYBOARD, Say.THIN_BAR)
+    /** 1.5-beta2 (Q7, GitHub D#125 / #106): a row of numbers above the letters, off by default (KeyboardPage.kt). */
+    val KB_NUMBERS = NavCard("keyboard:number_row", HubPage.KEYBOARD, "Number row above the letters")
     // ── Help & status (under "System access": a header, not a step) ──
     val HELP_LAYER = NavCard("help:layer", HubPage.HELP, "Input layer")
     /** Build 18 (B11, MORE-05): the System access row (moving apps, brightness, audio, sleep) — Troubleshooting's fix opens it. */
@@ -127,15 +131,22 @@ object NavCards {
     val UPDATES = NavCard("help:updates", HubPage.HELP, "Check for updates")
     val BACKUP = NavCard("help:backup", HubPage.HELP, "Back up now")
     val A11Y = NavCard("help:a11y", HubPage.HELP, "Accessibility service")
+    /** b19 (I12): under Check for updates, two presses: what the Guide's sites saved, for every game (GuideCache.clearSiteData). */
+    val GUIDE_DATA = NavCard("help:guide_data", HubPage.HELP, "Clear the Guide's site data")
+    /** 1.5-beta2 (Q10): next to it, two presses: the pinned pages' offline copies (GuideCache.dropCopies; the pins stay). */
+    val GUIDE_COPIES = NavCard("help:guide_copies", HubPage.HELP, "Remove the offline copies")
     // ── dev build 17 (WP9): the cards Help, Search and the Combos page point at ──
     val COMBO_LIST = NavCard("hints:list", HubPage.HINTS, "Combo list while holding")
     val YOUR_COMBOS = NavCard("hints:sheet", HubPage.HINTS, "Combos on the other screen")
     val PANEL_AYN = NavCard("panel:ayn", HubPage.PANEL, "AYN button opens the panel")
     val PANEL_TAKES = NavCard("panel:takes", HubPage.PANEL, "The panel takes the controller", inMore = true)
+    /** 1.5-beta2 (b2d pass, polish; Q8, GitHub #51): the AYN button's double tap row (Combos, under its tap and hold; the
+     *  Quick panel page draws it too): Search lands on it (it landed on the tap row, two rows above). */
+    val AYN_DOUBLE = NavCard("ayn:double", HubPage.CONTROLS, "AYN button double tap")
     /** Features' row for Game controls: its value, and the way to their one editor ([LAYER], rule 7). */
     val FEATURES_GC = NavCard("features:gc", HubPage.FEATURES, "Game controls")
-    /** A connected controller's Back and AYN button (theme G's row on its page). */
-    val PAD_SPARES = NavCard("pad:spares", NavPages.CONTROLLER_PAGE, "Back and AYN buttons")
+    /** A connected controller's Back and AYN button (theme G's row on its page). 1.5-beta2 (GitHub #137): its Home too. */
+    val PAD_SPARES = NavCard("pad:spares", NavPages.CONTROLLER_PAGE, "Home, Back and AYN buttons")
     // ── a game's page: its app's own settings, and Game controls' popups ──
     val APP_COMBOS = NavCard("game:combos", NavPages.GAME, "Wayfinder combos")
     val APP_LIGHTS = NavCard("game:lights", NavPages.GAME, "Stick lights")
@@ -153,7 +164,7 @@ object NavCards {
         PAD_SPARES, APP_COMBOS, APP_LIGHTS, GC_PLAYER1, GC_APP_LAYER, GC_LIGHTS, GC_BRING_BACK, GC_GYRO,
         // build 18 (B3)
         BRIGHTNESS, GESTURE, WAKE2, IDLE, COLOUR, DND, AWAKE, FPS, NAVBAR, ANIMATE, VOLUME, SPEAKER, HEADEQ, BOOST, LINKED,
-        THEME, OWN_COLOURS, BACKDROP, SEE_THROUGH, REFRACTION, HUB_SCREEN, RECENTS_HINT, LIMIT80, DIRECT, LID_PAUSE, LIGHTS_FOLLOW,
+        THEME, OWN_COLOURS, BUTTON_COLOURS, BACKDROP, SEE_THROUGH, REFRACTION, HUB_SCREEN, RECENTS_HINT, LIMIT80, DIRECT, LID_PAUSE, LIGHTS_FOLLOW,
         KB_WHERE, KB_DPAD, UPDATES, BACKUP, A11Y,
         HELP_ACCESS,                                                       // build 18 (B11)
         THOR_NAME,                                                         // build 18 (C11)
@@ -161,7 +172,11 @@ object NavCards {
         KB_SPEED,                                                          // b18h
         GC_SCREEN,                                                         // b18i (D1)
         KB_BAR,                                                            // b18i (D3)
-        SEAT_NEW)                                                          // b18m
+        SEAT_NEW,                                                          // b18m
+        KB_NUMBERS,                                                        // 1.5-beta2 (Q7)
+        GUIDE_DATA,                                                        // b19 (I12)
+        GUIDE_COPIES,                                                      // 1.5-beta2 (Q10)
+        AYN_DOUBLE)                                                        // 1.5-beta2 (b2d pass, Q8)
 
     /** dev build 17 (WP9): a card by its id — a deep link's `card` extra (an unknown id: null, ignored). */
     fun byId(id: String?): NavCard? = all.firstOrNull { it.id == id }

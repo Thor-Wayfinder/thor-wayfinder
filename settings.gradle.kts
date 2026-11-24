@@ -1,8 +1,8 @@
 pluginManagement {
     repositories {
+        // AGP comes from Google's Maven, the Kotlin plugin from Maven Central: no Gradle Plugin Portal.
         google()
         mavenCentral()
-        gradlePluginPortal()
     }
 }
 

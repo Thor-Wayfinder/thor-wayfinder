@@ -16,7 +16,7 @@ press away — all without leaving your game.
 https://github.com/user-attachments/assets/226f78aa-bb8b-410a-bae7-4842b72444f0
 
 > [!TIP]
-> **Try the 1.5 beta:** Bluetooth and USB controllers, Game controls for each one, and more in the [1.5-beta1 pre-release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/tag/v1.5-beta1). 1.4.1 stays the recommended version.
+> **Try the 1.5 beta:** Bluetooth and USB controllers, Game controls for each one, Keyboard & mouse with the controller, and more in the [1.5-beta2 pre-release](https://github.com/Thor-Wayfinder/thor-wayfinder/releases/tag/v1.5-beta2). 1.4.1 stays the recommended version.
 
 > [!NOTE]
 > **ClusterTune, Pulse, SleepManager and other Thor apps:** Since 1.4, Wayfinder leaves the CPU to ClusterTune and Pulse, so they can stay installed together. With SleepManager, Wayfinder's sleep actions and lid guard stay off unless you turn them on. And if another app does the same job as a part of Wayfinder (Mjolnir, BiFrost, OdinTools), the Hub tells you what to do. If ClusterTune and Wayfinder gave you trouble before, restart your Thor once after updating.
@@ -306,8 +306,8 @@ The source is published so anyone can audit it.
   `tools/build_wfhid.sh` (the Bluetooth / USB controller reader; `tools/build_wfhid.sh test` runs its unit tests on a
   Thor) and `tools/build_fx.sh` (the speaker widener) — Windows + Git Bash, NDK in the default SDK folder. SHA-256 of the
   shipped copies:
-  - `wfpad` — `f549b129862f68f52dda8d3945111e415f940985d283a2a33854b41c1becc429`
-  - `wfhid` — `b0b23e943ad4026e5799ada10fa4ef44ecab42e0e8a05949522b930bd21681a8`
+  - `wfpad` — `937ea32ffef277292c20a23b98252318272e19d732582e5df462a1ab403fa592`
+  - `wfhid` — `192d7e85a93ffab9e0f5c3a94cef80f901bce94244a65995dce79405adc83927`
   - `libwfwide.so` — `f64974296927c51c1645b5c56af38504ef5e364d34df7620c07c0ce8a08d6b8a`
 
   Rebuilt from this source with NDK 27.2.12479018 and those scripts, all three come out byte-identical.

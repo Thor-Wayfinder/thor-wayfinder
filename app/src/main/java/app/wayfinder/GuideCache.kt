@@ -7,6 +7,7 @@ import android.webkit.CookieManager
 import android.webkit.SslErrorHandler
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import java.io.File
@@ -89,11 +90,52 @@ object GuideCache {
     /** b18p (#108): what the guide sites set so far, written to disk now (one write; a guide view closing, the page stopping). */
     fun keepCookies() { runCatching { CookieManager.getInstance().flush() } }
 
-    /** b18p (#108): a guide view goes away — its cookies kept ([keepCookies]), then the view freed. */
+    /** b18p (#108): a guide view goes away — its cookies kept ([keepCookies]), then the view freed. b19: out of [live] first. */
     fun release(web: WebView) {
+        live -= web
         keepCookies()
         web.destroy()
     }
+
+    /** b19: the guide views on screen now (the Guide page, the deck's Guide tab), the ones [clearSiteData] reloads. Added in
+     *  [setup], removed in [release]; weak, so it never keeps a view alive. Main thread only (both run there). */
+    private val live: MutableSet<WebView> = java.util.Collections.newSetFromMap(java.util.WeakHashMap<WebView, Boolean>())
+
+    /**
+     * b19 (Help & status › About, "Clear the Guide's site data"): what the Guide's sites saved, for every game at once, since
+     * Wayfinder has one web store for the whole app. Their cookies (sign-ins, a cookie banner's answer, a site check's pass
+     * such as StrategyWiki's `cf_clearance`), their storage and the page cache. Never the pins and notes ([CompanionStore])
+     * nor the offline copies: they are Wayfinder's own files, not the sites'. Every open guide view reloads once the cookies
+     * are gone, or its page could write them straight back. The page cache is one per app, so any view clears it; with none
+     * open, a spare view (never set up, never shown) does it and is freed at once. [done] comes on the main thread: true
+     * once the cookies are gone, false when the WebView failed (missing, or being updated). Main thread only.
+     */
+    fun clearSiteData(ctx: Context, done: (Boolean) -> Unit) {
+        val ok = runCatching {
+            WebStorage.getInstance().deleteAllData()
+            val open = live.firstOrNull()
+            val spare = if (open == null) WebView(ctx) else null
+            try { (open ?: spare!!).clearCache(true) } finally { spare?.destroy() }
+            CookieManager.getInstance().removeAllCookies { _ ->
+                keepCookies()
+                live.toList().forEach { it.reload() }
+                done(true)
+            }
+        }.isSuccess
+        if (!ok) done(false)
+    }
+
+    /** 1.5-beta2 (Q10, b19's row 3b): the offline copies on disk now, every .mht here (a pinned page's, or one a restore or a
+     *  removed game left behind). One small folder: fine on the main thread. */
+    fun copies(ctx: Context): Int = GuideCopies.count(dir(ctx))
+
+    /**
+     * 1.5-beta2 (Q10, "Remove the offline copies", next to [clearSiteData]): every offline copy removed. Wayfinder's own files,
+     * not the sites': [clearSiteData] leaves them. The pins and notes stay, so each copy is saved again the next time its
+     * pinned page loads online ([refreshesCopy]); until then that page doesn't open offline (the Guide says it couldn't load,
+     * with Retry). How many couldn't be removed (0 = all gone).
+     */
+    fun dropCopies(ctx: Context): Int = GuideCopies.drop(dir(ctx))
 
     /**
      * Wire [web] for the guide of [key]: load [start] (the pinned page when [pinned], else a search),
@@ -108,6 +150,7 @@ object GuideCache {
             return true
         }
         cookies(web)                                       // b18p (GitHub #108)
+        live += web                                        // b19: reloaded by clearSiteData while it's open
         web.webViewClient = object : WebViewClient() {   // links stay in the guide
             /** b18p (#108): the main frame's address whose last answer was an HTTP error (a site check, a dead page). */
             private var failedUrl: String? = null
@@ -139,4 +182,24 @@ object GuideCache {
         if (pinned != null && start == pinned && !online(ctx) && loadCopy()) return
         web.loadUrl(start)
     }
+}
+
+/** 1.5-beta2 (Q10): the offline copies' files and the row's words. Pure: java.io only (GuideDataTest runs it on a temp
+ *  folder), never android.webkit. */
+internal object GuideCopies {
+    /** The copies in [dir]: its .mht files, nothing else (a folder, another file stays). */
+    private fun of(dir: File): List<File> = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".mht") }.orEmpty()
+    fun count(dir: File): Int = of(dir).size
+    /** Removes them all: how many couldn't be removed (0 = all gone). */
+    fun drop(dir: File): Int = of(dir).count { !it.delete() }
+
+    /** "1 saved page", "3 saved pages". */
+    fun pages(n: Int) = if (n == 1) "1 saved page" else "$n saved pages"
+    /** The row's line: how many there are now, and that the pins stay. None: what saves one. */
+    fun line(n: Int) = if (n <= 0) "none saved now · a pinned page saves one when it loads online"
+        else "${pages(n)} · pins stay, saved again when they load online"
+    /** The row's line after its first press. */
+    fun asked(n: Int) = "Press again to remove " + if (n == 1) "1 copy" else "$n copies"
+    /** The pill after the second: [failed] couldn't be removed. */
+    fun done(failed: Int) = if (failed == 0) "Offline copies removed" else "Some offline copies couldn't be removed"
 }

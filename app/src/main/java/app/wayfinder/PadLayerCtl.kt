@@ -30,9 +30,13 @@ object PadLayerCtl {
     private const val MODE_KEY = "layer_mode"
     private const val BEFORE_OFF_KEY = "layer_mode_before_off"
     /** The layer is running: our copy IS the pad. Shortcuts then read the events withheld from
-     *  the game ([InputMonitor.gatedListener]) and nothing needs the [AnalogShield]. */
-    @Volatile var active = false
-        private set
+     *  the game ([InputMonitor.gatedListener]) and nothing needs the [AnalogShield].
+     *  b19 fix (H1a, F4): Compose state (any thread), so a screen that reads it follows it. It was a plain field: after a
+     *  wfpad restart Keyboard & mouse's "Use the controller here" stayed dimmed with the layer back on (nothing redrew it). */
+    private val activeState = androidx.compose.runtime.mutableStateOf(false)
+    var active: Boolean
+        get() = activeState.value
+        private set(v) { activeState.value = v }
     @Volatile var lastStatus: String = "off"
     /** The copy's controller number from the last "on …" status (0 = unknown). */
     @Volatile var controllerNumber: Int = 0
@@ -74,9 +78,14 @@ object PadLayerCtl {
         if (m == Mode.NOWHERE && mode != Mode.NOWHERE) prefs?.edit()?.putString(BEFORE_OFF_KEY, mode.name)?.apply()
         mode = m
         prefs?.edit()?.putString(MODE_KEY, m.name)?.apply()
-        wanted = need(lastApp) ?: (m == Mode.EVERYWHERE)
+        // 1.5-beta2 (big test t3, F8): Nowhere picked away from the app set to On (the Hub, a launcher): off now
+        wanted = LayerRules.keep(m, need(lastApp) ?: (m == Mode.EVERYWHERE), leftApp)
         apply(ctx)
     }
+
+    /** 1.5-beta2 (big test t3, F8): some app is set to "Game controls in this app: On" — with Nowhere it still gets them there
+     *  (the Controller page's card says so, never "Off"). */
+    fun appsOwnOn(): Boolean = AppConfigStore.configured().any { AppConfigStore.get(it).layer == true }
 
     /** This app has Game controls of its own (buttons, gyro, macros, face buttons) — or one of its games has. */
     fun isSetUp(pkg: String): Boolean {
@@ -105,13 +114,31 @@ object PadLayerCtl {
     @Volatile private var lastApp: String? = null
     @Volatile private var candidate: Boolean? = null
     @Volatile private var candidateSince = 0L
+    /** 1.5-beta2 (big test t3, F8): the controller left its app for a launcher or a Wayfinder page that isn't Game controls
+     *  ([follow]'s [left]: the service's last tick). */
+    @Volatile private var leftApp = false
+    /** 1.5-beta2 (review of F8): the service's ticks in a row that said [leftApp] ([LayerRules.leaving]). */
+    @Volatile private var leftTicks = 0
 
     /** The app with the controller now (the service's tick, twice a second): the layer starts / stops for it once
      *  it has stayed 1.5 s — a swap, Recents or a launcher on the way never flips it. Each flip changes the
-     *  controller for a moment (on ≈ 0.6 s, off ≈ 1.6 s, measured 2026-09-30). */
-    fun follow(ctx: Context, pkg: String?, neutral: Boolean = pkg == null, overlay: Boolean = false) {
+     *  controller for a moment (on ≈ 0.6 s, off ≈ 1.6 s, measured 2026-09-30).
+     *  1.5-beta2 (big test t3, F8): [left] = the controller left its app (a launcher, or a Wayfinder page
+     *  that isn't Game controls). With Nowhere, Game controls run only for an app set to On and stop at once when it is left:
+     *  they ran on over Cocoon and the Hub until another app had been in front 1.5 s. */
+    fun follow(ctx: Context, pkg: String?, neutral: Boolean = pkg == null, overlay: Boolean = false, left: Boolean = false) {
         if (pkg != null && !neutral && !overlay) lastApp = pkg
+        leftApp = left
+        leftTicks = if (left) (leftTicks + 1).coerceAtMost(LayerRules.LEFT_TICKS) else 0
         val want = need(pkg, neutral, overlay)
+        // 1.5-beta2 (review of F8): left on two ticks in a row (a tick read during a moment on the way stopped it and it came
+        // back 2 s later), and not for an app in front that is set to On itself (a frontend: off, on, off every 2 s)
+        if (LayerRules.stopsNow(mode, wanted, LayerRules.leaving(leftTicks, want))) {
+            candidate = null; wanted = false
+            Log.w(TAG, "input layer off (${mode.name}, its app left)")      // no app names in the log
+            apply(ctx)
+            return
+        }
         if (want == null || want == wanted) { candidate = null; return }
         val now = android.os.SystemClock.uptimeMillis()
         if (candidate != want) { candidate = want; candidateSince = now; return }
@@ -126,7 +153,8 @@ object PadLayerCtl {
      *  the controller was last on (Game controls over the game); any other app waits until it's in front. */
     fun nowFor(ctx: Context, pkg: String) {
         if (pkg != lastApp) return
-        val want = need(pkg) ?: return
+        // 1.5-beta2 (big test t3, F8): set to On from the Hub with Nowhere: it starts when that app has the controller again
+        val want = need(pkg)?.let { LayerRules.keep(mode, it, leftApp) } ?: return
         if (want != wanted) { wanted = want; candidate = null; apply(ctx) }
     }
 
@@ -191,9 +219,20 @@ object PadLayerCtl {
         if (!pausedForOff) return
         init(ctx)
         pausedForOff = false
-        wanted = need(lastApp) ?: (mode == Mode.EVERYWHERE); candidate = null
+        wanted = LayerRules.keep(mode, need(lastApp) ?: (mode == Mode.EVERYWHERE), leftApp); candidate = null   // 1.5-beta2 (F8)
         if (send) apply(ctx)
     }
+
+    /** b19 (H1a): Keyboard & mouse holds the controller ([on]) or gives it back: wfpad's gate held by the app ("G h", fx/wfpad.c
+     *  "h"), renewed every 2 s by its holder ([app.wayfinder.deck.DeckHold]); wfpad gives it back by itself after 6 s without a
+     *  renewal. A hold only while the layer runs; a give-back always goes out. */
+    fun hold(on: Boolean) {
+        if (on && !active) return
+        InputMonitor.send("G h ${if (on) 1 else 0}")
+    }
+    /** b19 (H1a): a wfpad started or stopped ([app.wayfinder.deck.DeckHoldRules.layerReset]): a hold went with the one that had
+     *  it (a new one starts with none). Any thread. */
+    @Volatile var onHoldGone: (() -> Unit)? = null
 
     /** The next [setProfile] is sent even if unchanged (1.3). */
     @Volatile private var forceNext = false
@@ -214,6 +253,7 @@ object PadLayerCtl {
     fun onStatus(line: String) {
         lastStatus = line
         Log.i(TAG, line)
+        if (app.wayfinder.deck.DeckHoldRules.layerReset(line)) onHoldGone?.invoke()   // b19 (H1a)
         when {
             line.startsWith("on ") -> {
                 active = true; failReason = ""
@@ -234,4 +274,38 @@ object PadLayerCtl {
             line == "off" || line.startsWith("stopped") || line.startsWith("error") -> active = false
         }
     }
+}
+
+/**
+ * 1.5-beta2 (big test t3, F8): "Where Game controls work: Nowhere" and an app set to "Game controls in this
+ * app: On". That app's setting wins while it has the controller; leaving it (a launcher, or a Wayfinder page that isn't Game
+ * controls) stops them at once. Before, they ran on over Cocoon and the Hub (the card said Off) until another app had been
+ * in front 1.5 s. Everywhere and Games you set up are as before (a hop through a launcher never flips them). Pure
+ * (NowhereLeaveTest).
+ */
+internal object LayerRules {
+    /** Running ([on]) with [mode] while the controller [left] its app: stop now (no 1.5 s wait). */
+    fun stopsNow(mode: PadLayerCtl.Mode, on: Boolean, left: Boolean): Boolean = on && mode == PadLayerCtl.Mode.NOWHERE && left
+
+    /** The layer for an app's answer [want] (its own setting, else the mode's) with [mode], the controller having [left] that
+     *  app or not: off with Nowhere once it is left, else [want]. */
+    fun keep(mode: PadLayerCtl.Mode, want: Boolean, left: Boolean): Boolean = want && !(mode == PadLayerCtl.Mode.NOWHERE && left)
+
+    /** The service's "left its app": a launcher has the controller ([launcher]), or Wayfinder's own window does ([wayfinder])
+     *  without Game controls open over the game ([controlsOpen]: the page about that app, not leaving it). */
+    fun left(launcher: Boolean, wayfinder: Boolean, controlsOpen: Boolean): Boolean = launcher || (wayfinder && !controlsOpen)
+
+    /** 1.5-beta2 (review of F8): the ticks in a row that must say [left] before the layer stops (2 = about 0.5 s, still at
+     *  once for a hand): one tick can land on a moment on the way (Wayfinder's helper window during a move, Recents before
+     *  its event). */
+    const val LEFT_TICKS = 2
+
+    /** 1.5-beta2 (review of F8): the service's ticks say "left" [ticks] times in a row and the app in front doesn't want Game
+     *  controls itself ([want], [PadLayerCtl.need]: true = set to On, a frontend that is also a launcher). */
+    fun leaving(ticks: Int, want: Boolean?): Boolean = ticks >= LEFT_TICKS && want != true
+
+    /** 1.5-beta2 (review of F8): the service's "left" at a tick: [left] unless a move (swap / send) or Recents is on the
+     *  way ([passing]): Recents is the launcher's and Wayfinder's helper window is on top during a move, neither leaves. */
+    fun leftNow(passing: Boolean, launcher: Boolean, wayfinder: Boolean, controlsOpen: Boolean): Boolean =
+        !passing && left(launcher, wayfinder, controlsOpen)
 }
